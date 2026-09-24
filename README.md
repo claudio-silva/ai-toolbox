@@ -1,20 +1,37 @@
-# ai-tools
+# ai-toolbox
 
-Custom-built skills, MCP servers, plugins and developer tools for AI environments like Codex, Cursor, Devin, etc.
+Skills and MCP servers for AI coding agents — an [aitools](https://github.com/claudio-silva/ai-tools) toolbox for Codex, Cursor, Claude Code, and Devin.
 
 ## Install
 
-Clone the repository, then run `aitools setup` from the clone (or `./bin/aitools setup` before the link exists). It symlinks the script to `~/bin/aitools` when that directory is on `PATH`, otherwise to `~/.local/bin/aitools`. The link is followed to the real script, and that script's repository is the one the tool manages.
+The recommended way to install these tools is [`aitools`](https://github.com/claudio-silva/ai-tools), the tool manager for AI coding agents. No installation needed — `npx` runs it directly:
 
 ```sh
-git clone https://github.com/claudio-silva/ai-tools.git
-cd ai-tools
-./bin/aitools setup
+npx aitools use @gh/claudio-silva/ai-toolbox   # make this repo your default source
+npx aitools list                             # browse the toolbox
+npx aitools install --all                    # install everything
+npx aitools install imagen                   # install one tool
+npx aitools install removebg-cli -p cursor   # install for one platform only
 ```
 
-If neither `~/bin` nor `~/.local/bin` is on `PATH`, create one, add it to `PATH`, and run `setup` again. `aitools setup --remove` deletes a link in either directory when it points at this repository.
+Or keep no default and name the repo per command:
 
-`aitools pull` runs `git pull` in the clone and prints the current commit. That commit is the version of this repository. A zip download has no commit to compare or update; clone it instead.
+```sh
+npx aitools install @gh/claudio-silva/ai-toolbox removebg-cli
+npx aitools list @gh/claudio-silva/ai-toolbox
+```
+
+Manage what's installed:
+
+```sh
+npx aitools installed            # what's installed, per platform and scope
+npx aitools update               # reinstall tools whose repo copy is newer
+npx aitools pull                 # refresh the cached snapshot of this repo
+npx aitools uninstall removebg-cli
+npx aitools about imagen
+```
+
+Every tool is a self-contained directory, so you can also install them manually — but that's up to you; no instructions are provided.
 
 ## MCP servers
 
@@ -22,18 +39,11 @@ If neither `~/bin` nor `~/.local/bin` is on `PATH`, create one, add it to `PATH`
 | --- | --- |
 | [imagen](mcp/imagen/) | Lightweight Go MCP server (stdio) for OpenAI **gpt-image-2.5** image generation and editing — `generate_image`, `edit_image`, embedded prompting guide; single static binary |
 
+Installing `imagen` copies its shipped binary and writes the server into each platform's MCP config. Tool calls need `OPENAI_API_KEY`; install fills it from the environment, or prompts for it. Pass `--raw` to leave the `$OPENAI_API_KEY` placeholder. Restart the MCP client after installing.
+
 ## Skills
 
-Each skill is a directory under `skills/<Platform>/<name>/` with a `SKILL.md` and a `manifest.json`. The platform folder decides where it can be installed. Manage tools with [`bin/aitools`](ABOUT.md) — skills are copied from the manifest, MCP servers are copied as shipped binaries, and both can be listed, updated, and removed:
-
-```sh
-aitools list
-aitools install --all
-aitools install imagen
-aitools installed
-aitools update
-aitools pull
-```
+Each skill is a directory under `skills/<Platform>/<name>/` with a `SKILL.md` and a `manifest.json`. The platform folder decides where it can be installed.
 
 ### Cross-environment — `skills/Shared/`
 
@@ -65,8 +75,7 @@ Work in any MCP/agent environment; may carry env-specific metadata (e.g. `agents
 ## Layout
 
 ```
-bin/aitools                 # manage skills and MCP servers
-mcp/<name>/                 # MCP server with manifest.json and shipped bin/<name>
+mcp/<name>/                 # MCP server: manifest.json, optional bin/<name> and payload files
 skills/
   Shared/<skill>/           # cursor, codex, claude-code, and devin
   Codex/<skill>/            # codex
@@ -75,4 +84,11 @@ skills/
   Devin/<skill>/            # devin (none yet)
 ```
 
-Install paths, scope flags, the manifest format, and the imagen server are documented in [ABOUT.md](ABOUT.md).
+The repository layout and manifest format — which any repo can adopt to become an aitools source — are specified in [ai-tools/ABOUT.md](https://github.com/claudio-silva/ai-tools/blob/main/ABOUT.md).
+
+## Developing imagen
+
+```sh
+cd mcp/imagen
+make build      # mcp/imagen/bin/imagen
+```

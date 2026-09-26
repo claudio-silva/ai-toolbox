@@ -21,6 +21,16 @@ const description = "Image generation and editing via OpenAI gpt-image-2.5 (flar
 const instructions = "Call get_usage_guide for parameter rules and gpt-image-2.5 prompting techniques"
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-h", "--help", "help":
+			fmt.Printf("imagen %s\n%s.\n\nMCP server over stdio; usually spawned by an MCP client, not run by hand.\n\nEnvironment:\n  OPENAI_API_KEY   required for tool calls\n  OPENAI_BASE_URL  API base (default https://api.openai.com/v1)\n  IMAGEN_MODEL     default model (default gpt-image-2.5-flare)\n", version, description)
+			return
+		case "-V", "--version", "version":
+			fmt.Println(version)
+			return
+		}
+	}
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		fmt.Fprintln(os.Stderr, "imagen: warning: OPENAI_API_KEY not set; tool calls will fail until configured")

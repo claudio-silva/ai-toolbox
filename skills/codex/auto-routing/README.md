@@ -41,7 +41,7 @@ Nine pinned roles ship in `te-agents/` — the model and effort live in the role
 ## Install
 
 ```sh
-npx aitools install @gh/claudio-silva/ai-toolbox auto-routing
+aitools install @gh/claudio-silva/ai-toolbox auto-routing
 npx skills add claudio-silva/ai-toolbox --skill auto-routing   # alternative
 ```
 

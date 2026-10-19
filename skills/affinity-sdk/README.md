@@ -19,7 +19,7 @@ An agent skill that overrides the official **Affinity by Canva MCP** instruction
 ## Install
 
 ```sh
-npx aitools install @gh/claudio-silva/ai-toolbox affinity-sdk
+aitools install @gh/claudio-silva/ai-toolbox affinity-sdk
 npx skills add claudio-silva/ai-toolbox --skill affinity-sdk   # alternative
 ```
 

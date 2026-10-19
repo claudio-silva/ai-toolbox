@@ -74,7 +74,7 @@ browse close $A $B
 ## Install
 
 ```sh
-npx aitools install @gh/claudio-silva/ai-toolbox cua-browser-automation
+aitools install @gh/claudio-silva/ai-toolbox cua-browser-automation
 npx skills add claudio-silva/ai-toolbox --skill cua-browser-automation   # alternative
 ```
 

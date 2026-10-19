@@ -4,31 +4,37 @@ Skills and MCP servers for AI coding agents — an [aitools](https://github.com/
 
 ## Install
 
-The recommended way to install these tools is [`aitools`](https://github.com/claudio-silva/ai-tools), the tool manager for AI coding agents. No installation needed — `npx` runs it directly:
+The recommended way to install these tools is [`aitools`](https://github.com/claudio-silva/ai-tools), the tool manager for AI coding agents. Install it (macOS) with:
 
 ```sh
-npx aitools use @gh/claudio-silva/ai-toolbox   # make this repo your default source
-npx aitools list                             # browse the toolbox
-npx aitools install --all                    # install everything
-npx aitools install imagen                   # install one tool
-npx aitools install removebg-cli -p cursor   # install for one platform only
+curl -fsSL https://raw.githubusercontent.com/claudio-silva/ai-tools/main/install.sh | sh
+```
+
+Then:
+
+```sh
+aitools use @gh/claudio-silva/ai-toolbox     # make this repo your default source
+aitools list                                 # browse the toolbox
+aitools install --all                        # install everything
+aitools install imagen                       # install one tool
+aitools install removebg-cli -p cursor       # install for one platform only
 ```
 
 Or keep no default and name the repo per command:
 
 ```sh
-npx aitools install @gh/claudio-silva/ai-toolbox removebg-cli
-npx aitools list @gh/claudio-silva/ai-toolbox
+aitools install @gh/claudio-silva/ai-toolbox removebg-cli
+aitools list @gh/claudio-silva/ai-toolbox
 ```
 
 Manage what's installed:
 
 ```sh
-npx aitools installed            # what's installed, per platform and scope
-npx aitools update               # reinstall tools whose repo copy is newer
-npx aitools pull                 # refresh the cached snapshot of this repo
-npx aitools uninstall removebg-cli
-npx aitools about imagen
+aitools installed            # what's installed, per platform and scope
+aitools update               # reinstall tools whose repo copy is newer
+aitools pull                 # refresh the cached snapshot of this repo
+aitools uninstall removebg-cli
+aitools about imagen
 ```
 
 ### With `npx skills`

@@ -18,7 +18,7 @@ An agent skill for removing image backgrounds with the official [remove.bg](http
 ## Install
 
 ```sh
-npx aitools install @gh/claudio-silva/ai-toolbox removebg-cli
+aitools install @gh/claudio-silva/ai-toolbox removebg-cli
 npx skills add claudio-silva/ai-toolbox --skill removebg-cli   # alternative
 ```
 

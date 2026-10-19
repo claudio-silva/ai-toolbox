@@ -14,7 +14,7 @@ Verified behavior of Cursor subagents: where agent files live, how the Task tool
 ## Install
 
 ```sh
-npx aitools install @gh/claudio-silva/ai-toolbox working-with-cursor-subagents
+aitools install @gh/claudio-silva/ai-toolbox working-with-cursor-subagents
 npx skills add claudio-silva/ai-toolbox --skill working-with-cursor-subagents   # alternative
 ```
 

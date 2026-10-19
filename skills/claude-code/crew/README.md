@@ -14,7 +14,7 @@ A multi-agent operating model for building software with Claude Code subagents. 
 ## Install
 
 ```sh
-npx aitools install @gh/claudio-silva/ai-toolbox crew
+aitools install @gh/claudio-silva/ai-toolbox crew
 npx skills add claudio-silva/ai-toolbox --skill crew -a claude-code   # alternative
 ```
 

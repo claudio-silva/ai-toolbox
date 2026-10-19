@@ -94,7 +94,7 @@ Since Chrome 136, `--remote-debugging-port` is ignored on the **default** user-d
 ## Install
 
 ```sh
-npx aitools install @gh/claudio-silva/ai-toolbox lite-chrome-automation
+aitools install @gh/claudio-silva/ai-toolbox lite-chrome-automation
 npx skills add claudio-silva/ai-toolbox --skill lite-chrome-automation   # alternative
 ```
 

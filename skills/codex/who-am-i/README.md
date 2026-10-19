@@ -31,7 +31,7 @@ npx aitools install @gh/claudio-silva/ai-toolbox who-am-i
 npx skills add claudio-silva/ai-toolbox --skill who-am-i   # alternative
 ```
 
-Codex only (`aitools.json` sets `platforms`). Restart Codex afterwards. See the [repository README](../../README.md).
+Codex only (`aitools.json` sets `platforms`). Restart Codex afterwards. See the [repository README](../../../README.md).
 
 ## Contents
 

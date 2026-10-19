@@ -24,7 +24,7 @@ npx aitools install @gh/claudio-silva/ai-toolbox cursor-plugin-development
 npx skills add claudio-silva/ai-toolbox --skill cursor-plugin-development   # alternative
 ```
 
-Cursor only (`aitools.json` sets `platforms`). See the [repository README](../../README.md).
+Cursor only (`aitools.json` sets `platforms`). See the [repository README](../../../README.md).
 
 ## Contents
 

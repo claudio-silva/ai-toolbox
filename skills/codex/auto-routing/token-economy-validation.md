@@ -190,7 +190,7 @@ Date 2026-09-12. Produced in a review session (Cursor, Claude) over the installe
 
 | Artifact | Path | Status |
 | --- | --- | --- |
-| Skill | `skills/auto-routing/SKILL.md` in the `ai-toolbox` repo | installed at `~/.codex/skills/auto-routing/` via `aitools install auto-routing` |
+| Skill | `skills/codex/auto-routing/SKILL.md` in the `ai-toolbox` repo | installed at `~/.codex/skills/auto-routing/` via `aitools install auto-routing` |
 | Nine role TOMLs | `te-agents/te_*.toml` beside it | installed at `~/.codex/agents/`; `te_debug.toml` and `te_advise_deep.toml` removed |
 | Skill metadata | `agents/openai.yaml` | `allow_implicit_invocation: false`; invocation is `$auto-routing` |
 | Former v1 | `~/.codex/skills/token-economy/`, `~/.codex/agents/te_{retrieve,trace,build,plan,debug,advise,advise_deep}.toml` | removed on install (`aitools.json` `remove`) |

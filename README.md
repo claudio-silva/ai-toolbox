@@ -57,32 +57,36 @@ Installing `imagen` copies its shipped binary and writes the server into each pl
 
 ## Skills
 
-Each skill is a directory under `skills/<name>/` with a `SKILL.md`. An optional `aitools.json` next to it limits platforms, places extra files, or leaves files out.
+Each skill is a directory with a `SKILL.md`: under `skills/<name>/` when it works across platforms, under `skills/<platform>/<name>/` when it only serves one. An optional `aitools.json` next to it limits platforms, places extra files, or leaves files out. To add one, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 | Skill | Platforms | Description |
 | --- | --- | --- |
 | [affinity-sdk](skills/affinity-sdk/) | all | Verified operating procedure for the official Affinity by Canva MCP |
-| [auto-routing](skills/auto-routing/) | codex | Cost-aware delegation: routes work to the cheapest pinned `te_*` worker role; ships 9 role definitions |
-| [codex-remote](skills/codex-remote/) | codex | Delegate bounded tasks to Codex on SSH servers via a local Luna/low relay subagent; durable job IDs, observe or dispatch-only |
+| [auto-routing](skills/codex/auto-routing/) | codex | Cost-aware delegation: routes work to the cheapest pinned `te_*` worker role; ships 9 role definitions |
+| [codex-remote](skills/codex/codex-remote/) | codex | Delegate bounded tasks to Codex on SSH servers via a local Luna/low relay subagent; durable job IDs, observe or dispatch-only |
 | [cua-browser-automation](skills/cua-browser-automation/) | all | Real-browser E2E testing via the `browse` wrapper over `cua-driver` — snapshot → act → verify, parallel contexts, evidence capture |
-| [cursor-plugin-development](skills/cursor-plugin-development/) | cursor | Verified guide to Cursor plugins: commands, skills, subagents, hooks — including undocumented gotchas |
+| [cursor-plugin-development](skills/cursor/cursor-plugin-development/) | cursor | Verified guide to Cursor plugins: commands, skills, subagents, hooks — including undocumented gotchas |
 | [lite-chrome-automation](skills/lite-chrome-automation/) | all | Lightweight CDP control of dedicated Chrome instances — MAIN-world JS eval, cookies, screenshots, extension debugging |
 | [removebg-cli](skills/removebg-cli/) | all | remove.bg background removal via CLI/API with credit-aware defaults and mandatory validation |
-| [who-am-i](skills/who-am-i/) | codex | Report the agent's real runtime model/effort/thread from read-only local evidence (self-contained script) |
-| [working-with-codex-subagents](skills/working-with-codex-subagents/) | codex | Verified guide to Codex subagent discovery, `spawn_agent` binding, and model/effort resolution |
-| [working-with-cursor-subagents](skills/working-with-cursor-subagents/) | cursor | Verified Task-tool/model-resolution behavior for Cursor subagents |
+| [who-am-i](skills/codex/who-am-i/) | codex | Report the agent's real runtime model/effort/thread from read-only local evidence (self-contained script) |
+| [working-with-codex-subagents](skills/codex/working-with-codex-subagents/) | codex | Verified guide to Codex subagent discovery, `spawn_agent` binding, and model/effort resolution |
+| [working-with-cursor-subagents](skills/cursor/working-with-cursor-subagents/) | cursor | Verified Task-tool/model-resolution behavior for Cursor subagents |
 
 "All" is Cursor, Codex, Claude Code, and Devin. Skills may carry metadata for one environment (e.g. `agents/openai.yaml` for Codex) that the others ignore.
 
 ## Layout
 
 ```
-aitools.json            # repo-wide: leave each skill's README.md out of installs
-skills/<name>/          # SKILL.md, optional aitools.json, supporting files
-mcp/<name>/             # MCP server: aitools.json, optional bin/<name> and payload files
+aitools.json              # repo-wide: leave each skill's README.md out of installs
+skills/
+  <name>/                 # cross-platform skills
+  codex/<name>/           # Codex-only skills
+  cursor/<name>/          # Cursor-only skills
+  claude-code/<name>/     # Claude Code-only skills
+mcp/<name>/               # MCP server: aitools.json, optional bin/<name> and payload files
 ```
 
-The layout is free-form: aitools and `npx skills` find skills by their `SKILL.md`, and aitools finds MCP servers by their `aitools.json`. The format is specified in [ai-tools/ABOUT.md](https://github.com/claudio-silva/ai-tools/blob/main/ABOUT.md).
+Folders are organization only. The supported platforms come from each skill's `aitools.json`, which is what aitools enforces. aitools and `npx skills` find skills by their `SKILL.md`, and aitools finds MCP servers by their `aitools.json`. The format is specified in [ai-tools/ABOUT.md](https://github.com/claudio-silva/ai-tools/blob/main/ABOUT.md).
 
 ## Developing imagen
 

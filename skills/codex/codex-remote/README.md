@@ -30,7 +30,7 @@ npx aitools install @gh/claudio-silva/ai-toolbox codex-remote
 npx skills add claudio-silva/ai-toolbox --skill codex-remote   # alternative
 ```
 
-Codex only (`aitools.json` sets `platforms`). aitools copies `agents/codex_remote_relay.toml` into `$CODEX_HOME/agents`. `npx skills add` leaves it in the skill directory; on first use the skill places it and asks you to restart Codex. Restart Codex so it discovers the relay role. See the [repository README](../../README.md).
+Codex only (`aitools.json` sets `platforms`). aitools copies `agents/codex_remote_relay.toml` into `$CODEX_HOME/agents`. `npx skills add` leaves it in the skill directory; on first use the skill places it and asks you to restart Codex. Restart Codex so it discovers the relay role. See the [repository README](../../../README.md).
 
 ## Contents
 

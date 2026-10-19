@@ -18,7 +18,7 @@ npx aitools install @gh/claudio-silva/ai-toolbox working-with-cursor-subagents
 npx skills add claudio-silva/ai-toolbox --skill working-with-cursor-subagents   # alternative
 ```
 
-Cursor only (`aitools.json` sets `platforms`). See the [repository README](../../README.md).
+Cursor only (`aitools.json` sets `platforms`). See the [repository README](../../../README.md).
 
 ## Contents
 

@@ -27,7 +27,7 @@ scripts/codex-who-am-i --debug    # resolution decisions on stderr (no conversat
 ## Install
 
 ```sh
-npx aitools install @gh/claudio-silva/ai-toolbox who-am-i
+aitools install @gh/claudio-silva/ai-toolbox who-am-i
 npx skills add claudio-silva/ai-toolbox --skill who-am-i   # alternative
 ```
 

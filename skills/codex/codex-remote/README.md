@@ -26,7 +26,7 @@ Three components with deliberately separated concerns:
 ## Install
 
 ```sh
-npx aitools install @gh/claudio-silva/ai-toolbox codex-remote
+aitools install @gh/claudio-silva/ai-toolbox codex-remote
 npx skills add claudio-silva/ai-toolbox --skill codex-remote   # alternative
 ```
 

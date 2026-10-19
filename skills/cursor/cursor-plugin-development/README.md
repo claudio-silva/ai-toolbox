@@ -20,7 +20,7 @@ A verified guide to developing Cursor plugins — commands, skills, subagents an
 ## Install
 
 ```sh
-npx aitools install @gh/claudio-silva/ai-toolbox cursor-plugin-development
+aitools install @gh/claudio-silva/ai-toolbox cursor-plugin-development
 npx skills add claudio-silva/ai-toolbox --skill cursor-plugin-development   # alternative
 ```
 

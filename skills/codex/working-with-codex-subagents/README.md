@@ -20,7 +20,7 @@ npx aitools install @gh/claudio-silva/ai-toolbox working-with-codex-subagents
 npx skills add claudio-silva/ai-toolbox --skill working-with-codex-subagents   # alternative
 ```
 
-Codex only (`aitools.json` sets `platforms`). See the [repository README](../../README.md).
+Codex only (`aitools.json` sets `platforms`). See the [repository README](../../../README.md).
 
 ## Contents
 

@@ -45,7 +45,7 @@ npx aitools install @gh/claudio-silva/ai-toolbox auto-routing
 npx skills add claudio-silva/ai-toolbox --skill auto-routing   # alternative
 ```
 
-Codex only (`aitools.json` sets `platforms`). aitools copies `te-agents/*.toml` into `$CODEX_HOME/agents` and removes the retired `token-economy` skill and the dropped `te_debug` and `te_advise_deep` roles. `npx skills add` copies `te-agents/` into the skill directory instead; on first use the skill places the roles itself and asks you to restart Codex. Restart Codex after installing either way: agent definitions are discovered at startup. See the [repository README](../../README.md).
+Codex only (`aitools.json` sets `platforms`). aitools copies `te-agents/*.toml` into `$CODEX_HOME/agents` and removes the retired `token-economy` skill and the dropped `te_debug` and `te_advise_deep` roles. `npx skills add` copies `te-agents/` into the skill directory instead; on first use the skill places the roles itself and asks you to restart Codex. Restart Codex after installing either way: agent definitions are discovered at startup. See the [repository README](../../../README.md).
 
 ## Contents
 

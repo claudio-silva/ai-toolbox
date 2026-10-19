@@ -18,7 +18,7 @@ npx aitools install @gh/claudio-silva/ai-toolbox crew
 npx skills add claudio-silva/ai-toolbox --skill crew -a claude-code   # alternative
 ```
 
-Claude Code only (`aitools.json` sets `platforms`): the roles rely on Claude Code subagents, the Agent tool's `model`/`effort` overrides, and Claude model names. See the [repository README](../../README.md).
+Claude Code only (`aitools.json` sets `platforms`): the roles rely on Claude Code subagents, the Agent tool's `model`/`effort` overrides, and Claude model names. See the [repository README](../../../README.md).
 
 ## Contents
 

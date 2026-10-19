@@ -1,6 +1,6 @@
 ---
 name: crew
-description: "Multi-agent operating model for building software with subagents: which role, model and effort handles each kind of work, how to brief and verify subagents, persistent vs throwaway agents, debugging escalation, quality-over-quantity testing and QC, and how the lead keeps its own context and cost down. Use at the start of any session where you lead or orchestrate a project, every time you are about to delegate (to pick role, model and effort and write the brief), when a fix attempt fails, at QC checkpoints, and when the user asks to set up or tune the crew rules for a project (`/crew setup`). Works with any planning method; depends on none."
+description: "Multi-agent operating model for building software with subagents: which role, model and effort handles each kind of work, how to brief and verify subagents, persistent vs throwaway agents, debugging escalation, quality-over-quantity testing and QC, and how the lead keeps its own context and cost down. Use at the start of any session where you lead or orchestrate a project, every time you are about to delegate (to pick role, model and effort and write the brief), when a fix attempt fails, at QC checkpoints, when the user asks to set up or tune the crew rules for a project (`/crew setup`), and when the user invokes a session handoff (`/crew handoff`). Works with any planning method; depends on none."
 ---
 
 # crew
@@ -14,7 +14,7 @@ Detail lives in `reference/`. Load a reference file only when you need it:
 - `reference/roles.md`: role cards, model facts and the reasons behind each choice, and how to refresh them.
 - `reference/briefs.md`: brief and report templates (task, review, debug escalation, QA, planning).
 - `reference/testing.md`: testing policy, QC checkpoints, and the screenshot review rubric.
-- `reference/context.md`: the lead's context and cost economics, hygiene rules, and session rollover with a handoff template.
+- `reference/context.md`: the lead's context and cost economics, hygiene rules, and the `/crew handoff` flow with a handoff template.
 
 ---
 
@@ -25,8 +25,8 @@ Detail lives in `reference/`. Load a reference file only when you need it:
 3. **Pointer.** Add one line to the project's `AGENTS.md` or `CLAUDE.md`: `Multi-agent rules: docs/CREW.md (crew skill).`
 4. **Lead settings.** Recommend these to the user (do not change user settings without asking):
    - Main session on `opus`, effort `high`.
-   - Main-session auto-compact window of about 400K tokens (settings key `autoCompactWindow`, or `/autocompact`), as a safety net.
    - Auto memory on, which `memory:` agents need.
+   - Compaction settings are the user's choice; the crew never relies on them and rolls over only on `/crew handoff`.
 5. **Verify.** Check that `.claude/agents/` lists the roles, and that a trivial scout delegation returns a capped report.
    - **New agent definitions are loaded only when a session starts** (or through `/agents`). Until then, delegating to `scout` fails with "agent type not found".
    - In the setup session itself, emulate a role: use `general-purpose`, pass the role's `model` and `effort` explicitly, and put the role file's body at the top of the brief.
@@ -126,10 +126,10 @@ Your context is the most expensive in the system: every turn re-reads all of it.
 
 - **Delegate reading.** Never paste big files, full diffs or long logs into your context. Use `tail`, `grep -c` and `head`, or a scout summary.
 - **State lives in files, not in conversation:** the roadmap or state file, plans, trackers, `CREW.md`. Write a decision down when you take it.
-- **Roll over deliberately.** At a hard boundary (a stage or milestone closes), or once your context passes about 40% of the window:
+- **Keep going; the user decides when to roll over.** Stay lean through the hygiene rules above and let the harness compact as needed. When the user types `/crew handoff`:
   - Update the state files.
   - Write a handoff covering what is in flight, the next step, the live agents and the open asks.
-  - Continue in a fresh session: the user runs `/clear` and says "continue from `<state file>`", or a harness handoff does it.
+  - Ask the user to `/clear` and say "continue from `<state file>`" (or a harness handoff does it).
 - **Don't poll background agents.** Completion notifications wake you.
 - **Keep Haiku tasks under about 100K tokens of context;** beyond that its price goes up five times.
 - **Prefer fewer, well-specified tasks to many tiny ones,** because every spin-up re-reads project context. Judge cost per *accepted* task, not per call.

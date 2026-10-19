@@ -1,4 +1,4 @@
-# The lead's context: economics, hygiene, rollover
+# The lead's context: economics, hygiene, handoff
 
 ## Why it matters
 
@@ -39,20 +39,17 @@ A 1M window is therefore a safety margin, not a target. Long memory belongs in *
 
 Rule: if losing your context right now would lose a decision, write it down now.
 
-## Rollover
+## Handoff: `/crew handoff`
 
-Roll over to a fresh lead session:
-- When a stage or milestone closes (the natural boundary), **or**
-- When your context passes about 40% of the window, at the next safe point, **or**
-- When work changes character (e.g. from building to a long product discussion).
+The lead keeps going — there are no context thresholds to act on. Compaction settings are the user's choice and the harness compacts as needed; what makes a long session painless is that state lives in files, not in the conversation. A session ends only when the user invokes `/crew handoff`. A natural boundary (a stage or milestone closing) is the best moment to suggest it; if it comes mid-task, note in-flight agents rather than abandoning them.
 
 Steps:
 1. Make sure no agent is mid-task (or note which ones are, with their IDs from `ListAgents`; in-session agents can be resumed only from the same session).
 2. Update the state file: status, the decisions taken, what is next.
 3. Write the handoff (template below) into the state file's "Next session" section, or into `docs/HANDOFF.md`.
-4. Ask the user to start fresh (`/clear`, then "continue from `<state file>`"), or use the harness's handoff mechanism (e.g. a Paseo handoff to a new agent).
+4. Tell the user to start fresh (`/clear`, then "continue from `<state file>`"), or use the harness's handoff mechanism (e.g. a Paseo handoff to a new agent).
 
-As a safety net, set the main session's auto-compact window to about 400K (`autoCompactWindow` setting or `/autocompact`). Compaction keeps a summary, so good state files make it painless.
+Compaction may still fire on the user's own settings between handoffs; it keeps a summary, so disciplined state files are what make it lossless. Write a decision down when you take it.
 
 ### Handoff template
 

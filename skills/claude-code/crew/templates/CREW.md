@@ -62,7 +62,7 @@ The skill's policy applies (`reference/testing.md`: quality over quantity; E2E f
 - **Active plan or tracker:** `<paths>`
 - **Handoff:** `<state file § / docs/HANDOFF.md>`
 - **Durable agent memory:** `.claude/agent-memory/<agent>/` (commit it: yes/no)
-- **Lead rollover:** at stage or milestone close, or past ~40% of the context window. Auto-compact window ≈ 400K.
+- **Lead rollover:** on `/crew handoff` — the lead writes the handoff above, then the user `/clear`s and continues. Compaction settings are the user's choice.
 
 ## 8. Founder escalation and the crew decisions log
 

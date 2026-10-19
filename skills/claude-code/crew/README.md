@@ -8,7 +8,7 @@ A multi-agent operating model for building software with Claude Code subagents. 
 - **Routing** — who does what, and the debugging escalation ladder when a fix attempt fails
 - **Briefs and reports** — templates for task, review, debug escalation, QA, and planning briefs, plus the milestone report to the founder
 - **Quality** — tests that matter over test counts, QC checkpoints, and a screenshot review rubric
-- **Context economics** — hygiene rules for the lead, where state lives, and session rollover with a handoff template
+- **Context economics** — hygiene rules for the lead, where state lives, and the `/crew handoff` flow with a handoff template
 - **Project setup** — `/crew setup` copies the agent definitions into `.claude/agents/` and writes a per-project `docs/CREW.md` that overrides the defaults
 
 ## Install
@@ -28,7 +28,7 @@ Claude Code only (`aitools.json` sets `platforms`): the roles rely on Claude Cod
 | `reference/roles.md` | Role cards, the model facts snapshot behind each choice, and how to refresh it |
 | `reference/briefs.md` | Brief and report templates |
 | `reference/testing.md` | Testing policy, QC checkpoints, screenshot review rubric |
-| `reference/context.md` | The lead's context and cost economics, rollover, handoff template |
+| `reference/context.md` | The lead's context and cost economics, `/crew handoff`, handoff template |
 | `templates/agents/*.md` | Subagent definitions copied into `<project>/.claude/agents/` by setup |
 | `templates/CREW.md` | Template for the per-project rules file |
 | `aitools.json` | Install metadata: Claude Code only |

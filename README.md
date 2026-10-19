@@ -31,7 +31,21 @@ npx aitools uninstall removebg-cli
 npx aitools about imagen
 ```
 
-Every tool is a self-contained directory, so you can also install them manually — but that's up to you; no instructions are provided.
+### With `npx skills`
+
+The skills also install with the [`skills`](https://github.com/vercel-labs/skills) CLI:
+
+```sh
+npx skills add claudio-silva/ai-toolbox --list
+npx skills add claudio-silva/ai-toolbox --skill lite-chrome-automation
+```
+
+What it does differently:
+
+- It doesn't read `aitools.json`, so the platform column below isn't enforced. Pick agents with `-a` (e.g. `-a codex` for the Codex skills).
+- It copies each skill directory whole, including READMEs and files aitools leaves out.
+- `auto-routing` and `codex-remote` need agent roles in `$CODEX_HOME/agents`. The `skills` CLI leaves them inside the skill directory; on first use each skill places its roles and asks you to restart Codex.
+- MCP servers (`imagen`) are not skills; install them with aitools.
 
 ## MCP servers
 
@@ -43,48 +57,33 @@ Installing `imagen` copies its shipped binary and writes the server into each pl
 
 ## Skills
 
-Each skill is a directory under `skills/<Platform>/<name>/` with a `SKILL.md` and a `manifest.json`. The platform folder decides where it can be installed.
+Each skill is a directory under `skills/<name>/` with a `SKILL.md`. An optional `aitools.json` next to it limits platforms, places extra files, or leaves files out.
 
-### Cross-environment — `skills/Shared/`
+| Skill | Platforms | Description |
+| --- | --- | --- |
+| [affinity-sdk](skills/affinity-sdk/) | all | Verified operating procedure for the official Affinity by Canva MCP |
+| [auto-routing](skills/auto-routing/) | codex | Cost-aware delegation: routes work to the cheapest pinned `te_*` worker role; ships 9 role definitions |
+| [codex-remote](skills/codex-remote/) | codex | Delegate bounded tasks to Codex on SSH servers via a local Luna/low relay subagent; durable job IDs, observe or dispatch-only |
+| [crew](skills/crew/) | claude-code | Multi-agent operating model: roles, models and effort per kind of work, briefs, verification, debugging escalation, QC, and the lead's context economics |
+| [cua-browser-automation](skills/cua-browser-automation/) | all | Real-browser E2E testing via the `browse` wrapper over `cua-driver` — snapshot → act → verify, parallel contexts, evidence capture |
+| [cursor-plugin-development](skills/cursor-plugin-development/) | cursor | Verified guide to Cursor plugins: commands, skills, subagents, hooks — including undocumented gotchas |
+| [lite-chrome-automation](skills/lite-chrome-automation/) | all | Lightweight CDP control of dedicated Chrome instances — MAIN-world JS eval, cookies, screenshots, extension debugging |
+| [removebg-cli](skills/removebg-cli/) | all | remove.bg background removal via CLI/API with credit-aware defaults and mandatory validation |
+| [who-am-i](skills/who-am-i/) | codex | Report the agent's real runtime model/effort/thread from read-only local evidence (self-contained script) |
+| [working-with-codex-subagents](skills/working-with-codex-subagents/) | codex | Verified guide to Codex subagent discovery, `spawn_agent` binding, and model/effort resolution |
+| [working-with-cursor-subagents](skills/working-with-cursor-subagents/) | cursor | Verified Task-tool/model-resolution behavior for Cursor subagents |
 
-Work in any MCP/agent environment; may carry env-specific metadata (e.g. `agents/openai.yaml` for Codex) that other environments ignore.
-
-| Skill | Description |
-| --- | --- |
-| [removebg-cli](skills/Shared/removebg-cli/) | remove.bg background removal via CLI/API with credit-aware defaults and mandatory validation |
-| [affinity-sdk](skills/Shared/affinity-sdk/) | Verified operating procedure for the official Affinity by Canva MCP |
-| [cua-browser-automation](skills/Shared/cua-browser-automation/) | Real-browser E2E testing via the `browse` wrapper over `cua-driver` — snapshot → act → verify, parallel contexts, evidence capture |
-| [lite-chrome-automation](skills/Shared/lite-chrome-automation/) | Lightweight CDP control of dedicated Chrome instances — MAIN-world JS eval, cookies, screenshots, extension debugging |
-
-### Codex — `skills/Codex/`
-
-| Skill | Description |
-| --- | --- |
-| [auto-routing](skills/Codex/auto-routing/) | Cost-aware delegation: routes work to the cheapest pinned `te_*` worker role; installer ships 9 role definitions |
-| [codex-remote](skills/Codex/codex-remote/) | Delegate bounded tasks to Codex on SSH servers via a local Luna/low relay subagent; durable job IDs, observe or dispatch-only |
-| [who-am-i](skills/Codex/who-am-i/) | Report the agent's real runtime model/effort/thread from read-only local evidence (self-contained script) |
-| [working-with-codex-subagents](skills/Codex/working-with-codex-subagents/) | Verified guide to Codex subagent discovery, `spawn_agent` binding, and model/effort resolution |
-
-### Cursor — `skills/Cursor/`
-
-| Skill | Description |
-| --- | --- |
-| [cursor-plugin-development](skills/Cursor/cursor-plugin-development/) | Verified guide to Cursor plugins: commands, skills, subagents, hooks — including undocumented gotchas |
-| [working-with-cursor-subagents](skills/Cursor/working-with-cursor-subagents/) | Verified Task-tool/model-resolution behavior for Cursor subagents |
+"All" is Cursor, Codex, Claude Code, and Devin. Skills may carry metadata for one environment (e.g. `agents/openai.yaml` for Codex) that the others ignore.
 
 ## Layout
 
 ```
-mcp/<name>/                 # MCP server: manifest.json, optional bin/<name> and payload files
-skills/
-  Shared/<skill>/           # cursor, codex, claude-code, and devin
-  Codex/<skill>/            # codex
-  Cursor/<skill>/           # cursor
-  Claude/<skill>/           # claude-code (none yet)
-  Devin/<skill>/            # devin (none yet)
+aitools.json            # repo-wide: leave each skill's README.md out of installs
+skills/<name>/          # SKILL.md, optional aitools.json, supporting files
+mcp/<name>/             # MCP server: aitools.json, optional bin/<name> and payload files
 ```
 
-The repository layout and manifest format — which any repo can adopt to become an aitools source — are specified in [ai-tools/ABOUT.md](https://github.com/claudio-silva/ai-tools/blob/main/ABOUT.md).
+The layout is free-form: aitools and `npx skills` find skills by their `SKILL.md`, and aitools finds MCP servers by their `aitools.json`. The format is specified in [ai-tools/ABOUT.md](https://github.com/claudio-silva/ai-tools/blob/main/ABOUT.md).
 
 ## Developing imagen
 

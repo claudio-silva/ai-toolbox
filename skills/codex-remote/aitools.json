@@ -1,0 +1,7 @@
+{
+  "platforms": ["codex"],
+  "exclude": ["scripts/test_*.py"],
+  "files": [
+    { "from": "agents/codex_remote_relay.toml", "to": "$CODEX_HOME/agents/" }
+  ]
+}

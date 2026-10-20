@@ -19,12 +19,11 @@ A 1M window is therefore a safety margin, not a target. Long memory belongs in *
 ## Hygiene rules
 
 1. **Delegate reading.** Use scouts for exploration, the planner for planning, and the reviewer for diffs. You consume conclusions.
-2. **Never ingest raw bulk.** No full files, diffs or logs. Use `tail -n 30`, `grep -c`, `head`, `--stat`, `wc -l`, or a scout summary. Redirect long command output to a file and read only what you need.
+2. **Never paste a file, diff or log you would only skim.** Use `tail -n 30`, `grep -c`, `head`, `--stat`, `wc -l`, or a scout summary. Redirect any output you would only skim to a file and read only what you need.
 3. **Cap reports.** Briefs set a word limit; bulk detail goes to files.
 4. **Don't re-read** what you already know. Record facts in state files once.
 5. **Screenshots are cheap and high-value** (about 1–2K tokens each), but use them at checkpoints, not on every step.
-6. **Don't poll.** Background agents notify you on completion. If a long wait is unavoidable, keep the context lean before it.
-7. **Keep Haiku agents under about 100K tokens of context;** above that its price goes up five times.
+6. **Don't poll.** Background agents notify you on completion. If you must wait for a background agent, keep the context lean before it.
 
 ## Where state lives (so you can forget safely)
 
@@ -32,33 +31,20 @@ A 1M window is therefore a safety margin, not a target. Long memory belongs in *
 |---|---|
 | Status, milestones, decisions log, owner actions | the project's roadmap/state file (e.g. `docs/ROADMAP.md`) |
 | What and why for current work | the active plan |
-| Task status, findings, memory | the tracker, if a framework uses one |
+| Task status, findings, memory | the tracker, if an external framework uses one |
 | Crew rules and project facts for agents | `docs/CREW.md` |
 | Durable role know-how | `.claude/agent-memory/<agent>/MEMORY.md` (`memory: project`) |
 | Cross-project facts about the user | the harness's user memory |
+| Founder requests and questions | `.crew/queue.md` (committed) |
+| Plans | `.crew/plans/<slug>.md` (committed), unless `CREW.md` names another location |
+| Task statuses, specs and Facts for a task set | `.crew/tasks/<slug>/index.md` and `NN-<slug>.md` (committed) |
+| Where the last session stopped | `.crew/handoff.md` (committed with the next task) |
+| Evidence per task: screenshots, reports over the cap, logs | `.crew/task-data/<id>/` (gitignored, never deleted by crew) |
+| Development history and the founder's dashboard | `.crew/journal.md`, `.crew/status.md` (gitignored; for the founder; never read by the lead) |
+| Scratch: lock, hook state | `.crew/tmp/` (gitignored) |
 
 Rule: if losing your context right now would lose a decision, write it down now.
 
-## Handoff: `/crew handoff`
+## Handoff
 
-The lead keeps going — there are no context thresholds to act on. Compaction settings are the user's choice and the harness compacts as needed; what makes a long session painless is that state lives in files, not in the conversation. A session ends only when the user invokes `/crew handoff`. A natural boundary (a stage or milestone closing) is the best moment to suggest it; if it comes mid-task, note in-flight agents rather than abandoning them.
-
-Steps:
-1. Make sure no agent is mid-task (or note which ones are, with their IDs from `ListAgents`; in-session agents can be resumed only from the same session).
-2. Update the state file: status, the decisions taken, what is next.
-3. Write the handoff (template below) into the state file's "Next session" section, or into `docs/HANDOFF.md`.
-4. Tell the user to start fresh (`/clear`, then "continue from `<state file>`"), or use the harness's handoff mechanism (e.g. a Paseo handoff to a new agent).
-
-Compaction may still fire on the user's own settings between handoffs; it keeps a summary, so disciplined state files are what make it lossless. Write a decision down when you take it.
-
-### Handoff template
-
-```
-## Next session — handoff (<date>)
-Where we are: <stage/milestone, one line>
-In flight: <task — agent/branch — state> (or "nothing")
-Next step: <the very next action>
-Decisions since last handoff: <bullets, or "see decisions log">
-Open asks to founder: <bullets>
-Watch out for: <gotchas discovered>
-```
+The founder rolls the session over with `/crew handoff`, then `/clear`, then `/crew resume` (`commands/handoff.md`, `commands/resume.md`).

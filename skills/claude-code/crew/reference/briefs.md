@@ -2,50 +2,65 @@
 
 A brief is the agent's whole world. A throwaway agent knows only what the brief and the files it points to contain. Write it so a capable engineer could start without asking anything.
 
-## Task brief (builder / worker)
+Every Agent call's `description` starts with the task id when there is one ("T03 autosave conflict banner"); the journal and the dashboard show it. Give every agent you may resume a `name`.
+
+## Task dispatch (builder / worker)
+
+The task spec carries Objective, Read first, Design, Steps, Acceptance and Do not. The dispatch points at it and adds what the spec cannot know.
 
 ```
-GOAL
-<1–2 sentences: the outcome, in terms of what someone sees or can do.>
-
-CONTEXT
-- Project rules: AGENTS.md / CLAUDE.md, docs/CREW.md (testing + report rules).
-- Read first: <path> — <why>; <path> — <why>.   (≤ 6 items; pointers, not dumps)
-- Decisions already made (do not re-open): <…>
-- Relevant facts the files won't tell you: <…>
-
-BOUNDARY
-- In scope: <…>
-- Do NOT: <adjacent work to leave alone>, <files/areas not to touch>, <no new dependencies without asking>, <no commits/pushes unless stated>.
-
-DONE WHEN
-1. <criterion> — checked by: command `<cmd>` → <expected>
-2. <criterion> — checked by: person (lead) via screenshot of <state>
-3. Lint + typecheck clean (`<cmd>`); critical E2E touching this area pass (`<cmd>`).
+TASK T<NN> <slug>. Spec: .crew/tasks/<plan-slug>/<NN>-<slug>.md — read it first; its Design is settled, its Do not is a hard boundary.
+FLAGS: <none | judgement | cross-cutting | discovery>
+FACTS (from the index, the ones this task needs):
+- <fact>
+PROJECT RULES: AGENTS.md / CLAUDE.md, docs/CREW.md.
 
 VERIFY BY
-<How to run it: dev server command/URL, test commands, seed/login, where to save screenshots.>
+- Dev server: <command> → <URL>. Seed and log in: <how>.
+- Worktree: <"none, work in the main checkout; do not commit" | "you are in a worktree at <path>; run .crew/bin/crew worktree setup first; commit once as T<NN> <slug>: <summary>">
+- Screenshots: .crew/task-data/T<NN>-<slug>/screenshots/  (output beyond the report cap: .crew/task-data/T<NN>-<slug>/reports/ and logs/)
 
-REPORT (≤ 300 words)
+REPORT (≤ 300 words; the first line is the status keyword)
 STATUS: DONE | PARTIAL | BLOCKED
-CHANGED: files/areas (one line each)
-EVIDENCE: commands + last lines of output; screenshot paths
-DEVIATIONS & DECISIONS: what differs from the brief, and why
+CHANGED: every file path, one per line
+EVIDENCE: each Acceptance command and its result line; screenshot paths
+DEMONSTRATED FAILURES: for each new check, what it said when you broke what it guards
+DEVIATIONS & DECISIONS: what differs from the spec, and why
+FACTS: one line each, for later tasks (names, paths, behaviours you established)
 OPEN: risks, follow-ups, questions for the lead
 ```
 
-For judgement tasks, add a line naming the judgement ("the judgement here is the review-card layout and wording; follow UI spec §6"), so both builder and reviewer aim at it.
+For `judgement` tasks, add a line naming the judgement ("the judgement here is the review-card layout and wording; follow UI spec §6"), so both builder and reviewer aim at it. For `discovery` tasks, add: "On a failing criterion, first decide: code wrong or premise wrong? On a false premise, record what you observed and stop."
 
 ## Review brief (reviewer)
 
 ```
-REVIEW <task id/title>. You did not write this code. Be independent.
-ACCEPTANCE: <the Done-when list, verbatim>
-CHANGES: <commit range or diff command>; builder report: <path or pasted ≤300 words>
-SCREENSHOTS: <paths>; spec: <path §>
-CHECK: re-run every command criterion yourself; correctness & edge cases; security & data integrity;
+REVIEW T<NN> <slug>. You did not write this code. Be independent.
+SPEC: <spec path>; FLAGS: <flags>
+WORKTREE: <none | path — run every command in it with `cd <path> && <cmd>` or `git -C <path>`; screenshots are under <path>/.crew/task-data/>
+CHANGES: <commit or diff command>; builder report: <path or pasted ≤300 words>
+SCREENSHOTS: <paths>; UI spec: <path §>
+PREVIOUS FINDINGS: <for a re-review: the last verdict's findings, or "none">
+CHECK: re-run every Acceptance command yourself; check every `Detects:` clause is actually exercised;
+       check demonstrated failures for new checks; correctness & edge cases; security & data integrity;
        scope creep; conventions; test value (reject tests that catch nothing real); UX vs spec + rubric.
-VERDICT (≤ 400 words): ACCEPT | CHANGES — findings ranked by severity, each with evidence and a concrete fix.
+       cross-cutting: verify every Design invariant across the codebase, not only the diff.
+VERDICT (≤ 400 words; the first line is ACCEPT or CHANGES): findings ranked by severity, each with evidence,
+       a concrete fix, and whether the work is wrong (fix it) or the premise is false (stop and re-plan).
+```
+
+## Final review brief (reviewer, at set close)
+
+```
+FINAL REVIEW of task set <plan-slug>. You did not write this code.
+INDEX: .crew/tasks/<plan-slug>/index.md — Outcome: "<outcome line>"; Not covered: "<line, or none>"
+PLAN: <plan path> — its outcome: "<the plan's outcome line, quoted>"
+RANGE: <base>..crew/<plan-slug>
+CHECK: the Outcome against the running app and the commands, not against the reports.
+REPORT (≤ 400 words; the first line is ACCEPT or CHANGES):
+  (a) does this set's scope hold — the index Outcome, end to end?
+  (b) what does the plan's outcome still lack? (quote it)
+  FOLLOW-UP TASKS: one line each, needed for (a); (b) items are for the next stage.
 ```
 
 ## Debug escalation brief (debugger, fresh)
@@ -57,6 +72,7 @@ TRIED (and result): 1) <hypothesis → change → outcome> 2) … (synthesized; 
 KNOWN FACTS / CONSTRAINTS: <…>
 DONE WHEN: root cause identified with evidence; minimal fix; original failure + nearby critical tests pass.
 STOP AND REPORT after 3 failed hypotheses, with what is now known.
+If the evidence shows the task's premise is false, stop and report it as a premise failure.
 REPORT: root cause · evidence · fix · verification output · residual risk.
 ```
 
@@ -68,18 +84,35 @@ PERSONA: <target user, e.g. "a 70-year-old novelist who knows Word, not tech">
 SCOPE: <journeys/areas>; spec: <path §>; build/commit under test: <ref>
 SETUP: (from your MEMORY.md) + <anything new>
 OUTPUT: defects (severity · repro · expected/actual · screenshot) and UX friction (separately);
-        screenshots of key states in <dir>; update MEMORY.md only with durable how-to facts.
-REPORT ≤ 400 words + the files.
+        screenshots of key states in .crew/task-data/qa-<YYYY-MM-DD>-<mode>/screenshots/;
+        update MEMORY.md only with durable how-to facts.
+REPORT ≤ 400 words + the files; the first line is the status keyword.
 ```
 
 ## Planning brief (planner)
 
 ```
+PLAN: <plan path> (and its satellite documents: <paths>)
 OUTCOME: <what someone sees when this works>
 DECISIONS (authoritative): <…>    CONSTRAINTS / NON-GOALS: <…>
-INPUTS: <plan/spec paths, code areas>   FORMAT: <framework/skill to follow, or default>
-WRITE TO: <paths>
-RETURN (≤ 400 words): what you produced, assumptions you made, questions only the lead/founder can answer.
+METHOD: crew standard (your definition) | <named framework — follow it, keep the acceptance rules>
+OUTPUT: .crew/tasks/<plan-slug>/ (index.md from .crew/templates/index.md; NN-<slug>.md from .crew/templates/task.md)
+RETURN (≤ 400 words; the first line is the status keyword):
+  founder-only gaps (if any, return them before writing specs and stop);
+  proposals, each with its source;
+  the task list with flags, one line each;
+  what this stage delivers and what it does not;
+  the task least likely to be sized correctly.
+```
+
+## Advisor brief (advisor)
+
+```
+QUESTION: <the decision to make, in one or two sentences>
+CONTEXT: <vision, persona, constraints, known facts; paths to read>
+OPTIONS: <each option stated neutrally — no preference, no ranking>
+WHAT I NEED: your recommendation; its risks; what would change your mind; any better option not listed.
+REPORT ≤ 400 words; the first line is RECOMMENDATION: <option>.
 ```
 
 ## Lead → founder milestone report
@@ -88,7 +121,8 @@ RETURN (≤ 400 words): what you produced, assumptions you made, questions only 
 <Milestone> — <one-line verdict>
 What works now: <bullets> + <2–4 screenshots>
 Decisions I took: <bullets with one-line why>
+Defaults I took (override?): <"Decided X because Y; override?" per item, or "none">
 Risks / known gaps: <bullets>
-Next: <next milestone/stage, rough size>
-I need from you: <asks, or "nothing">
+Next: <next milestone/stage, its size in tasks>
+Questions for you: <the batch, asked next with AskUserQuestion, or "none">
 ```

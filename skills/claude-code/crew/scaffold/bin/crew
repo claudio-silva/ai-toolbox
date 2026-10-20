@@ -1,0 +1,1301 @@
+#!/usr/bin/env bash
+# crew: journal, dashboard, hook handler and worktree helper for the crew skill.
+#
+# Installed by `/crew setup` as <project>/.crew/bin/crew. Compatible with bash 3.2
+# (macOS /bin/bash): no associative arrays, no ${var,,}, no mapfile.
+#
+# Modes
+#   crew journal <text...>              Log a lead action: "- HH:MM · lead · <text>".
+#   crew session start [<session-id>]   Register a crew session (empty id: wildcard "any").
+#   crew running                        List running subagents (kept by the hooks).
+#   crew status                         Render the dashboard .crew/status.md now.
+#   crew worktree setup [<path>] [--dry-run]
+#                                       Prepare a worktree: .worktreeinclude copies,
+#                                       .crew/tmp/, .crew/task-data/, worktree.json,
+#                                       then .crew/worktree/setup.sh.
+#   crew worktree teardown <path> [--dry-run]
+#                                       Harvest task data and journal lines into the main
+#                                       checkout, run .crew/worktree/teardown.sh, remove
+#                                       the worktree and its branch.
+#   crew hook <mode>                    Claude Code hook handler; reads the hook JSON on
+#                                       stdin. Modes: agent-start (PreToolUse Agent),
+#                                       agent-resume (PreToolUse SendMessage), agent-id
+#                                       (SubagentStart), agent-stop (SubagentStop),
+#                                       file-changed (PostToolUse Edit|Write), lead-busy
+#                                       (UserPromptSubmit), lead-idle (Stop), compact
+#                                       (SessionStart compact).
+#
+# Rules that matter
+#   - Every `crew hook` mode exits 0, whatever happens: exit 2 from a PreToolUse hook
+#     would block the tool call, and from a Stop hook would keep the lead from stopping.
+#     A hook that fails a guard prints nothing and changes no file.
+#   - Hook modes need jq. Everything else works without it.
+#   - All files live in the main checkout of the repository (root resolution below), so
+#     hooks running in worktrees write one journal and one dashboard per repository.
+#   - Set CREW_DEBUG=1 to see stderr from hook modes.
+
+# Make sure git acts on the directories we name, not on an inherited repository.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
+US=$'\037'   # field separator for internal records (never collapses empty fields)
+TAB=$'\t'
+NL=$'\n'
+
+# ---------------------------------------------------------------------------
+# Paths and root resolution
+# ---------------------------------------------------------------------------
+
+# Print the main worktree (main checkout) of the repository containing $1.
+main_worktree_of() {
+  local common
+  common=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  [ -n "$common" ] || return 1
+  case $common in
+    */.git) dirname "$common" ;;
+    # A bare repository or a submodule (.git/modules/<name>): use the checkout itself.
+    *) git -C "$1" rev-parse --show-toplevel 2>/dev/null ;;
+  esac
+}
+
+# Root resolution (D-H6): CLAUDE_PROJECT_DIR's main worktree, else the main worktree of
+# the repository containing this script, else two directories above the script.
+resolve_root() {
+  local script_dir r=""
+  script_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd -P) || script_dir=$(dirname "$0")
+  if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+    r=$(main_worktree_of "$CLAUDE_PROJECT_DIR") || r=""
+    [ -n "$r" ] || r=$CLAUDE_PROJECT_DIR
+  else
+    r=$(main_worktree_of "$script_dir") || r=""
+    [ -n "$r" ] || r="$script_dir/../.."
+  fi
+  ROOT=$(cd "$r" 2>/dev/null && pwd -P) || ROOT=$r
+}
+
+set_paths() {
+  CREW_DIR="$ROOT/.crew"
+  TMP_DIR="$CREW_DIR/tmp"
+  STATE="$TMP_DIR/journal-state"
+  JOURNAL="$CREW_DIR/journal.md"
+  STATUS="$CREW_DIR/status.md"
+  LOCK="$TMP_DIR/journal.lock"
+}
+
+ensure_dirs() {
+  mkdir -p "$TMP_DIR" "$CREW_DIR/task-data" "$STATE/sessions" "$STATE/pending" \
+    "$STATE/agents" "$STATE/running" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Small text helpers
+# ---------------------------------------------------------------------------
+
+# A UTF-8 locale for character-accurate truncation (hooks may run with LANG unset).
+UTF8_LOCALE=""
+UTF8_PICKED=0
+pick_utf8() {
+  local l
+  UTF8_PICKED=1
+  for l in C.UTF-8 en_US.UTF-8 C.utf8 en_US.utf8; do
+    # shellcheck disable=SC2030,SC2031  # the subshell only probes whether the locale works
+    if (LC_ALL=$l; t='→'; [ ${#t} -eq 1 ]) 2>/dev/null; then UTF8_LOCALE=$l; return; fi
+  done
+}
+
+# oneline TEXT -> sets REPLY to TEXT with newlines, CRs and tabs replaced by spaces.
+oneline() {
+  REPLY=${1//$'\r'/ }
+  REPLY=${REPLY//$NL/ }
+  REPLY=${REPLY//$TAB/ }
+}
+
+# trunc TEXT MAX -> sets REPLY to TEXT cut to MAX characters (ending in an ellipsis).
+trunc() {
+  [ "$UTF8_PICKED" = 1 ] || pick_utf8
+  if [ -n "$UTF8_LOCALE" ]; then local LC_ALL=$UTF8_LOCALE; fi
+  REPLY=$1
+  if [ ${#REPLY} -gt "$2" ]; then REPLY="${REPLY:0:$(($2 - 1))}…"; fi
+}
+
+# safe_name TEXT -> sets REPLY to TEXT usable as a file name.
+safe_name() {
+  REPLY=$(printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')
+  case $REPLY in ''|.|..) REPLY="_$REPLY" ;; esac
+}
+
+now_parts() {  # sets NOW_DAY (YYYY-MM-DD), NOW_HM (HH:MM), NOW_EPOCH
+  local d
+  d=$(date '+%Y-%m-%d %H:%M %s')
+  NOW_DAY=${d%% *}; d=${d#* }
+  NOW_HM=${d%% *}; NOW_EPOCH=${d#* }
+}
+
+# ---------------------------------------------------------------------------
+# Lock (mkdir is atomic). Re-entrant within one process.
+# ---------------------------------------------------------------------------
+
+LOCK_HELD=0
+lock_take() {
+  local i=0
+  [ "$LOCK_HELD" = 1 ] && return 0
+  mkdir -p "$TMP_DIR" 2>/dev/null
+  while ! mkdir "$LOCK" 2>/dev/null; do
+    i=$((i + 1))
+    if [ "$i" -ge 50 ]; then
+      # Could not get the lock: carry on without it. A lock older than a minute was
+      # left by a killed process; clear it so later writers do not wait again.
+      if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then rmdir "$LOCK" 2>/dev/null; fi
+      return 1
+    fi
+    sleep 0.1
+  done
+  LOCK_HELD=1
+}
+lock_release() {
+  if [ "$LOCK_HELD" = 1 ]; then rmdir "$LOCK" 2>/dev/null; LOCK_HELD=0; fi
+}
+trap lock_release EXIT
+trap 'lock_release; exit 0' HUP INT TERM
+
+# ---------------------------------------------------------------------------
+# Journal
+# ---------------------------------------------------------------------------
+
+# The writer's branch suffix " [<branch>]" when WRITER_CWD is in a linked worktree of
+# this repository; empty otherwise. Sets SUFFIX.
+writer_suffix() {
+  local out gd cd br
+  SUFFIX=""
+  [ -n "${WRITER_CWD:-}" ] && [ -d "$WRITER_CWD" ] || return 0
+  out=$(git -C "$WRITER_CWD" rev-parse --path-format=absolute --git-dir --git-common-dir \
+    --abbrev-ref HEAD 2>/dev/null) || return 0
+  gd=$(printf '%s\n' "$out" | sed -n 1p)
+  cd=$(printf '%s\n' "$out" | sed -n 2p)
+  br=$(printf '%s\n' "$out" | sed -n 3p)
+  [ -n "$gd" ] && [ "$gd" != "$cd" ] || return 0
+  [ "$(dirname "$cd")" = "$ROOT" ] || return 0
+  if [ "$br" = HEAD ] || [ -z "$br" ]; then
+    br=$(git -C "$WRITER_CWD" rev-parse --short HEAD 2>/dev/null) || br=detached
+  fi
+  SUFFIX=" [$br]"
+}
+
+# Create the journal if missing and add today's heading if the last one is another day.
+# Call with the lock held (or after failing to get it).
+journal_open_today() {
+  if [ ! -s "$JOURNAL" ]; then
+    printf '%s\n\n%s\n' "# Crew journal" \
+      "Informational history of crew activity, newest at the bottom. Not committed." > "$JOURNAL"
+  fi
+  local last
+  last=$(grep -E '^## [0-9]{4}-[0-9]{2}-[0-9]{2}' "$JOURNAL" 2>/dev/null | tail -n 1)
+  if [ "$last" != "## $NOW_DAY" ]; then printf '\n## %s\n' "$NOW_DAY" >> "$JOURNAL"; fi
+}
+
+# journal_append HEAD TEXT: append "- HH:MM · HEAD[ [branch]] · TEXT", then render.
+journal_append() {
+  local head text
+  oneline "$1"; head=$REPLY
+  oneline "$2"; text=$REPLY
+  ensure_dirs
+  lock_take
+  now_parts
+  writer_suffix
+  journal_open_today
+  if [ -n "$text" ]; then
+    printf '%s\n' "- $NOW_HM · $head$SUFFIX · $text" >> "$JOURNAL"
+  else
+    printf '%s\n' "- $NOW_HM · $head$SUFFIX" >> "$JOURNAL"
+  fi
+  render_locked
+}
+
+# ---------------------------------------------------------------------------
+# Agent state
+# ---------------------------------------------------------------------------
+
+# Read model: or effort: from the frontmatter of <root>/.claude/agents/<type>.md.
+agent_frontmatter() {
+  local f="$ROOT/.claude/agents/$1.md"
+  case $1 in */*|'') return 0 ;; esac
+  [ -f "$f" ] || return 0
+  awk -v k="$2" '
+    NR == 1 { if ($0 !~ /^---[ \t\r]*$/) exit; next }
+    /^---[ \t\r]*$/ { exit }
+    index($0, k ":") == 1 {
+      v = substr($0, length(k) + 2)
+      sub(/[ \t]+#.*$/, "", v); gsub(/^[ \t]+|[ \t\r]+$/, "", v)
+      gsub(/^["\047]|["\047]$/, "", v)
+      print v; exit
+    }' "$f" 2>/dev/null
+}
+
+# load_agent ID: sets A_TYPE A_DESC A_MODEL A_EFFORT A_NAME A_SINCE from agents/<id>.
+load_agent() {
+  local line
+  A_TYPE=""; A_DESC=""; A_MODEL=""; A_EFFORT=""; A_NAME=""; A_SINCE=""
+  [ -f "$STATE/agents/$1" ] || return 1
+  while IFS= read -r line; do
+    case $line in
+      type=*) A_TYPE=${line#type=} ;;
+      description=*) A_DESC=${line#description=} ;;
+      model=*) A_MODEL=${line#model=} ;;
+      effort=*) A_EFFORT=${line#effort=} ;;
+      name=*) A_NAME=${line#name=} ;;
+      since=*) A_SINCE=${line#since=} ;;
+    esac
+  done < "$STATE/agents/$1"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Dashboard rendering (D-J2 to D-J5)
+# ---------------------------------------------------------------------------
+
+# status_look KEY: sets GLYPH and WORD for a canonical status key.
+status_look() {
+  case $1 in
+    accepted) GLYPH='☑'; WORD='accepted' ;;
+    progress) GLYPH='◔'; WORD='in progress' ;;
+    review) GLYPH='◑'; WORD='in review' ;;
+    rework) GLYPH='↻'; WORD='rework' ;;
+    blocked) GLYPH='⊘'; WORD='blocked' ;;
+    *) GLYPH='☐'; WORD='pending' ;;
+  esac
+}
+
+# Mermaid-safe label text: no double quotes, no newlines, no angle brackets, 40 chars.
+mm_text() {
+  oneline "$1"
+  REPLY=${REPLY//\"/\'}
+  REPLY=${REPLY//</‹}
+  REPLY=${REPLY//>/›}
+  trunc "$REPLY" 40
+}
+
+# Markdown table cell: one line, pipes escaped, "—" when empty.
+md_cell() {
+  oneline "$1"
+  REPLY=${REPLY//|/\\|}
+  [ -n "$REPLY" ] || REPLY='—'
+}
+
+# Mermaid node id from a task or request id.
+mm_id() { REPLY=$(printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9_' '_'); }
+
+# Parse an index file. mode=summary prints one record:
+#   title US total US accepted US closed US stage US branch
+# mode=rows prints one record per task:
+#   id US status-key US title US flags US deps (space-separated ids) US spec
+# Column order fixed by the scaffold template: #, Status, Task, Flags, Depends on, Spec.
+parse_index() {
+  awk -v mode="$1" '
+    function trim(s) { gsub(/^[ \t]+|[ \t\r]+$/, "", s); return s }
+    function key(s,  l) {
+      l = tolower(s)
+      if (l ~ /accept/) return "accepted"
+      if (l ~ /review/) return "review"
+      if (l ~ /rework/) return "rework"
+      if (l ~ /block/) return "blocked"
+      if (l ~ /progress/) return "progress"
+      return "pending"
+    }
+    function field(s, label) {
+      sub("^.*" label ":[ \t]*", "", s); gsub(/\*\*/, "", s); gsub(/`/, "", s)
+      return trim(s)
+    }
+    BEGIN { FS = "|"; OFS = "\037" }
+    title == "" && /^# / {
+      title = substr($0, 3); sub(/[ \t]+(—|-)[ \t]+tasks[ \t]*$/, "", title); title = trim(title)
+    }
+    /^[ \t]*(-[ \t]+)?(\*\*)?Closed:/ { closed = field($0, "Closed"); if (closed == "") closed = "yes" }
+    /^[ \t]*(-[ \t]+)?(\*\*)?Stage:/ { stage = field($0, "Stage"); if (stage ~ /^</) stage = "" }
+    /^[ \t]*(-[ \t]+)?(\*\*)?Branch:/ { branch = field($0, "Branch") }
+    /^[ \t]*\|/ {
+      if (NF < 8) next
+      id = trim($2)
+      if (id !~ /^[A-Za-z]*[0-9]+$/) next
+      n++; ids[n] = id; st[n] = key(trim($3)); ti[n] = trim($4); fl[n] = trim($5)
+      dp[n] = trim($6); sp[n] = trim($7)
+      num[n] = id; gsub(/[^0-9]/, "", num[n]); num[n] += 0
+    }
+    END {
+      if (mode == "summary") {
+        acc = 0
+        for (i = 1; i <= n; i++) if (st[i] == "accepted") acc++
+        print title, n + 0, acc, closed, stage, branch
+        exit
+      }
+      for (i = 1; i <= n; i++) {
+        deps = ""; d = dp[i]
+        # Dependencies may be written T01, 01 or 1: match them by number.
+        while (match(d, /[0-9]+/)) {
+          k = substr(d, RSTART, RLENGTH) + 0; d = substr(d, RSTART + RLENGTH)
+          for (j = 1; j <= n; j++) if (num[j] == k && j != i) { deps = deps (deps == "" ? "" : " ") ids[j]; break }
+        }
+        f = fl[i]; if (f == "—" || f == "-" || tolower(f) == "none") f = ""
+        gsub(/\t/, " ", ti[i])
+        print ids[i], st[i], ti[i], f, deps, sp[i]
+      }
+    }' "$2"
+}
+
+# Parse queue entries of one kind (R or F). Prints per entry:
+#   R: id US date US request US affects US slot US status
+#   F: id US date US question US default US status
+parse_queue() {
+  awk -v kind="$1" '
+    function trim(s) { gsub(/^[ \t]+|[ \t\r]+$/, "", s); return s }
+    BEGIN { OFS = "\037" }
+    $0 ~ ("^[ \t]*- \\[" kind "[0-9]+\\]") {
+      line = $0; sub(/^[ \t]*- \[/, "", line)
+      id = substr(line, 1, index(line, "]") - 1); line = substr(line, index(line, "]") + 1)
+      n = split(line, p, " · ")
+      date = trim(p[1]); text = ""; aff = ""; slot = ""; status = ""; def = ""
+      for (i = 2; i <= n; i++) {
+        v = trim(p[i])
+        if (v ~ /^affects:/) { sub(/^affects:[ \t]*/, "", v); aff = v }
+        else if (v ~ /^slot:/) { sub(/^slot:[ \t]*/, "", v); slot = v }
+        else if (v ~ /^status:/) { sub(/^status:[ \t]*/, "", v); status = tolower(v) }
+        else if (v ~ /^default taken:/) { sub(/^default taken:[ \t]*/, "", v); def = v }
+        else text = text (text == "" ? "" : " · ") v
+      }
+      if (kind == "R") print id, date, text, aff, slot, status
+      else print id, date, text, def, status
+    }' "$2"
+}
+
+# List worktrees: "path US branch" per line, main checkout first.
+list_worktrees() {
+  git -C "$ROOT" worktree list --porcelain 2>/dev/null | awk '
+    /^worktree / { if (p != "") print p "\037" b; p = substr($0, 10); b = ""; next }
+    /^branch / { b = substr($0, 8); sub(/^refs\/heads\//, "", b) }
+    END { if (p != "") print p "\037" b }'
+}
+
+# Percent-encode the characters that break a Markdown link destination.
+md_url() {
+  REPLY=${1// /%20}
+  REPLY=${REPLY//(/%28}
+  REPLY=${REPLY//)/%29}
+}
+
+# Write the dashboard to stdout. Run in a subshell by render_locked.
+render_body() {
+  local repo branch sha lead_state lead_hm lead_line nrun f id
+  local -a RUN_TYPE RUN_DESC RUN_ME RUN_NAME RUN_SINCE
+  now_parts
+  repo=$(basename "$ROOT")
+  branch=$(git -C "$ROOT" symbolic-ref --short -q HEAD 2>/dev/null) || branch=""
+  sha=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null) || sha=""
+  [ -n "$branch" ] || branch="detached"
+  [ -n "$sha" ] || { branch="no git history"; sha="—"; }
+
+  # Running agents.
+  nrun=0
+  for f in "$STATE/running"/*; do
+    [ -e "$f" ] || continue
+    id=${f##*/}
+    load_agent "$id" || A_TYPE="unknown"
+    RUN_TYPE[nrun]=$A_TYPE; RUN_DESC[nrun]=$A_DESC
+    RUN_ME[nrun]="${A_MODEL:-default} · ${A_EFFORT:-default}"
+    RUN_NAME[nrun]=$A_NAME; RUN_SINCE[nrun]=$A_SINCE
+    nrun=$((nrun + 1))
+  done
+
+  # Lead state.
+  lead_state=""; lead_hm=""
+  if [ -f "$STATE/lead" ]; then
+    read -r lead_state lead_hm < "$STATE/lead"
+  fi
+  if [ "$lead_state" = working ]; then
+    lead_line="▶ working since $lead_hm"
+  elif [ "$nrun" -gt 0 ]; then
+    lead_line="▶ agents working, lead idle"
+  elif [ -n "$lead_hm" ]; then
+    lead_line="⏸ waiting for you since $lead_hm"
+  else
+    lead_line="⏸ waiting for you"
+  fi
+
+  printf '# Crew status — %s\n\n' "$repo"
+  printf '*Updated %s %s · %s @ %s · %s*\n\n' "$NOW_DAY" "$NOW_HM" "$branch" "$sha" "$lead_line"
+
+  # Collect indexes: main checkout first, then linked worktrees. A worktree index whose
+  # path also exists in the main checkout is a committed copy of it and is skipped.
+  local -a IDX_FILE IDX_WHERE IDX_REL IDX_TITLE IDX_TOTAL IDX_ACC IDX_CLOSED IDX_STAGE IDX_BRANCH
+  local nidx=0 wt wtb rel rec t_title t_total t_acc t_closed t_stage t_branch
+  add_index() {  # file where rel
+    rec=$(parse_index summary "$1" 2>/dev/null)
+    IFS=$US read -r t_title t_total t_acc t_closed t_stage t_branch <<< "$rec"
+    IDX_FILE[nidx]=$1; IDX_WHERE[nidx]=$2; IDX_REL[nidx]=$3
+    IDX_TITLE[nidx]=${t_title:-${3%/index.md}}; IDX_TOTAL[nidx]=${t_total:-0}; IDX_ACC[nidx]=${t_acc:-0}
+    IDX_CLOSED[nidx]=$t_closed; IDX_STAGE[nidx]=$t_stage; IDX_BRANCH[nidx]=$t_branch
+    nidx=$((nidx + 1))
+  }
+  for f in "$CREW_DIR"/tasks/*/index.md; do
+    [ -f "$f" ] || continue
+    add_index "$f" "" "${f#"$CREW_DIR"/}"
+  done
+  while IFS=$US read -r wt wtb; do
+    [ -n "$wt" ] || continue
+    wt=$(cd "$wt" 2>/dev/null && pwd -P) || continue
+    [ "$wt" != "$ROOT" ] || continue
+    [ -d "$wt/.crew/tasks" ] || continue
+    for f in "$wt"/.crew/tasks/*/index.md; do
+      [ -f "$f" ] || continue
+      rel=${f#"$wt"/.crew/}
+      [ -f "$CREW_DIR/$rel" ] && continue
+      add_index "$f" "${wtb:-$(basename "$wt")}" "$rel"
+    done
+  done <<EOF
+$(list_worktrees)
+EOF
+
+  # Pick the current set: a live main-checkout index on the current branch, else the
+  # newest live main-checkout index, else the newest live worktree index.
+  local cur=-1 i newest_main="" newest_wt=""
+  local -a live_main live_wt
+  for ((i = 0; i < nidx; i++)); do
+    [ -z "${IDX_CLOSED[i]}" ] || continue
+    if [ -z "${IDX_WHERE[i]}" ]; then
+      live_main[${#live_main[@]}]=${IDX_FILE[i]}
+      if [ "$cur" -lt 0 ] && [ -n "${IDX_BRANCH[i]}" ] && [ "${IDX_BRANCH[i]}" = "$branch" ]; then cur=$i; fi
+    else
+      live_wt[${#live_wt[@]}]=${IDX_FILE[i]}
+    fi
+  done
+  if [ "$cur" -lt 0 ]; then
+    # ls -t is the portable way to sort by mtime; these paths come from our own glob.
+    # shellcheck disable=SC2012
+    if [ ${#live_main[@]} -gt 0 ]; then
+      newest_main=$(ls -t "${live_main[@]}" 2>/dev/null | head -n 1)
+    elif [ ${#live_wt[@]} -gt 0 ]; then
+      newest_wt=$(ls -t "${live_wt[@]}" 2>/dev/null | head -n 1)
+    fi
+    for ((i = 0; i < nidx; i++)); do
+      if [ -n "$newest_main$newest_wt" ] && [ "${IDX_FILE[i]}" = "$newest_main$newest_wt" ]; then cur=$i; break; fi
+    done
+  fi
+
+  # Queue.
+  local queue="$CREW_DIR/queue.md" qopen=0 rqueued=0 s
+  local -a REQ_ID REQ_TEXT REQ_AFF REQ_SLOT REQ_STATUS Q_ID Q_TEXT Q_DEF Q_STATUS
+  local nreq=0 nq=0 r_id r_text r_aff r_slot r_status q_def
+  if [ -f "$queue" ]; then
+    while IFS=$US read -r r_id _ r_text r_aff r_slot r_status; do
+      [ -n "$r_id" ] || continue
+      REQ_ID[nreq]=$r_id; REQ_TEXT[nreq]=$r_text; REQ_AFF[nreq]=$r_aff
+      REQ_SLOT[nreq]=$r_slot; REQ_STATUS[nreq]=$r_status
+      case $r_status in queued*) rqueued=$((rqueued + 1)) ;; esac
+      nreq=$((nreq + 1))
+    done <<EOF
+$(parse_queue R "$queue" 2>/dev/null)
+EOF
+    while IFS=$US read -r r_id _ r_text q_def r_status; do
+      [ -n "$r_id" ] || continue
+      Q_ID[nq]=$r_id; Q_TEXT[nq]=$r_text; Q_DEF[nq]=$q_def; Q_STATUS[nq]=$r_status
+      case $r_status in open*) qopen=$((qopen + 1)) ;; esac
+      nq=$((nq + 1))
+    done <<EOF
+$(parse_queue F "$queue" 2>/dev/null)
+EOF
+  fi
+
+  # ---- Now and Tasks ----
+  local -a T_ID T_KEY T_TITLE T_FLAGS T_DEPS T_AGENT
+  local nt=0 t_id t_key t_ti t_fl t_dp cur_task=-1 j re='^[Tt]0*([0-9]+)([^0-9]|$)' tnum
+  if [ "$cur" -ge 0 ]; then
+    while IFS=$US read -r t_id t_key t_ti t_fl t_dp _; do
+      [ -n "$t_id" ] || continue
+      T_ID[nt]=$t_id; T_KEY[nt]=$t_key; T_TITLE[nt]=$t_ti; T_FLAGS[nt]=$t_fl; T_DEPS[nt]=$t_dp
+      # The agent on a task: a running agent whose description starts with the task id.
+      T_AGENT[nt]=""
+      tnum=$(printf '%s' "$t_id" | tr -cd '0-9' | sed 's/^0*//')
+      for ((j = 0; j < nrun; j++)); do
+        if [[ ${RUN_DESC[j]} =~ $re ]] && [ "${BASH_REMATCH[1]}" = "$tnum" ]; then
+          s="${RUN_TYPE[j]} (${RUN_ME[j]})"
+          [ -z "${RUN_NAME[j]}" ] || s="$s [${RUN_NAME[j]}]"
+          T_AGENT[nt]="${T_AGENT[nt]:+${T_AGENT[nt]}, }$s"
+        fi
+      done
+      nt=$((nt + 1))
+    done <<EOF
+$(parse_index rows "${IDX_FILE[cur]}" 2>/dev/null)
+EOF
+    # Current task: the first one in progress, in review or in rework; else the first pending.
+    for ((i = 0; i < nt; i++)); do
+      case ${T_KEY[i]} in progress|review|rework) cur_task=$i; break ;; esac
+    done
+    if [ "$cur_task" -lt 0 ]; then
+      for ((i = 0; i < nt; i++)); do
+        if [ "${T_KEY[i]}" = pending ]; then cur_task=$i; break; fi
+      done
+    fi
+  fi
+
+  printf '## Now\n\n'
+  if [ "$cur" -lt 0 ]; then
+    printf 'No task set in progress.\n\n'
+  else
+    local where_note="" bar="" filled acc=${IDX_ACC[cur]} total=${IDX_TOTAL[cur]}
+    [ -z "${IDX_WHERE[cur]}" ] || where_note=" (worktree \`${IDX_WHERE[cur]}\`)"
+    # The backticks are Markdown code spans, not command substitution.
+    # shellcheck disable=SC2016
+    printf '**%s** · `%s`%s\n\n' "${IDX_TITLE[cur]}" "${IDX_REL[cur]}" "$where_note"
+    filled=0
+    [ "$total" -gt 0 ] && filled=$(((acc * 12 + total / 2) / total))
+    for ((i = 0; i < 12; i++)); do
+      if [ "$i" -lt "$filled" ]; then bar="${bar}█"; else bar="${bar}░"; fi
+    done
+    printf '%s %s/%s accepted\n\n' "$bar" "$acc" "$total"
+    if [ "$cur_task" -ge 0 ]; then
+      status_look "${T_KEY[cur_task]}"
+      printf -- '- **Current task:** %s %s %s — %s — %s\n' "$GLYPH" "${T_ID[cur_task]}" \
+        "${T_TITLE[cur_task]}" "$WORD" "${T_AGENT[cur_task]:-no agent on it}"
+    else
+      printf -- '- **Current task:** none open\n'
+    fi
+  fi
+  printf -- '- **Open founder questions:** %s · **Queued requests:** %s\n\n' "$qopen" "$rqueued"
+
+  if [ "$cur" -ge 0 ]; then
+    printf '## Tasks\n\n'
+    if [ "$nt" -eq 0 ]; then
+      printf 'The index has no task rows yet.\n\n'
+    elif [ "$nt" -gt 60 ]; then
+      printf '*Diagram omitted: more than 60 tasks.*\n\n'
+    else
+      local dep nid did label
+      printf '```mermaid\nflowchart LR\n'
+      for ((i = 0; i < nt; i++)); do
+        status_look "${T_KEY[i]}"
+        mm_text "${T_TITLE[i]}"; label=$REPLY
+        mm_id "${T_ID[i]}"; nid=$REPLY
+        printf '  %s["%s %s %s"]:::%s\n' "$nid" "$GLYPH" "$nid" "$label" "${T_KEY[i]}"
+      done
+      for ((i = 0; i < nt; i++)); do
+        mm_id "${T_ID[i]}"; nid=$REPLY
+        for dep in ${T_DEPS[i]}; do
+          mm_id "$dep"; did=$REPLY
+          printf '  %s --> %s\n' "$did" "$nid"
+        done
+      done
+      printf '  classDef accepted fill:#dcfce7,stroke:#16a34a,color:#14532d\n'
+      printf '  classDef progress fill:#fef3c7,stroke:#d97706,color:#78350f\n'
+      printf '  classDef review fill:#dbeafe,stroke:#2563eb,color:#1e3a8a\n'
+      printf '  classDef rework fill:#fee2e2,stroke:#dc2626,color:#7f1d1d\n'
+      printf '  classDef blocked fill:#f3f4f6,stroke:#6b7280,color:#374151,stroke-dasharray:5 5\n'
+      printf '  classDef pending fill:#ffffff,stroke:#9ca3af,color:#111827\n'
+      printf '```\n\n'
+    fi
+    if [ "$nt" -gt 0 ]; then
+      local c_ti c_fl c_dp c_ag
+      printf '| # | Status | Task | Flags | Depends on | Agent now |\n'
+      printf '|---|---|---|---|---|---|\n'
+      for ((i = 0; i < nt; i++)); do
+        status_look "${T_KEY[i]}"
+        md_cell "${T_TITLE[i]}"; c_ti=$REPLY
+        md_cell "${T_FLAGS[i]}"; c_fl=$REPLY
+        md_cell "${T_DEPS[i]// /, }"; c_dp=$REPLY
+        md_cell "${T_AGENT[i]}"; c_ag=$REPLY
+        printf '| %s | %s %s | %s | %s | %s | %s |\n' "${T_ID[i]}" "$GLYPH" "$WORD" "$c_ti" "$c_fl" "$c_dp" "$c_ag"
+      done
+      printf '\n'
+    fi
+
+    # Newest 3 screenshots of the current task, linked relative to .crew/.
+    if [ "$cur_task" -ge 0 ]; then
+      local -a shots
+      local d img n=0
+      for d in "$CREW_DIR/task-data/${T_ID[cur_task]}"-*/screenshots "$CREW_DIR/task-data/${T_ID[cur_task]}"/screenshots; do
+        [ -d "$d" ] || continue
+        for img in "$d"/*; do
+          case $(printf '%s' "$img" | tr '[:upper:]' '[:lower:]') in
+            *.png|*.jpg|*.jpeg|*.gif|*.webp|*.svg) shots[${#shots[@]}]=$img ;;
+          esac
+        done
+      done
+      if [ ${#shots[@]} -gt 0 ]; then
+        printf '**Newest screenshots of %s:**\n\n' "${T_ID[cur_task]}"
+        while IFS= read -r img; do
+          [ -n "$img" ] || continue
+          n=$((n + 1)); [ "$n" -le 3 ] || break
+          md_url "${img#"$CREW_DIR"/}"
+          printf -- '- ![%s](%s)\n' "${img##*/}" "$REPLY"
+        done <<EOF
+$(ls -t "${shots[@]}" 2>/dev/null)
+EOF
+        printf '\n'
+      fi
+    fi
+  fi
+
+  # ---- Requests and questions ----
+  printf '## Requests and questions\n\n'
+  local nnodes=0 group gname
+  for ((i = 0; i < nreq; i++)); do
+    case ${REQ_STATUS[i]} in queued*|scheduled*|done*) nnodes=$((nnodes + 1)) ;; esac
+  done
+  if [ "$nnodes" -gt 0 ] && [ "$nnodes" -le 60 ]; then
+    local rt rs empty
+    printf '```mermaid\nflowchart LR\n'
+    for group in queued scheduled 'done'; do
+      case $group in queued) gname=Queued ;; scheduled) gname=Scheduled ;; *) gname=Done ;; esac
+      printf '  subgraph %s\n' "$gname"
+      empty=1
+      for ((i = 0; i < nreq; i++)); do
+        case ${REQ_STATUS[i]} in "$group"*) ;; *) continue ;; esac
+        empty=0
+        mm_text "${REQ_TEXT[i]}"; rt=$REPLY
+        mm_text "${REQ_SLOT[i]:-no slot}"; rs=$REPLY
+        mm_id "${REQ_ID[i]}"
+        printf '    %s["%s · %s · %s"]\n' "$REPLY" "${REQ_ID[i]}" "$rt" "$rs"
+      done
+      [ "$empty" = 0 ] || printf '    %s_none["none"]\n' "$gname"
+      printf '  end\n'
+    done
+    printf '```\n\n'
+  elif [ "$nnodes" -gt 60 ]; then
+    printf '*Diagram omitted: more than 60 requests.*\n\n'
+  fi
+  if [ "$nreq" -gt 0 ]; then
+    local c1 c2 c3 c4
+    printf '| ID | Request | Affects | Slot | Status |\n|---|---|---|---|---|\n'
+    for ((i = 0; i < nreq; i++)); do
+      md_cell "${REQ_TEXT[i]}"; c1=$REPLY
+      md_cell "${REQ_AFF[i]}"; c2=$REPLY
+      md_cell "${REQ_SLOT[i]}"; c3=$REPLY
+      md_cell "${REQ_STATUS[i]}"; c4=$REPLY
+      printf '| %s | %s | %s | %s | %s |\n' "${REQ_ID[i]}" "$c1" "$c2" "$c3" "$c4"
+    done
+    printf '\n'
+  else
+    printf 'No requests from the founder.\n\n'
+  fi
+  if [ "$nq" -gt 0 ]; then
+    local c1 c2 c3
+    printf '| ID | Question for the founder | Default taken | Status |\n|---|---|---|---|\n'
+    for ((i = 0; i < nq; i++)); do
+      md_cell "${Q_TEXT[i]}"; c1=$REPLY
+      md_cell "${Q_DEF[i]}"; c2=$REPLY
+      md_cell "${Q_STATUS[i]}"; c3=$REPLY
+      printf '| %s | %s | %s | %s |\n' "${Q_ID[i]}" "$c1" "$c2" "$c3"
+    done
+    printf '\n'
+  else
+    printf 'No questions for the founder.\n\n'
+  fi
+
+  # ---- Live agents ----
+  printf '## Live agents\n\n'
+  if [ "$nrun" -eq 0 ]; then
+    printf 'No subagent running.\n\n'
+  else
+    local c1 c2
+    printf '| Agent | Model · effort | Name | Doing | Since |\n|---|---|---|---|---|\n'
+    for ((i = 0; i < nrun; i++)); do
+      md_cell "${RUN_NAME[i]}"; c1=$REPLY
+      md_cell "${RUN_DESC[i]}"; c2=$REPLY
+      printf '| %s | %s | %s | %s | %s |\n' "${RUN_TYPE[i]}" "${RUN_ME[i]}" "$c1" "$c2" "${RUN_SINCE[i]:-—}"
+    done
+    printf '\n'
+  fi
+
+  # ---- Recent activity: last 12 journal events, dated when not from today ----
+  printf '## Recent activity\n\n'
+  if [ -f "$JOURNAL" ] && grep -q '^- ' "$JOURNAL" 2>/dev/null; then
+    awk -v today="$NOW_DAY" '
+      /^## [0-9][0-9][0-9][0-9]-/ { d = substr($0, 4); next }
+      /^- / { n++; l[n % 12] = (d == today || d == "") ? $0 : ("- " d " " substr($0, 3)) }
+      END { s = n - 11; if (s < 1) s = 1; for (i = s; i <= n; i++) print l[i % 12] }' "$JOURNAL"
+    printf '\n'
+  else
+    printf 'No activity logged yet.\n\n'
+  fi
+
+  # ---- Task sets: live first ----
+  printf '## Task sets\n\n'
+  if [ "$nidx" -eq 0 ]; then
+    printf 'No task sets yet.\n\n'
+  else
+    local pass loc c1
+    printf '| Set | Stage | Tasks | Accepted | Status | Closed |\n|---|---|---|---|---|---|\n'
+    for pass in live closed; do
+      for ((i = 0; i < nidx; i++)); do
+        if [ "$pass" = live ] && [ -n "${IDX_CLOSED[i]}" ]; then continue; fi
+        if [ "$pass" = closed ] && [ -z "${IDX_CLOSED[i]}" ]; then continue; fi
+        loc="\`${IDX_REL[i]}\`"
+        [ -z "${IDX_WHERE[i]}" ] || loc="$loc in worktree \`${IDX_WHERE[i]}\`"
+        md_cell "${IDX_TITLE[i]}"; c1=$REPLY
+        md_cell "${IDX_STAGE[i]}"
+        printf '| %s · %s | %s | %s | %s | %s | %s |\n' "$c1" "$loc" "$REPLY" "${IDX_TOTAL[i]}" \
+          "${IDX_ACC[i]}" "$([ "$pass" = live ] && printf 'live' || printf 'closed')" "${IDX_CLOSED[i]:-—}"
+      done
+    done
+    printf '\n'
+  fi
+
+  # ---- Handoff ----
+  if [ -f "$CREW_DIR/handoff.md" ]; then
+    local h_date h_where h_next
+    h_date=$(sed -n 's/^# Crew handoff[[:space:]]*—[[:space:]]*//p' "$CREW_DIR/handoff.md" | head -n 1)
+    h_where=$(grep -m 1 'Where we are:' "$CREW_DIR/handoff.md" | sed 's/^.*Where we are:[*[:space:]]*//')
+    h_next=$(grep -m 1 'Next step:' "$CREW_DIR/handoff.md" | sed 's/^.*Next step:[*[:space:]]*//')
+    printf '## Handoff\n\n'
+    printf -- '- **Written:** %s\n' "${h_date:-unknown}"
+    printf -- '- **Where we are:** %s\n' "${h_where:-—}"
+    printf -- '- **Next step:** %s\n' "${h_next:-—}"
+  fi
+  return 0
+}
+
+# Render the dashboard: temp file, then mv into place. Never fails the caller.
+# Call with the lock held (or after failing to get it).
+render_locked() {
+  local tmp="$TMP_DIR/status.md.tmp" err="$TMP_DIR/status.err" reason
+  mkdir -p "$TMP_DIR" 2>/dev/null || return 0
+  if (render_body) > "$tmp" 2> "$err" && [ -s "$tmp" ]; then
+    :
+  else
+    reason=$(grep -v '^[[:space:]]*$' "$err" 2>/dev/null | tail -n 1)
+    printf '# Crew status\n\nDashboard rendering failed: %s\n' "${reason:-unknown error}" > "$tmp" 2>/dev/null
+  fi
+  mv -f "$tmp" "$STATUS" 2>/dev/null || true
+  rm -f "$err" 2>/dev/null
+  return 0
+}
+
+render_with_lock() {
+  ensure_dirs
+  lock_take
+  render_locked
+  lock_release
+}
+
+# ---------------------------------------------------------------------------
+# Hook modes
+# ---------------------------------------------------------------------------
+
+session_registered() {
+  [ -e "$STATE/sessions/any" ] && return 0
+  [ -n "$1" ] || return 1
+  safe_name "$1"
+  [ -e "$STATE/sessions/$REPLY" ]
+}
+
+# Parse the hook input with one jq call; sets the J_* variables.
+read_hook_json() {
+  local out
+  J_SESSION=""; J_CWD=""; J_TOOL=""; J_AGENT_TYPE=""; J_AGENT_ID=""; J_SUBTYPE=""; J_DESC=""
+  J_MODEL=""; J_EFFORT=""; J_NAME=""; J_ISO=""; J_TO=""; J_SUMMARY=""; J_MESSAGE=""; J_FILE=""
+  J_LAST=""
+  out=$(printf '%s' "$INPUT" | jq -r '
+    def s: if . == null then "" elif type == "string" then . else tostring end;
+    ((.tool_input | objects) // {}) as $t |
+    @sh "J_SESSION=\(.session_id | s)",
+    @sh "J_CWD=\(.cwd | s)",
+    @sh "J_TOOL=\(.tool_name | s)",
+    @sh "J_AGENT_TYPE=\(.agent_type | s)",
+    @sh "J_AGENT_ID=\(.agent_id | s)",
+    @sh "J_SUBTYPE=\($t.subagent_type | s)",
+    @sh "J_DESC=\($t.description | s)",
+    @sh "J_MODEL=\($t.model | s)",
+    @sh "J_EFFORT=\($t.effort | s)",
+    @sh "J_NAME=\($t.name | s)",
+    @sh "J_ISO=\($t.isolation | s)",
+    @sh "J_TO=\($t.to | s)",
+    @sh "J_SUMMARY=\($t.summary | s)",
+    @sh "J_MESSAGE=\($t.message | s)",
+    @sh "J_FILE=\($t.file_path | s)",
+    @sh "J_LAST=\(.last_assistant_message | s | split("\n")[0:5] | join("\n"))"
+  ' 2>/dev/null) || return 1
+  [ -n "$out" ] || return 1
+  eval "$out"
+}
+
+# Without jq: warn once per day in the journal (only for a registered session).
+hook_without_jq() {
+  local sid
+  sid=$(printf '%s' "$INPUT" | tr '\n' ' ' | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  session_registered "$sid" || return 0
+  now_parts
+  if [ "$(cat "$STATE/jq-warned" 2>/dev/null)" = "$NOW_DAY" ]; then return 0; fi
+  ensure_dirs
+  lock_take
+  printf '%s\n' "$NOW_DAY" > "$STATE/jq-warned"
+  WRITER_CWD=$PWD
+  journal_append "system" "jq not found; subagent logging is off. Run /crew setup."
+}
+
+hook_agent_start() {
+  local type model effort desc head text
+  [ "$J_TOOL" = Agent ] || return 0
+  type=${J_SUBTYPE:-general-purpose}
+  model=$J_MODEL; effort=$J_EFFORT
+  [ -n "$model" ] || model=$(agent_frontmatter "$type" model)
+  [ -n "$effort" ] || effort=$(agent_frontmatter "$type" effort)
+  oneline "${model:-default}"; model=$REPLY
+  oneline "${effort:-default}"; effort=$REPLY
+  oneline "$J_DESC"; trunc "$REPLY" 120; desc=$REPLY
+  oneline "$J_NAME"; local name=$REPLY
+
+  head="→ $type ($model · $effort)"
+  [ -z "$J_AGENT_TYPE" ] || head="$J_AGENT_TYPE $head"
+  text=$desc
+  [ -z "$name" ] || text="$text [$name]"
+  [ -z "$J_ISO" ] || text="$text ($J_ISO)"
+
+  ensure_dirs
+  lock_take
+  now_parts
+  safe_name "$type"
+  printf '%s\n' "$NOW_EPOCH$TAB$desc$TAB$model$TAB$effort$TAB$name" >> "$STATE/pending/$REPLY"
+  journal_append "$head" "$text"
+}
+
+hook_agent_resume() {
+  local text
+  [ "$J_TOOL" = SendMessage ] || return 0
+  if [ -n "$J_SUMMARY" ]; then oneline "$J_SUMMARY"; else oneline "$J_MESSAGE"; fi
+  trunc "$REPLY" 120; text=$REPLY
+  oneline "${J_TO:-?}"
+  journal_append "↺ $REPLY" "$text"
+}
+
+hook_agent_id() {
+  local id pfile rec desc model effort name
+  [ -n "$J_AGENT_TYPE" ] && [ -n "$J_AGENT_ID" ] || return 0
+  ensure_dirs
+  lock_take
+  safe_name "$J_AGENT_ID"; id=$REPLY
+  if [ -f "$STATE/agents/$id" ]; then
+    # A resume: the agent is already known; it is running again.
+    : > "$STATE/running/$id"
+    render_locked
+    return 0
+  fi
+  now_parts
+  safe_name "$J_AGENT_TYPE"; pfile="$STATE/pending/$REPLY"
+  rec=""
+  if [ -f "$pfile" ]; then
+    # Drop stale entries (older than 120 s: spawns that never started), pop the oldest
+    # fresh one, keep the rest in order.
+    rec=$(awk -F'\t' -v now="$NOW_EPOCH" -v out="$pfile.new" '
+      ($1 + 0) < now - 120 { next }
+      !done { done = 1; print $1 "\037" $2 "\037" $3 "\037" $4 "\037" $5; next }
+      { print > out }' "$pfile")
+    if [ -s "$pfile.new" ]; then mv -f "$pfile.new" "$pfile"; else rm -f "$pfile" "$pfile.new"; fi
+  fi
+  desc=""; model=""; effort=""; name=""
+  [ -z "$rec" ] || IFS=$US read -r _ desc model effort name <<< "$rec"
+  [ -n "$model" ] || model=$(agent_frontmatter "$J_AGENT_TYPE" model)
+  [ -n "$effort" ] || effort=$(agent_frontmatter "$J_AGENT_TYPE" effort)
+  oneline "$J_AGENT_TYPE"
+  {
+    printf 'type=%s\n' "$REPLY"
+    printf 'description=%s\n' "$desc"
+    printf 'model=%s\n' "${model:-default}"
+    printf 'effort=%s\n' "${effort:-default}"
+    printf 'name=%s\n' "$name"
+    printf 'started=%s\n' "$NOW_EPOCH"
+    printf 'since=%s\n' "$NOW_HM"
+  } > "$STATE/agents/$id"
+  : > "$STATE/running/$id"
+  render_locked
+}
+
+hook_agent_stop() {
+  local status desc="" id
+  [ -n "$J_AGENT_TYPE" ] || return 0
+  status=$(printf '%s\n' "$J_LAST" | grep -o -w -E 'DONE|PARTIAL|BLOCKED|ACCEPT|CHANGES|RECOMMENDATION' | head -n 1)
+  [ -n "$status" ] || status=finished
+  ensure_dirs
+  lock_take
+  if [ -n "$J_AGENT_ID" ]; then
+    safe_name "$J_AGENT_ID"; id=$REPLY
+    if load_agent "$id"; then desc=$A_DESC; fi
+    rm -f "$STATE/running/$id"
+  fi
+  oneline "$J_AGENT_TYPE"
+  journal_append "← $REPLY" "$status${desc:+ · $desc}"
+}
+
+hook_file_changed() {
+  local path dir base pdir
+  path=$J_FILE
+  [ -n "$path" ] || return 0
+  case $path in /*) ;; *) path="$WRITER_CWD/$path" ;; esac
+  base=${path##*/}
+  case $base in index.md|queue.md|handoff.md) ;; *) return 0 ;; esac
+  dir=$(dirname "$path")
+  pdir=$(cd "$dir" 2>/dev/null && pwd -P) || return 0
+  case "$pdir/" in "$ROOT/.crew/"*) ;; *) return 0 ;; esac
+  render_with_lock
+}
+
+hook_lead() {  # $1 = working | idle
+  [ -z "$J_AGENT_TYPE" ] || return 0
+  ensure_dirs
+  lock_take
+  now_parts
+  printf '%s %s\n' "$1" "$NOW_HM" > "$STATE/lead"
+  render_locked
+}
+
+hook_compact() {
+  [ -z "$J_AGENT_TYPE" ] || return 0
+  printf '%s\n' "Crew: the conversation was just compacted. Before continuing, re-read CREW.md (path in the CLAUDE.md or AGENTS.md pointer), .crew/queue.md, the active index under .crew/tasks/, and the state file; then run ListAgents, or \`.crew/bin/crew running\` when ListAgents is not available, to find live subagents."
+  journal_append "system" "Context compacted"
+}
+
+run_hook() {
+  local mode=${1:-}
+  case $mode in
+    agent-start|agent-resume|agent-id|agent-stop|file-changed|lead-busy|lead-idle|compact) ;;
+    *) return 0 ;;
+  esac
+  # Guard 1: this root is a crew project.
+  [ -f "$ROOT/.crew/bin/crew" ] || return 0
+  INPUT=""
+  [ -t 0 ] || INPUT=$(cat 2>/dev/null)
+  if ! command -v jq >/dev/null 2>&1; then
+    hook_without_jq
+    return 0
+  fi
+  read_hook_json || return 0
+  # Guard 2: a registered crew session (or the wildcard).
+  session_registered "$J_SESSION" || return 0
+  WRITER_CWD=$PWD
+  if [ -n "$J_CWD" ] && [ -d "$J_CWD" ]; then WRITER_CWD=$J_CWD; fi
+  # Guard 3: per-mode checks live at the top of each handler.
+  case $mode in
+    agent-start) hook_agent_start ;;
+    agent-resume) hook_agent_resume ;;
+    agent-id) hook_agent_id ;;
+    agent-stop) hook_agent_stop ;;
+    file-changed) hook_file_changed ;;
+    lead-busy) hook_lead working ;;
+    lead-idle) hook_lead idle ;;
+    compact) hook_compact ;;
+  esac
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Other subcommands
+# ---------------------------------------------------------------------------
+
+cmd_journal() {
+  if [ $# -eq 0 ] || [ -z "$*" ]; then
+    printf 'usage: crew journal <one line, past tense>\n' >&2
+    return 1
+  fi
+  WRITER_CWD=$PWD
+  journal_append "lead" "$*"
+}
+
+cmd_session() {
+  if [ "${1:-}" != start ]; then
+    printf 'usage: crew session start [<session-id>]\n' >&2
+    return 1
+  fi
+  local sid=${2:-}
+  ensure_dirs
+  lock_take
+  if [ -n "$sid" ]; then safe_name "$sid"; sid=$REPLY; else sid=any; fi
+  touch "$STATE/sessions/$sid"
+  # Prune registrations older than 30 days.
+  find "$STATE/sessions" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
+  render_locked
+  lock_release
+  printf 'Crew session registered: %s\n' "$sid"
+}
+
+cmd_running() {
+  local f id n=0
+  for f in "$STATE/running"/*; do
+    [ -e "$f" ] || continue
+    id=${f##*/}
+    load_agent "$id" || A_TYPE=unknown
+    printf '%s · %s (%s · %s) · %s · since %s\n' "$id" "$A_TYPE" "${A_MODEL:-default}" \
+      "${A_EFFORT:-default}" "${A_DESC:-(no description)}" "${A_SINCE:-?}"
+    n=$((n + 1))
+  done
+  [ "$n" -gt 0 ] || printf 'No subagent running.\n'
+}
+
+cmd_status() {
+  render_with_lock
+  printf 'Rendered %s\n' "$STATUS"
+}
+
+# ---------------------------------------------------------------------------
+# Worktrees (D-G5, D-G6)
+# ---------------------------------------------------------------------------
+
+DRY=0
+# step DESCRIPTION COMMAND...: print the step, then run it (or only print on --dry-run).
+step() {
+  local d=$1
+  shift
+  if [ "$DRY" = 1 ]; then printf '  would: %s\n' "$d"; return 0; fi
+  printf '  %s\n' "$d"
+  "$@"
+}
+
+# shellcheck disable=SC2317  # invoked indirectly through step()
+json_str() {
+  REPLY=${1//\\/\\\\}
+  REPLY=${REPLY//\"/\\\"}
+}
+
+# shellcheck disable=SC2317  # invoked indirectly through step()
+write_worktree_json() {  # path main branch
+  local p m b t
+  json_str "$1"; p=$REPLY
+  json_str "$2"; m=$REPLY
+  json_str "$3"; b=$REPLY
+  t=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  printf '{\n  "main_root": "%s",\n  "worktree": "%s",\n  "branch": "%s",\n  "started_at": "%s"\n}\n' \
+    "$m" "$p" "$b" "$t" > "$1/.crew/tmp/worktree.json"
+}
+
+# shellcheck disable=SC2317  # invoked indirectly through step()
+copy_missing() {  # src dest
+  mkdir -p "$(dirname "$2")" && cp -Rp "$1" "$2"
+}
+
+# Expand the .worktreeinclude patterns in the main checkout; print matching relative paths.
+worktreeinclude_matches() {  # main include-file
+  local line pat m
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    pat=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    case $pat in ''|'#'*) continue ;; '!'*) printf 'skip-negation%s%s\n' "$US" "$pat"; continue ;; esac
+    pat=${pat#/}; pat=${pat%/}
+    [ -n "$pat" ] || continue
+    (
+      cd "$1" || exit 0
+      IFS=$NL
+      # Unquoted on purpose: the pattern may be a glob (for example .env*).
+      # shellcheck disable=SC2086
+      for m in $pat; do
+        [ -e "$m" ] && printf 'match%s%s\n' "$US" "$m"
+      done
+    )
+  done < "$2"
+}
+
+wt_setup() {
+  local path=$1 main branch inc kind rel script rc=0 copied=0
+  if [ -z "$path" ]; then
+    path=$(git rev-parse --show-toplevel 2>/dev/null) || { printf 'crew worktree setup: not inside a git checkout; pass a path\n' >&2; return 1; }
+  fi
+  path=$(cd "$path" 2>/dev/null && pwd -P) || { printf 'crew worktree setup: no such directory: %s\n' "$1" >&2; return 1; }
+  cd "$path" || return 1
+  main=$(main_worktree_of "$path") || main=""
+  branch=$(git -C "$path" symbolic-ref --short -q HEAD 2>/dev/null) || branch=$(git -C "$path" rev-parse --short HEAD 2>/dev/null)
+  printf 'crew worktree setup%s: %s (branch %s; main checkout %s)\n' \
+    "$([ "$DRY" = 1 ] && printf ' (dry run)')" "$path" "${branch:-none}" "${main:-unknown}"
+
+  # 1. Copy the .worktreeinclude files that are missing here from the main checkout.
+  if [ -n "$main" ] && [ "$main" != "$path" ]; then
+    inc="$main/.worktreeinclude"; [ -f "$inc" ] || inc="$path/.worktreeinclude"
+    if [ -f "$inc" ]; then
+      while IFS=$US read -r kind rel; do
+        [ -n "$kind" ] || continue
+        if [ "$kind" = skip-negation ]; then printf '  skip %s (negated patterns are not supported)\n' "$rel"; continue; fi
+        [ -e "$path/$rel" ] && continue
+        step "copy $rel from the main checkout" copy_missing "$main/$rel" "$path/$rel" || rc=1
+        copied=$((copied + 1))
+      done <<EOF
+$(worktreeinclude_matches "$main" "$inc")
+EOF
+      [ "$copied" -gt 0 ] || printf '  .worktreeinclude: nothing missing\n'
+    else
+      printf '  no .worktreeinclude; nothing to copy\n'
+    fi
+  else
+    printf '  this is the main checkout; nothing to copy\n'
+  fi
+
+  # 2. Scratch and task-data directories.
+  step "create .crew/tmp/ and .crew/task-data/" mkdir -p "$path/.crew/tmp" "$path/.crew/task-data" || rc=1
+
+  # 3. worktree.json for scripts that need to know where they are.
+  step "write .crew/tmp/worktree.json" write_worktree_json "$path" "${main:-$path}" "$branch" || rc=1
+
+  # 4. The project's own setup.
+  script="$path/.crew/worktree/setup.sh"
+  [ -f "$script" ] || { [ -n "$main" ] && script="$main/.crew/worktree/setup.sh"; }
+  if [ -f "$script" ]; then
+    if ! step "run .crew/worktree/setup.sh $path" "${BASH:-bash}" "$script" "$path"; then
+      printf 'crew worktree setup: .crew/worktree/setup.sh failed\n' >&2
+      return 1
+    fi
+  else
+    printf '  no .crew/worktree/setup.sh; skipping project setup\n'
+  fi
+  [ "$rc" = 0 ] && printf 'crew worktree setup: %s\n' "$([ "$DRY" = 1 ] && printf 'dry run, nothing changed' || printf 'ready')"
+  return "$rc"
+}
+
+# Copy <wt>/.crew/task-data/ into the main checkout: merge per-task dirs, newer file wins.
+# shellcheck disable=SC2317  # invoked indirectly through step()
+harvest_task_data() {  # src dest
+  local rel n=0
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    rel=${rel#./}
+    if [ ! -e "$2/$rel" ] || [ "$1/$rel" -nt "$2/$rel" ]; then
+      mkdir -p "$(dirname "$2/$rel")" && cp -p "$1/$rel" "$2/$rel" && n=$((n + 1))
+    fi
+  done <<EOF
+$(cd "$1" 2>/dev/null && find . -type f)
+EOF
+  printf '    %s file(s) copied\n' "$n"
+}
+
+# Append the event lines of a worktree-local journal to the main journal, with the actor
+# suffixed [<branch>]; lines from earlier days carry their date.
+# shellcheck disable=SC2317  # invoked indirectly through step()
+harvest_journal() {  # wt-journal branch
+  local lines
+  ensure_dirs
+  lock_take
+  now_parts
+  lines=$(awk -v today="$NOW_DAY" -v sfx=" [$2]" '
+    /^## [0-9][0-9][0-9][0-9]-/ { d = substr($0, 4); next }
+    /^- / {
+      rest = substr($0, 3); i = index(rest, " · ")
+      if (i == 0) { print $0 sfx; next }
+      time = substr(rest, 1, i - 1); rest = substr(rest, i + 4)
+      j = index(rest, " · ")
+      if (j == 0) { actor = rest; text = "" } else { actor = substr(rest, 1, j - 1); text = substr(rest, j) }
+      if (index(actor, sfx) == 0) actor = actor sfx
+      if (d != "" && d != today) time = d " " time
+      print "- " time " · " actor text
+    }' "$1")
+  if [ -n "$lines" ]; then
+    journal_open_today
+    printf '%s\n' "$lines" >> "$JOURNAL"
+    printf '    %s line(s) appended\n' "$(printf '%s\n' "$lines" | wc -l | tr -d ' ')"
+  else
+    printf '    no journal lines\n'
+  fi
+  lock_release
+}
+
+wt_teardown() {
+  local path=$1 abs wt wtb listed="" branch="" p rc=0 script
+  if [ -z "$path" ]; then
+    printf 'usage: crew worktree teardown <path> [--dry-run]\n' >&2
+    return 1
+  fi
+  case $path in /*) abs=$path ;; *) abs="$PWD/$path" ;; esac
+  [ -d "$abs" ] && abs=$(cd "$abs" && pwd -P)
+  if [ "$abs" = "$ROOT" ]; then
+    printf 'crew worktree teardown: refusing to remove the main checkout\n' >&2
+    return 1
+  fi
+  while IFS=$US read -r wt wtb; do
+    [ -n "$wt" ] || continue
+    p=$wt; [ -d "$wt" ] && p=$(cd "$wt" && pwd -P)
+    if [ "$p" = "$abs" ] || [ "$wt" = "$abs" ]; then listed=$wt; branch=$wtb; break; fi
+  done <<EOF
+$(list_worktrees)
+EOF
+  if [ -z "$listed" ]; then
+    printf 'crew worktree teardown: %s is not a worktree of %s\n' "$path" "$ROOT" >&2
+    return 1
+  fi
+  printf 'crew worktree teardown%s: %s (branch %s)\n' "$([ "$DRY" = 1 ] && printf ' (dry run)')" "$listed" "${branch:-none}"
+
+  # 1. Harvest task data and worktree-local journal lines (D-G6).
+  if [ -d "$abs/.crew/task-data" ]; then
+    step "copy .crew/task-data/ into the main checkout (newer file wins)" \
+      harvest_task_data "$abs/.crew/task-data" "$CREW_DIR/task-data" || rc=1
+  else
+    printf '  no task data in the worktree\n'
+  fi
+  if [ -f "$abs/.crew/journal.md" ] && [ "$abs/.crew/journal.md" != "$JOURNAL" ]; then
+    step "append the worktree's journal lines to the main journal" \
+      harvest_journal "$abs/.crew/journal.md" "${branch:-detached}" || rc=1
+  fi
+
+  # 2. The project's own teardown.
+  script="$CREW_DIR/worktree/teardown.sh"
+  if [ -f "$script" ] && [ -d "$abs" ]; then
+    if ! step "run .crew/worktree/teardown.sh $listed" "${BASH:-bash}" "$script" "$abs"; then
+      printf 'crew worktree teardown: teardown.sh failed; continuing with the removal\n' >&2
+      rc=1
+    fi
+  fi
+
+  # 3. Remove the worktree, unlocking it if git refuses, then delete its branch.
+  if [ -d "$abs" ]; then
+    if ! step "git worktree remove --force $listed" git -C "$ROOT" worktree remove --force "$listed" 2>/dev/null; then
+      step "git worktree unlock $listed" git -C "$ROOT" worktree unlock "$listed" 2>/dev/null
+      step "git worktree remove --force $listed" git -C "$ROOT" worktree remove --force "$listed" || rc=1
+    fi
+  else
+    step "git worktree prune (the directory is already gone)" git -C "$ROOT" worktree prune || rc=1
+  fi
+  if [ -n "$branch" ]; then
+    step "git branch -D $branch" git -C "$ROOT" branch -D "$branch" || rc=1
+  fi
+  [ "$DRY" = 1 ] || render_with_lock
+  if [ "$rc" = 0 ]; then
+    printf 'crew worktree teardown: %s\n' "$([ "$DRY" = 1 ] && printf 'dry run, nothing changed' || printf 'done')"
+  fi
+  return "$rc"
+}
+
+cmd_worktree() {
+  local sub=${1:-} path="" a
+  [ $# -gt 0 ] && shift
+  for a in "$@"; do
+    case $a in
+      --dry-run) DRY=1 ;;
+      -*) printf 'crew worktree: unknown option %s\n' "$a" >&2; return 1 ;;
+      *) path=$a ;;
+    esac
+  done
+  case $sub in
+    setup) wt_setup "$path" ;;
+    teardown) wt_teardown "$path" ;;
+    *) printf 'usage: crew worktree setup [<path>] [--dry-run] | crew worktree teardown <path> [--dry-run]\n' >&2; return 1 ;;
+  esac
+}
+
+usage() {
+  sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+resolve_root
+set_paths
+
+case ${1:-} in
+  hook)
+    # Silent unless debugging; always exit 0.
+    [ -n "${CREW_DEBUG:-}" ] || exec 2>/dev/null
+    shift
+    run_hook "$@"
+    lock_release
+    exit 0
+    ;;
+  journal) shift; cmd_journal "$@"; rc=$? ;;
+  session) shift; cmd_session "$@"; rc=$? ;;
+  running) cmd_running; rc=$? ;;
+  status) cmd_status; rc=$? ;;
+  worktree) shift; cmd_worktree "$@"; rc=$? ;;
+  help|-h|--help) usage; rc=0 ;;
+  *) usage >&2; rc=1 ;;
+esac
+lock_release
+exit "$rc"

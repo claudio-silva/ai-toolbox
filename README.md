@@ -70,7 +70,7 @@ Each skill is a directory with a `SKILL.md`: under `skills/<name>/` when it work
 | [affinity-sdk](skills/affinity-sdk/) | all | Verified operating procedure for the official Affinity by Canva MCP |
 | [auto-routing](skills/codex/auto-routing/) | codex | Cost-aware delegation: routes work to the cheapest pinned `te_*` worker role; ships 9 role definitions |
 | [codex-remote](skills/codex/codex-remote/) | codex | Delegate bounded tasks to Codex on SSH servers via a local Luna/low relay subagent; durable job IDs, observe or dispatch-only |
-| [crew](skills/claude-code/crew/) | claude-code | Multi-agent operating model: roles, models and effort per kind of work, briefs, verification, debugging escalation, QC, and the lead's context economics |
+| [crew](skills/claude-code/crew/) | claude-code | Multi-agent operating model for long unattended runs: roles, models and effort per kind of work, planning and task decomposition, verification and QC, a founder request queue, a development journal and a live status dashboard |
 | [cua-browser-automation](skills/cua-browser-automation/) | all | Real-browser E2E testing via the `browse` wrapper over `cua-driver` — snapshot → act → verify, parallel contexts, evidence capture |
 | [cursor-plugin-development](skills/cursor/cursor-plugin-development/) | cursor | Verified guide to Cursor plugins: commands, skills, subagents, hooks — including undocumented gotchas |
 | [lite-chrome-automation](skills/lite-chrome-automation/) | all | Lightweight CDP control of dedicated Chrome instances — MAIN-world JS eval, cookies, screenshots, extension debugging |

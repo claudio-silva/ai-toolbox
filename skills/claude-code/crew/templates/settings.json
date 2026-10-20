@@ -1,0 +1,28 @@
+{
+  "worktree": { "baseRef": "head" },
+  "permissions": { "allow": [ "Bash(.crew/bin/crew *)" ] },
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Agent", "hooks": [ { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.crew/bin/crew", "args": ["hook", "agent-start"] } ] },
+      { "matcher": "SendMessage", "hooks": [ { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.crew/bin/crew", "args": ["hook", "agent-resume"] } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit|Write", "hooks": [ { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.crew/bin/crew", "args": ["hook", "file-changed"] } ] }
+    ],
+    "SubagentStart": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.crew/bin/crew", "args": ["hook", "agent-id"] } ] }
+    ],
+    "SubagentStop": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.crew/bin/crew", "args": ["hook", "agent-stop"] } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.crew/bin/crew", "args": ["hook", "lead-busy"] } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.crew/bin/crew", "args": ["hook", "lead-idle"] } ] }
+    ],
+    "SessionStart": [
+      { "matcher": "compact", "hooks": [ { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.crew/bin/crew", "args": ["hook", "compact"] } ] }
+    ]
+  }
+}

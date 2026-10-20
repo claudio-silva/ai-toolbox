@@ -8,7 +8,7 @@ Before writing or accepting a test, answer: **"Which real defect would this catc
 
 ## What to test
 
-1. **The critical user journeys, end to end, in a real browser against the real app.** Keep them few (about 5–15 per product), deterministic (seeded data, no sleeps, stable selectors such as roles, labels and test ids) and fast. They are listed in `CREW.md`, and any change touching their area runs them.
+1. **The critical user journeys, end to end, in a real browser against the real app.** Keep them between 5 and 15 per product, deterministic (seeded data, no sleeps, stable selectors such as roles, labels and test ids) and fast. They are listed in `CREW.md`, and any change touching their area runs them.
 2. **Data cores, using golden or round-trip tests over real data.** This covers parsers, serializers, import and export, sync and merge, diffs and anchoring, money, dates and time zones, and permissions. Prefer "run over every real fixture and compare" to hand-written micro-cases.
 3. **Integration tests where business rules and integrity live:** API endpoints enforcing permissions, invariants, transactions, locks and conflict handling.
 4. **A regression test for an escaped bug,** at the cheapest level that reproduces it, and only when the bug could plausibly come back.
@@ -43,7 +43,7 @@ Before writing or accepting a test, answer: **"Which real defect would this catc
 | When | Who produces | What the lead looks at | Decision |
 |---|---|---|---|
 | Each UI landing | builder screenshots + reviewer verdict | 1–3 key screenshots vs spec | accept / polish |
-| End of stage or milestone | QA exploratory + journeys | ~5 key screenshots, the defect list, journey results | accept / fix list |
+| End of stage or milestone | QA exploratory + journeys | the 5 key screenshots, the defect list, journey results | accept / fix list |
 | Before production deploy | QA full journeys | pass/fail summary, any new screenshots | ask the founder for go |
 
 When the app needs interacting with and screenshots alone won't show it, delegate to QA rather than driving it yourself.

@@ -116,7 +116,7 @@ On re-runs, replace everything between the markers. If the file has the older si
 .crew/bin/crew journal "Set up the crew"
 ```
 
-Use the session id `SKILL.md` gave you. `session start` also starts the dashboard and prints its URL.
+Use the session id `SKILL.md` gave you. `session start` also starts the dashboard and prints `Open the dashboard at <url>`; it prints nothing about it when one is already running for the project.
 
 ## 11. Verify now
 

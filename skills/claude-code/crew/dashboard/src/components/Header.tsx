@@ -1,13 +1,13 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Bot, Bug, Gauge, GitBranch, Inbox, Layers, ListChecks, Monitor, Moon, Pause, Play, ScrollText, Shrink, Square, Sun, Timer,
   type LucideIcon,
 } from 'lucide-react'
 import type { State } from '@/lib/types'
 import type { Conn } from '@/lib/live'
-import { useNow } from '@/lib/live'
 import type { Tab, Theme } from '@/lib/persist'
-import { sinceHM, span } from '@/lib/format'
+import { useClockBase } from '@/lib/clock'
+import { Duration } from './Duration'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -23,9 +23,8 @@ export const TAB_META: Record<Tab, { label: string; icon: LucideIcon }> = {
 }
 
 function LeadPill({ state }: { state: State }) {
-  const now = useNow()
+  const base = useClockBase()
   const { lead, agents } = state
-  const since = sinceHM(lead.since, now)
   const n = agents.length
   let icon: LucideIcon = Pause
   let text = 'Waiting for you'
@@ -53,7 +52,10 @@ function LeadPill({ state }: { state: State }) {
       <span className="truncate">
         {text}{extra}
         {lead.since && lead.state !== 'agents' && (
-          <span className="font-normal opacity-75"> · since {lead.since}{since != null && since >= 60 ? ` (${span(since)})` : ''}</span>
+          <span className="font-normal opacity-75">
+            {' '}· since {lead.since}
+            {lead.sinceEpoch != null && <> (<Duration secs={Math.max(0, base - lead.sinceEpoch)} live />)</>}
+          </span>
         )}
       </span>
     </span>
@@ -61,10 +63,8 @@ function LeadPill({ state }: { state: State }) {
 }
 
 function ConnDot({ conn, changedAt }: { conn: Conn; changedAt: number }) {
-  const now = useNow(5000)
   const label = conn === 'live' ? 'Live' : conn === 'connecting' ? 'Connecting' : conn === 'reconnecting' ? 'Reconnecting' : 'Offline'
   const cls = conn === 'live' ? 'bg-st-accepted' : conn === 'offline' ? 'bg-st-rework' : 'bg-st-progress'
-  const ago = changedAt ? Math.round((now - changedAt) / 1000) : null
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -74,9 +74,61 @@ function ConnDot({ conn, changedAt }: { conn: Conn; changedAt: number }) {
         </span>
       </TooltipTrigger>
       <TooltipContent side="bottom">
-        {label}{ago != null ? ` · last change ${ago < 60 ? `${ago} s` : span(ago)} ago` : ''}. Updates arrive as crew files change.
+        {label}{changedAt ? <> · unchanged for <Duration secs={0} at={changedAt / 1000} live /></> : ''}. Updates arrive as crew files change.
       </TooltipContent>
     </Tooltip>
+  )
+}
+
+// Crew's mark: three linked nodes.
+function CrewMark() {
+  return (
+    <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-primary to-[oklch(0.6_0.2_320)] text-primary-foreground shadow-sm">
+      <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><circle cx="7" cy="8" r="2.5" /><circle cx="17" cy="8" r="2.5" /><circle cx="12" cy="16.5" r="2.5" /><path d="M9 9.5l1.8 4.6M15 9.5l-1.8 4.6M9.5 8h5" /></svg>
+    </span>
+  )
+}
+
+const DEFAULT_FAVICON = typeof document !== 'undefined' ? document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.href ?? '' : ''
+
+// The project's icon when the server found one, else crew's mark. Clicking toggles between the
+// two; turning a found icon off is remembered for that file, per project.
+function Logo({ state }: { state: State | null }) {
+  const icon = state?.repo.icon ?? null
+  const key = state ? `crew-dashboard:icon-off:${state.repo.root}` : ''
+  const [offFor, setOffFor] = useState<string | null>(() => {
+    try { return key ? localStorage.getItem(key) : null } catch { return null }
+  })
+  const [broken, setBroken] = useState<string | null>(null)
+  useEffect(() => {
+    try { setOffFor(key ? localStorage.getItem(key) : null) } catch { /* private mode */ }
+  }, [key])
+  const src = icon ? `api/icon?v=${icon.mtime}` : ''
+  const use = Boolean(icon) && offFor !== icon!.path && broken !== src
+
+  useEffect(() => {
+    const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+    if (link) link.href = use ? src : DEFAULT_FAVICON
+  }, [use, src])
+
+  if (!icon || broken === src) return <CrewMark />
+  const toggle = () => {
+    const next = use ? icon.path : null
+    try { if (next) localStorage.setItem(key, next); else localStorage.removeItem(key) } catch { /* private mode */ }
+    setOffFor(next)
+  }
+  return (
+    <button
+      onClick={toggle}
+      title={use ? `The project's icon (${icon.path}). Click for crew's icon.` : `Click for the project's icon (${icon.path}).`}
+      className="shrink-0 rounded-lg transition-opacity hover:opacity-80"
+    >
+      {use ? (
+        <img src={src} alt="" width={28} height={28} onError={() => setBroken(src)} className="size-7 object-contain" />
+      ) : (
+        <CrewMark />
+      )}
+    </button>
   )
 }
 
@@ -112,9 +164,7 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
     <header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
       <div className="mx-auto flex max-w-5xl flex-col gap-2 px-3 pt-2.5 sm:px-5">
         <div className="flex items-center gap-2.5">
-          <div className="grid size-7 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-primary to-[oklch(0.6_0.2_320)] text-primary-foreground shadow-sm">
-            <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><circle cx="7" cy="8" r="2.5" /><circle cx="17" cy="8" r="2.5" /><circle cx="12" cy="16.5" r="2.5" /><path d="M9 9.5l1.8 4.6M15 9.5l-1.8 4.6M9.5 8h5" /></svg>
-          </div>
+          <Logo state={state} />
           <div className="flex min-w-0 flex-1 flex-col leading-tight">
             <div className="flex items-baseline gap-1.5">
               <span className="truncate text-[15px] font-semibold tracking-tight">{state?.repo.name ?? 'Crew'}</span>

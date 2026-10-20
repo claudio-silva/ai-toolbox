@@ -7,7 +7,8 @@
 // project (kept in .crew/tmp/dashboard.json), so a browser tab or a Paseo side panel keeps working
 // across restarts.
 //
-//   node server.mjs start [--root <dir>]     Start in the background (or find the running one); print the URL.
+//   node server.mjs start [--root <dir>]     Start in the background and print the URL. When one already
+//                                            runs for this project: print nothing, exit 3.
 //   node server.mjs stop  [--root <dir>]     Stop it.
 //   node server.mjs restart [--root <dir>]   Stop it, then start it again.
 //   node server.mjs url   [--root <dir>]     Print the URL when it runs; exit 1 otherwise.
@@ -38,6 +39,8 @@ const HERE = path.dirname(SELF);
 const APP = path.join(HERE, 'app');
 const SERVER_VERSION = 1;
 const APP_ID = 'crew-dashboard';
+// `start` when a server already runs for this project: no output, this exit status.
+const ALREADY_RUNNING = 3;
 
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 20) {
@@ -144,8 +147,7 @@ async function running() {
 // ---------------------------------------------------------------------------
 
 async function cmdStart() {
-  const cur = await running();
-  if (cur) { process.stdout.write(`Dashboard: ${cur.url}\n`); return 0; }
+  if (await running()) return ALREADY_RUNNING;
   fs.mkdirSync(TMP, { recursive: true });
   try { if (fs.statSync(LOG).size > 1 << 20) fs.truncateSync(LOG, 0); } catch { /* no log yet */ }
   const out = fs.openSync(LOG, 'a');
@@ -406,6 +408,14 @@ async function cmdServe() {
       res.write(`event: state\ndata: ${stateJson}\n\n`);
       clients.add(res);
       req.on('close', () => clients.delete(res));
+      return;
+    }
+    if (u.pathname === '/api/icon') {
+      // The project's icon, as found by the model; nothing else.
+      if (!current) recompute();
+      const rel = current?.repo?.icon?.path;
+      if (!rel) { send(res, 404, 'text/plain', 'Not found'); return; }
+      sendFile(req, res, path.join(ROOT, rel), { 'Content-Security-Policy': 'sandbox' });
       return;
     }
     if (u.pathname === '/files') {

@@ -190,8 +190,11 @@ export interface State {
   version: number
   generatedAt: number
   today: string
-  repo: { name: string; root: string; branch: string; sha: string; state: 'branch' | 'detached' | 'none' }
-  lead: { state: 'working' | 'agents' | 'waiting' | 'stopped'; since: string | null; agentsFinishing?: number }
+  repo: {
+    name: string; root: string; branch: string; sha: string; state: 'branch' | 'detached' | 'none'
+    icon: { path: string; w: number; h: number; mtime: number } | null
+  }
+  lead: { state: 'working' | 'agents' | 'waiting' | 'stopped'; since: string | null; sinceEpoch: number | null; agentsFinishing?: number }
   keepAwake: { on: boolean; mode: 'claude' | '12h' | null; battery: boolean; stopped: boolean } | null
   agents: Agent[]
   current: CurrentSet | null

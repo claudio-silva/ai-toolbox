@@ -1,20 +1,21 @@
-// Formatting shared by every tab. Durations follow bin/crew's journal ("1 h 5 min", "41 s").
+// Formatting shared by every tab.
 
+// A finished or frozen duration: "1h 19m", "19m", "41s" ("—" for nothing). A running one is
+// shown by <Duration live> as a ticking clock (clockText).
 export function span(s: number | null | undefined): string {
-  if (s == null) return '—'
-  s = Math.round(s)
-  if (s <= 0) return '—'
-  if (s < 60) return `${s} s`
-  if (s < 3600) return `${Math.floor(s / 60)} min`
-  return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`
+  if (s == null || s <= 0) return '—'
+  if (s < 1) return '<1s'
+  s = Math.floor(s)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
 }
 
-// Short form for tight spots: "45m", "5h 05m".
-export function spanShort(s: number): string {
-  s = Math.round(s)
-  if (s < 60) return `${Math.max(0, s)}s`
-  if (s < 3600) return `${Math.floor(s / 60)}m`
-  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`
+// A running duration as a clock: "08:15:30" (hours keep counting past 24).
+export function clockText(s: number): [string, string, string] {
+  s = Math.max(0, Math.floor(s))
+  const p = (n: number) => String(n).padStart(2, '0')
+  return [p(Math.floor(s / 3600)), p(Math.floor((s % 3600) / 60)), p(s % 60)]
 }
 
 export function kTokens(n: number): string {
@@ -56,24 +57,6 @@ export function dayLabel(d: string, today: string): string {
   if (d === yd) return 'Yesterday'
   const dt = new Date(`${d}T12:00:00`)
   return dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
-}
-
-// Seconds since a local "HH:MM" (today, or yesterday when that time is still to come).
-export function sinceHM(hhmm: string | null | undefined, nowMs: number): number | null {
-  if (!hhmm) return null
-  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm)
-  if (!m) return null
-  const d = new Date(nowMs)
-  d.setHours(Number(m[1]), Number(m[2]), 0, 0)
-  let s = (nowMs - d.getTime()) / 1000
-  if (s < -60) s += 86400
-  return Math.max(0, s)
-}
-
-export function ago(seconds: number | null): string {
-  if (seconds == null) return ''
-  if (seconds < 60) return 'just now'
-  return span(seconds)
 }
 
 export function plural(n: number, one: string, many = `${one}s`): string {

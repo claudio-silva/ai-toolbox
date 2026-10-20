@@ -1,14 +1,15 @@
 import { Bot } from 'lucide-react'
 import type { Agent } from '@/lib/types'
-import { useNow } from '@/lib/live'
-import { modelShort, span } from '@/lib/format'
+import { modelShort } from '@/lib/format'
+import { useClockBase } from '@/lib/clock'
 import { Chip, Mono } from './bits'
+import { Duration } from './Duration'
 
 // A running subagent: who, on what, for how long (ticking on the page).
 export function AgentRow({ agent, onTask }: { agent: Agent; onTask?: (id: string) => void }) {
-  const now = useNow()
+  const base = useClockBase()
   const start = agent.runStart || agent.started
-  const secs = start ? Math.max(0, now / 1000 - start) : null
+  const secs = start ? Math.max(0, base - start) : null
   return (
     <div className="flex items-start gap-3 rounded-lg border bg-background/60 px-3 py-2.5">
       <div className="relative mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
@@ -20,7 +21,7 @@ export function AgentRow({ agent, onTask }: { agent: Agent; onTask?: (id: string
           <span className="truncate text-[13px] font-semibold">{agent.name || agent.type}</span>
           {agent.name && <span className="text-xs text-muted-foreground">{agent.type}</span>}
           {agent.kind === 'resume' && <Chip>resumed</Chip>}
-          <span className="ml-auto tabular text-xs text-muted-foreground">{secs != null ? span(secs) : agent.since}</span>
+          <span className="ml-auto tabular text-xs text-muted-foreground">{secs != null ? <Duration secs={secs} live /> : agent.since}</span>
         </div>
         {agent.description && (
           <div className="line-clamp-2 text-xs text-muted-foreground">

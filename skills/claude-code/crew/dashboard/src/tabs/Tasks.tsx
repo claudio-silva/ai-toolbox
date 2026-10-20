@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { Bot, FileText, ListChecks, Network } from 'lucide-react'
 import type { State, StatusKey } from '@/lib/types'
-import { span } from '@/lib/format'
+import { rates } from '@/lib/rates'
 import { cn } from '@/lib/utils'
 import { Chip, Empty, Mono, Panel, STATUS, StatusIcon } from '@/components/bits'
 import { TaskGraph } from '@/components/TaskGraph'
+import { Duration } from '@/components/Duration'
 import type { Doc } from '@/components/DocSheet'
 
 type Filter = 'all' | 'open' | 'accepted'
@@ -20,6 +21,7 @@ export function Tasks({ state, onTask, onDoc }: { state: State; onTask: (id: str
   const shown = cur.tasks.filter((t) => filter === 'all' || (filter === 'accepted' ? t.status === 'accepted' : t.status !== 'accepted'))
   const scale = Math.max(1, ...cur.tasks.map((t) => perTask.get(t.id)?.active ?? 0))
   const open = cur.tasks.filter((t) => t.status !== 'accepted').length
+  const r = rates(state)
   return (
     <div className="flex flex-col gap-4">
       <Panel
@@ -93,7 +95,7 @@ export function Tasks({ state, onTask, onDoc }: { state: State; onTask: (id: str
                               )}
                             </span>
                           </span>
-                          <span className="tabular text-[11px] text-muted-foreground">{span(time.active)}</span>
+                          <Duration secs={time.active} live={r.task(t.id) > 0} rate={r.task(t.id)} className="text-[11px] text-muted-foreground" />
                         </span>
                       )}
                     </div>

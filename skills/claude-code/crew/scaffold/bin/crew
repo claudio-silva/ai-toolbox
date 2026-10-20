@@ -17,9 +17,11 @@
 #   crew defect D<n> --status deferred|scheduled|fixed|dropped [--promote] [--slot <y>] [--note <t>]
 #                                       Move a defect along; --promote marks one that bit other
 #                                       work (status scheduled). Journals the transition.
-#   crew session start [<session-id>]   Register a crew session (empty id: wildcard "any") and
+#   crew session start [<session-id>]   Register a crew session (empty id: wildcard "any"),
 #                                       keep the computer awake while Claude Code runs (macOS
-#                                       caffeinate; CREW_KEEP_AWAKE=0 turns it off).
+#                                       caffeinate; CREW_KEEP_AWAKE=0 turns it off) and start the
+#                                       dashboard. Prints "Open the dashboard at <url>" when this
+#                                       session started it, here or through its SessionStart hook.
 #   crew session stop                   Mark the crew as stopped by the founder (/crew stop) and
 #                                       let the computer sleep again.
 #   crew running                        List running subagents (kept by the hooks).
@@ -28,9 +30,10 @@
 #   crew dashboard [start|stop|restart|url]
 #                                       The dashboard: a local web page served by
 #                                       .crew/dashboard/server.mjs (Node.js 20+), live over
-#                                       Server-Sent Events. `start` (the default) prints its URL.
-#                                       CREW_DASHBOARD=0 keeps session start, status and the
-#                                       SessionStart hook from starting it.
+#                                       Server-Sent Events. `start` (the default) prints its URL,
+#                                       or nothing and exit status 3 when one already runs for
+#                                       this project. CREW_DASHBOARD=0 keeps session start,
+#                                       status and the SessionStart hook from starting it.
 #   crew worktree setup [<path>] [--dry-run]
 #                                       Prepare a worktree: .worktreeinclude copies,
 #                                       .crew/tmp/, .crew/task-data/, worktree.json,
@@ -1126,7 +1129,7 @@ hook_lead() {  # $1 = working | idle
   # "stopped" (crew session stop) sticks until `crew session start` runs again (/crew resume).
   case $(cat "$STATE/lead" 2>/dev/null) in
     stopped*) ;;
-    *) printf '%s %s\n' "$1" "$NOW_HM" > "$STATE/lead" ;;
+    *) printf '%s %s %s\n' "$1" "$NOW_HM" "$NOW_EPOCH" > "$STATE/lead" ;;
   esac
   [ "$1" = working ] || return 0
   # UserPromptSubmit: while work is in flight, one line keeps founder requests out of running agents.
@@ -1146,7 +1149,7 @@ hook_session_start() {
   safe_name "$J_SESSION"
   printf '%s %s\n' "$J_HOOK_MODEL" "$J_EFFORT_LVL" > "$STATE/lead-model/$REPLY" 2>/dev/null
   remember_transcript "$J_SESSION" "$J_TRANSCRIPT"
-  dashboard_autostart
+  dashboard_autostart "$REPLY"
 }
 
 # PreCompact: guess who is compacting, leave a note for the SessionStart(compact) hook that
@@ -1467,12 +1470,12 @@ cmd_session() {
       settle_compactions
       lock_release
       printf 'Crew session registered: %s\n' "$sid"
-      dashboard_ensure ;;
+      dashboard_announce "$sid" ;;
     stop)
       lock_take
       now_parts
       # Sticky until the next `crew session start`; the hooks leave it alone.
-      printf 'stopped %s\n' "$NOW_HM" > "$STATE/lead"
+      printf 'stopped %s %s\n' "$NOW_HM" "$NOW_EPOCH" > "$STATE/lead"
       keep_awake_stop
       lock_release
       printf 'Crew marked as stopped at %s\n' "$NOW_HM" ;;
@@ -1527,25 +1530,55 @@ dashboard_node() {
   fi
 }
 
-# dashboard_ensure: start the dashboard unless it runs (or CREW_DASHBOARD=0); print its URL.
-# Never fails the caller: a missing Node.js is a warning.
+# dashboard_ensure: for `crew status`. Start the dashboard unless it runs (or CREW_DASHBOARD=0);
+# print its URL either way. Never fails the caller: a missing Node.js is a warning.
 dashboard_ensure() {
+  local rc
   if [ "${CREW_DASHBOARD:-1}" = 0 ]; then
     printf 'Dashboard: off (CREW_DASHBOARD=0)\n'
     return 0
   fi
   dashboard_node || return 0
-  node "$DASHBOARD_SERVER" start --root "$ROOT" || true
+  node "$DASHBOARD_SERVER" start --root "$ROOT"
+  rc=$?
+  [ "$rc" = 3 ] && printf 'Dashboard: %s\n' "$(node "$DASHBOARD_SERVER" url --root "$ROOT")"
+  return 0
 }
 
-# dashboard_autostart: for the SessionStart hook. Starts the server in the background when it is
-# not running (after a reboot, say); prints nothing and never waits.
+# dashboard_announce SESSION: for `crew session start`. Start the dashboard and print
+# "Open the dashboard at <url>" for the lead to pass on, but only when this session started it:
+# just now, or through its SessionStart hook (which leaves the session's name in
+# dashboard-announce). One already running (another session, the founder, an editor plugin)
+# is the founder's already: say nothing.
+dashboard_announce() {
+  local rc out flag=$STATE/dashboard-announce mine=0
+  [ "${CREW_DASHBOARD:-1}" != 0 ] || return 0
+  [ "$(cat "$flag" 2>/dev/null)" = "$1" ] && mine=1
+  rm -f "$flag"
+  dashboard_node || return 0
+  out=$(node "$DASHBOARD_SERVER" start --root "$ROOT")
+  rc=$?
+  if [ "$rc" = 3 ]; then
+    [ "$mine" = 1 ] || return 0
+    out=$(node "$DASHBOARD_SERVER" url --root "$ROOT") || return 0
+  elif [ "$rc" != 0 ]; then
+    return 0
+  fi
+  out=${out##*Dashboard: }
+  [ -n "$out" ] && printf 'Open the dashboard at %s\n' "$out"
+  return 0
+}
+
+# dashboard_autostart SESSION: for the SessionStart hook. Starts the server in the background
+# when it is not running (after a reboot, say), and notes that SESSION started it so its
+# `crew session start` announces the URL. Prints nothing and never waits.
 dashboard_autostart() {
   local pid
   [ "${CREW_DASHBOARD:-1}" != 0 ] || return 0
   [ -f "$CREW_DIR/dashboard/server.mjs" ] && command -v node >/dev/null 2>&1 || return 0
   pid=$(jq -r '.pid // empty' "$TMP_DIR/dashboard.json" 2>/dev/null)
   case $pid in ''|*[!0-9]*) ;; *) kill -0 "$pid" 2>/dev/null && return 0 ;; esac
+  printf '%s\n' "${1:-}" > "$STATE/dashboard-announce"
   (node "$CREW_DIR/dashboard/server.mjs" start --root "$ROOT" </dev/null >/dev/null 2>&1 &)
 }
 

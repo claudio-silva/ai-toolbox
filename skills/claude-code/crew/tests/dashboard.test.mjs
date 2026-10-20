@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const SKILL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -72,6 +72,65 @@ test('parseQueue and parseDefects: fields, states, promotion', () => {
 
 test('safeName matches bin/crew (tr -c under LC_ALL=C, byte-wise)', () => {
   assert.equal(M.safeName('/tmp/a b/índex.md'), '_tmp_a_b___ndex.md');
+});
+
+test('leadState: the epoch bin/crew writes, or one derived from HH:MM', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'crew-lead-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'lead'), 'working 14:05 1792500300\n');
+    assert.deepEqual(M.leadState(dir, 0, 1792503900), { state: 'working', since: '14:05', sinceEpoch: 1792500300 });
+    // Older lines carry no epoch: today at that time, or yesterday when that is still to come.
+    const now = Math.floor(new Date(2026, 9, 20, 10, 0).getTime() / 1000);
+    fs.writeFileSync(path.join(dir, 'lead'), 'waiting 09:30\n');
+    assert.equal(M.leadState(dir, 0, now).sinceEpoch, now - 1800);
+    fs.writeFileSync(path.join(dir, 'lead'), 'stopped 23:50\n');
+    const st = M.leadState(dir, 2, now);
+    assert.deepEqual([st.state, st.sinceEpoch, st.agentsFinishing], ['stopped', now - 36600, 2]);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The first 24 bytes of a PNG: the signature, then the IHDR chunk with the width and height.
+function png(w, h) {
+  const b = Buffer.alloc(24);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
+  b.writeUInt32BE(13, 8);
+  b.write('IHDR', 12, 'latin1');
+  b.writeUInt32BE(w, 16);
+  b.writeUInt32BE(h, 20);
+  return b;
+}
+
+test('imageSize and projectIcon: square images only, the most icon-like first, dependencies skipped', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'crew-icon-'));
+  const put = (rel, data) => {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), data);
+  };
+  try {
+    assert.equal(M.projectIcon(root, 0), null);
+    // An ICO's directory: 16, 48 and 32 px entries; its size is the largest.
+    const ico = Buffer.alloc(6 + 3 * 16);
+    ico.writeUInt16LE(1, 2);
+    ico.writeUInt16LE(3, 4);
+    [16, 48, 32].forEach((px, i) => { ico[6 + 16 * i] = px; ico[7 + 16 * i] = px; });
+    put('favicon.ico', ico);
+    put('node_modules/pkg/favicon.png', png(512, 512));
+    put('docs/logo.png', png(400, 120));
+    put('assets/logo.png', png(256, 256));
+    put('public/apple-touch-icon.png', png(180, 181));
+    put('src/favicon.svg', '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"></svg>');
+    assert.deepEqual(M.imageSize(path.join(root, 'favicon.ico')), [48, 48]);
+    assert.deepEqual(M.imageSize(path.join(root, 'docs/logo.png')), [400, 120]);
+    assert.deepEqual(M.imageSize(path.join(root, 'src/favicon.svg')), [32, 32]);
+    // The first call's empty result is cached for 30 s; these calls are later.
+    assert.equal(M.projectIcon(root, 60000).path, 'src/favicon.svg');
+    fs.rmSync(path.join(root, 'src'), { recursive: true });
+    const { path: rel, w, h } = M.projectIcon(root, 120000);
+    assert.deepEqual([rel, w, h], ['public/apple-touch-icon.png', 180, 181]);
+    // Large enough beats a more icon-like name: a 256 px logo over a 48 px favicon.ico.
+    fs.rmSync(path.join(root, 'public'), { recursive: true });
+    assert.equal(M.projectIcon(root, 180000).path, 'assets/logo.png');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 // ---- the server ----
@@ -145,6 +204,10 @@ test('server: pushes the new state when a crew file changes; guards Host and fil
 
   const ping = JSON.parse((await get(`${url}api/ping`)).body);
   assert.equal(ping.root, root);
+
+  // Starting it again for the same project does nothing: exit 3 and no output.
+  const again = spawnSync(process.execPath, [path.join(DASH, 'server.mjs'), 'start', '--root', root], { encoding: 'utf8' });
+  assert.deepEqual([again.status, again.stdout], [3, '']);
 
   const es = events(`${url}api/events`);
   t.after(() => es.close());

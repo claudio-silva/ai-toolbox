@@ -1,5 +1,6 @@
 import { cn } from '@/lib/utils'
 import { span } from '@/lib/format'
+import { Duration } from './Duration'
 
 const PARTS = [
   { k: 'build', label: 'build', bg: 'bg-ph-build' },
@@ -8,13 +9,14 @@ const PARTS = [
 ] as const
 
 // Build / review / rework as one bar. `scale` lets several bars share one length (the longest
-// task fills the width).
-export function PhaseBar({ build, review, rework, scale, legend = true, className }: {
+// task fills the width). `rates`: how many open runs add to each phase (its legend value ticks).
+export function PhaseBar({ build, review, rework, scale, legend = true, rates, className }: {
   build: number
   review: number
   rework: number
   scale?: number
   legend?: boolean
+  rates?: { build: number; review: number; rework: number }
   className?: string
 }) {
   const v = { build, review, rework }
@@ -34,7 +36,7 @@ export function PhaseBar({ build, review, rework, scale, legend = true, classNam
           {PARTS.map((p) => (
             <span key={p.k} className="inline-flex items-center gap-1.5">
               <span className={cn('size-2 rounded-sm', p.bg)} />
-              {p.label} <span className="tabular text-foreground">{span(v[p.k])}</span>
+              {p.label} <Duration secs={v[p.k]} live={Boolean(rates?.[p.k])} rate={rates?.[p.k]} className="text-foreground" />
               {total > 0 && v[p.k] > 0 && <span className="tabular">({Math.round((v[p.k] * 100) / total)}%)</span>}
             </span>
           ))}

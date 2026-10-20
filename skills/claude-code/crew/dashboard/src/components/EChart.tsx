@@ -11,21 +11,24 @@ echarts.use([BarChart, CustomChart, GridComponent, TooltipComponent, DataZoomCom
 
 export type EOption = echarts.EChartsCoreOption
 
-// Theme colours, read from the CSS variables (oklch) and resolved to rgb by the browser.
-export function cssColor(name: string, alpha?: number): string {
+// Theme colours, read from the CSS variables and always returned as rgba(): the variables are
+// oklch, which canvas draws but ECharts cannot parse, so its hover colours (derived from the
+// fill) came out empty and shapes flickered under the mouse.
+let probeCtx: CanvasRenderingContext2D | null = null
+export function cssColor(name: string, alpha = 1): string {
   const probe = document.createElement('span')
   probe.style.color = `var(${name})`
   probe.style.display = 'none'
   document.body.appendChild(probe)
   const c = getComputedStyle(probe).color
   probe.remove()
-  if (alpha == null) return c
-  const ctx = document.createElement('canvas').getContext('2d')
-  if (!ctx) return c
-  ctx.fillStyle = c
-  ctx.fillRect(0, 0, 1, 1)
-  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+  probeCtx ??= document.createElement('canvas').getContext('2d', { willReadFrequently: true })
+  if (!probeCtx) return c
+  probeCtx.clearRect(0, 0, 1, 1)
+  probeCtx.fillStyle = c
+  probeCtx.fillRect(0, 0, 1, 1)
+  const [r, g, b, a] = probeCtx.getImageData(0, 0, 1, 1).data
+  return `rgba(${r}, ${g}, ${b}, ${Math.round((a / 255) * alpha * 1000) / 1000})`
 }
 
 export function EChart({ option, height, className, onReady, notMerge }: {

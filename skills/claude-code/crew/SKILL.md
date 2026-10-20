@@ -17,7 +17,7 @@ This skill was invoked with: `$ARGUMENTS`. If that is `setup`, `handoff`, `resum
 ## Session start
 
 1. Read the project's **`CREW.md`** (path from the pointer line in `CLAUDE.md` or `AGENTS.md`; default `docs/CREW.md`). It overrides this skill.
-2. Run `.crew/bin/crew session start ${CLAUDE_SESSION_ID}` from the project root. It registers this session for the hooks, keeps the computer awake while Claude Code runs, and starts the founder's dashboard.
+2. Run `.crew/bin/crew session start ${CLAUDE_SESSION_ID}` from the project root. It registers this session for the hooks, keeps the computer awake while Claude Code runs, and starts the founder's dashboard. If it prints `Open the dashboard at <url>`, start your reply with that line; if it prints nothing about the dashboard, one was already running and you say nothing.
 3. If `.crew/` does not exist, skip step 2, offer `/crew setup`, and work with the defaults until then (no journal, no queue, no dashboard).
 4. If `.crew/handoff.md` exists and the founder did not run `/crew resume`, mention it.
 

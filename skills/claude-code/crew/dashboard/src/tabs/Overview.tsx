@@ -3,8 +3,9 @@ import {
 } from 'lucide-react'
 import type { State } from '@/lib/types'
 import type { Tab } from '@/lib/persist'
-import { useNow } from '@/lib/live'
 import { hm, pct, span, usd } from '@/lib/format'
+import { rates } from '@/lib/rates'
+import { Duration } from '@/components/Duration'
 import { Chip, Empty, Inline, Mono, Note, Panel, Stat, StatusBar, StatusIcon, StatusLegend } from '@/components/bits'
 import { AgentRow } from '@/components/AgentRow'
 import { JournalRow } from '@/components/JournalRow'
@@ -13,6 +14,8 @@ import type { Doc } from '@/components/DocSheet'
 function SetHero({ state, onTask, onDoc }: { state: State; onTask: (id: string) => void; onDoc: (d: Doc) => void }) {
   const cur = state.current!
   const now = cur.currentTask ? cur.tasks.find((t) => t.id === cur.currentTask) : null
+  const nowTime = now ? cur.timing?.perTask.find((p) => p.id === now.id) : undefined
+  const nowRate = now ? rates(state).task(now.id) : 0
   const done = cur.total > 0 && cur.accepted === cur.total
   return (
     <section className="relative overflow-hidden rounded-2xl border bg-card shadow-xs">
@@ -49,6 +52,7 @@ function SetHero({ state, onTask, onDoc }: { state: State; onTask: (id: string) 
             <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Now</span>
             <Mono className="font-semibold">{now.id}</Mono>
             <span className="min-w-0 flex-1 truncate text-[13px]">{now.title}</span>
+            {nowTime && nowTime.active > 0 && <Duration secs={nowTime.active} live={nowRate > 0} rate={nowRate} className="shrink-0 text-xs text-muted-foreground" />}
             <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
           </button>
         )}
@@ -64,19 +68,18 @@ function SetHero({ state, onTask, onDoc }: { state: State; onTask: (id: string) 
 
 function TimingMini({ state, goTab }: { state: State; goTab: (t: Tab) => void }) {
   const t = state.current?.timing
-  const nowMs = useNow(30000)
   if (!t) return null
-  const clock = t.done ? t.clock : t.clock + Math.max(0, nowMs / 1000 - state.generatedAt)
+  const r = rates(state)
   const parts = [
-    { k: 'busy', v: t.busy, cls: 'bg-ph-build', label: 'agents at work' },
-    { k: 'idle', v: t.idle, cls: 'bg-st-progress/60', label: 'lead and waiting' },
-    { k: 'slept', v: t.slept, cls: 'bg-sleep', label: 'asleep' },
+    { k: 'busy', v: t.busy, rate: r.busy, cls: 'bg-ph-build', label: 'agents at work' },
+    { k: 'idle', v: t.idle, rate: r.idle, cls: 'bg-st-progress/60', label: 'lead and waiting' },
+    { k: 'slept', v: t.slept, rate: 0, cls: 'bg-sleep', label: 'asleep' },
   ]
   const sum = t.busy + t.idle + t.slept
   return (
     <Panel title="Timing" icon={Timer} action={<button onClick={() => goTab('timing')} className="text-xs text-muted-foreground hover:text-foreground">Details →</button>}>
       <div className="flex items-baseline gap-2">
-        <span className="tabular text-2xl font-semibold tracking-tight">{span(clock)}</span>
+        <Duration secs={t.clock} live={r.clock > 0} className="text-2xl font-semibold tracking-tight" />
         <span className="text-xs text-muted-foreground">
           on the clock since {hm(t.t0)}{t.until ? `, to ${hm(t.until)}` : ''}
         </span>
@@ -86,12 +89,12 @@ function TimingMini({ state, goTab }: { state: State; goTab: (t: Tab) => void })
       </div>
       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[11.5px] text-muted-foreground">
         {parts.map((p) => (
-          <span key={p.k} className="inline-flex items-center gap-1.5"><span className={`size-2 rounded-sm ${p.cls}`} />{p.label} <span className="tabular text-foreground">{span(p.v)}</span></span>
+          <span key={p.k} className="inline-flex items-center gap-1.5"><span className={`size-2 rounded-sm ${p.cls}`} />{p.label} <Duration secs={p.v} live={p.rate > 0} className="text-foreground" /></span>
         ))}
       </div>
       {t.taskTime > 0 && t.criticalPath.ids.length > 0 && (
         <p className="mt-2.5 text-xs text-muted-foreground">
-          Critical path <span className="tabular text-foreground">{span(t.criticalPath.seconds)}</span> of {span(t.taskTime)} task time
+          Critical path <span className="tabular text-foreground">{span(t.criticalPath.seconds)}</span> of <Duration secs={t.taskTime} live={r.taskTime > 0} rate={r.taskTime} /> task time
           {t.criticalPath.headroom >= 1 ? <> · parallel headroom <span className="tabular text-foreground">{span(t.criticalPath.headroom)}</span></> : ' · no parallel headroom'}
         </p>
       )}

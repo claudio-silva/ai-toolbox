@@ -371,13 +371,24 @@ function runningAgents(stateDir, runs) {
   });
 }
 
-export function leadState(stateDir, nrun) {
+// bin/crew writes "<state> HH:MM <epoch>" (older versions: no epoch; it is then taken from HH:MM,
+// today or, when that is still to come, yesterday).
+export function leadState(stateDir, nrun, now = Math.floor(Date.now() / 1000)) {
   const t = trim(read(path.join(stateDir, 'lead')) || '');
-  const [st = '', hm = ''] = t.split(/\s+/);
-  if (st === 'stopped') return { state: 'stopped', since: hm || null, agentsFinishing: nrun };
-  if (st === 'working') return { state: 'working', since: hm || null };
-  if (nrun > 0) return { state: 'agents', since: null };
-  return { state: 'waiting', since: hm || null };
+  const [st = '', hm = '', ep = ''] = t.split(/\s+/);
+  let at = isInt(ep) ? Number(ep) : null;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hm);
+  if (at == null && m) {
+    const d = new Date(now * 1000);
+    d.setHours(Number(m[1]), Number(m[2]), 0, 0);
+    at = Math.floor(d.getTime() / 1000);
+    if (at > now + 60) at -= 86400;
+  }
+  const since = hm || null;
+  if (st === 'stopped') return { state: 'stopped', since, sinceEpoch: at, agentsFinishing: nrun };
+  if (st === 'working') return { state: 'working', since, sinceEpoch: at };
+  if (nrun > 0) return { state: 'agents', since: null, sinceEpoch: null };
+  return { state: 'waiting', since, sinceEpoch: at };
 }
 
 function keepAwake(stateDir) {
@@ -781,6 +792,138 @@ export function compactionsModel(stateDir) {
 }
 
 // ---------------------------------------------------------------------------
+// The project's icon: a favicon, app icon or logo found in the repository, shown in the page's
+// header instead of crew's. Only square images (a few pixels of slack) qualify. The walk is
+// bounded (depth, entries) and skips dependencies, build output and tests; the result is kept
+// for 30 seconds.
+// ---------------------------------------------------------------------------
+
+const ICON_EXT = new Set(['.png', '.svg', '.ico', '.webp', '.jpg', '.jpeg']);
+const ICON_SKIP = new Set([
+  'node_modules', 'dist', 'build', 'out', 'coverage', 'vendor', 'target', 'tmp', 'temp', 'venv', '__pycache__',
+  'test', 'tests', '__tests__', 'fixtures', 'e2e', 'screenshots', 'storybook-static', 'Pods', 'DerivedData',
+]);
+const ICON_DEPTH = 5;
+const ICON_BUDGET = 6000;
+
+// How icon-like a file name is: 3 favicon or app icon, 2 a logo, 0 anything else.
+function iconNameRank(base) {
+  const n = base.toLowerCase();
+  if (/favicon|apple-touch-icon|android-chrome|^app-?icon|^icon[-_.\d]|^icon$|logo.*icon|icon.*logo/.test(n)) return 3;
+  if (/logo/.test(n)) return 2;
+  return 0;
+}
+
+function readHead(file, n) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(n);
+    const got = fs.readSync(fd, buf, 0, n, 0);
+    return buf.subarray(0, got);
+  } catch { return null; } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+// [width, height] from the file's header, or null when unknown.
+export function imageSize(file) {
+  const ext = path.extname(file).toLowerCase();
+  const b = readHead(file, ext === '.svg' ? 8192 : ext === '.jpg' || ext === '.jpeg' ? 262144 : 64);
+  if (!b || b.length < 10) return null;
+  if (b[0] === 0x89 && b.toString('latin1', 1, 4) === 'PNG' && b.length >= 24) return [b.readUInt32BE(16), b.readUInt32BE(20)];
+  if (b.readUInt32LE(0) === 0x00010000) {
+    // ICO: the largest entry (a 0 byte means 256 px).
+    const n = b.readUInt16LE(4);
+    const all = readHead(file, 6 + 16 * n);
+    let best = null;
+    for (let i = 0; all && i < n && 6 + 16 * i + 2 <= all.length; i++) {
+      const w = all[6 + 16 * i] || 256;
+      const h = all[6 + 16 * i + 1] || 256;
+      if (!best || w * h > best[0] * best[1]) best = [w, h];
+    }
+    return best;
+  }
+  if (b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP' && b.length >= 30) {
+    const kind = b.toString('latin1', 12, 16);
+    if (kind === 'VP8X') return [1 + b.readUIntLE(24, 3), 1 + b.readUIntLE(27, 3)];
+    if (kind === 'VP8L') {
+      const v = b.readUInt32LE(21);
+      return [1 + (v & 0x3fff), 1 + ((v >> 14) & 0x3fff)];
+    }
+    if (kind === 'VP8 ') return [b.readUInt16LE(26) & 0x3fff, b.readUInt16LE(28) & 0x3fff];
+    return null;
+  }
+  if (b[0] === 0xff && b[1] === 0xd8) {
+    // JPEG: the first start-of-frame marker.
+    let i = 2;
+    while (i + 9 < b.length) {
+      if (b[i] !== 0xff) { i++; continue; }
+      const m = b[i + 1];
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return [b.readUInt16BE(i + 7), b.readUInt16BE(i + 5)];
+      if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) { i += 2; continue; }
+      i += 2 + b.readUInt16BE(i + 2);
+    }
+    return null;
+  }
+  if (ext === '.svg') {
+    const t = b.toString('utf8');
+    const tag = /<svg\b[^>]*>/i.exec(t)?.[0];
+    if (!tag) return null;
+    const vb = /viewBox\s*=\s*["']\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(tag);
+    if (vb) return [Number(vb[1]), Number(vb[2])];
+    const w = /\bwidth\s*=\s*["']\s*([\d.]+)(px)?\s*["']/i.exec(tag);
+    const h = /\bheight\s*=\s*["']\s*([\d.]+)(px)?\s*["']/i.exec(tag);
+    return w && h ? [Number(w[1]), Number(h[1])] : null;
+  }
+  return null;
+}
+
+function squareEnough(w, h) {
+  return w > 0 && h > 0 && Math.abs(w - h) <= Math.max(2, Math.round(Math.max(w, h) * 0.04));
+}
+
+const iconCache = new Map();
+export function projectIcon(root, now = Date.now()) {
+  const hit = iconCache.get(root);
+  if (hit && now - hit.at < 30000) return hit.icon;
+  const found = [];
+  let budget = ICON_BUDGET;
+  const walk = (dir, depth) => {
+    let ents;
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    budget -= ents.length;
+    for (const e of ents) {
+      if (budget <= 0) return;
+      if (e.isDirectory()) {
+        if (depth < ICON_DEPTH && !ICON_SKIP.has(e.name) && (!e.name.startsWith('.') || e.name === '.github')) walk(path.join(dir, e.name), depth + 1);
+        continue;
+      }
+      if (!e.isFile() || !ICON_EXT.has(path.extname(e.name).toLowerCase())) continue;
+      const rank = iconNameRank(path.basename(e.name, path.extname(e.name)));
+      if (rank) found.push({ file: path.join(dir, e.name), rank, depth });
+    }
+  };
+  walk(root, 0);
+  let best = null;
+  for (const f of found) {
+    const st = stat(f.file);
+    if (!st || st.size > 5 << 20) continue;
+    const size = imageSize(f.file);
+    if (!size || !squareEnough(size[0], size[1])) continue;
+    // An SVG scales: rank it like a large bitmap. Big enough to look sharp comes first, then
+    // the most icon-like name, then the shallowest, then the largest.
+    const px = f.file.toLowerCase().endsWith('.svg') ? 512 : Math.min(size[0], size[1]);
+    const key = [px >= 64 ? 2 : px >= 32 ? 1 : 0, f.rank, -f.depth, Math.min(px, 1024)];
+    const i = best ? key.findIndex((v, k) => v !== best.key[k]) : -1;
+    if (!best || (i >= 0 && key[i] > best.key[i])) best = { key, file: f.file, w: size[0], h: size[1], mtime: Math.floor(st.mtimeMs / 1000) };
+  }
+  const icon = best ? { path: path.relative(root, best.file).split(path.sep).join('/'), w: best.w, h: best.h, mtime: best.mtime } : null;
+  iconCache.set(root, { at: now, icon });
+  return icon;
+}
+
+// ---------------------------------------------------------------------------
 // The state
 // ---------------------------------------------------------------------------
 
@@ -794,8 +937,8 @@ export function buildState(rootIn, opts = {}) {
   const runs = readRuns(stateDir);
   const sleeps = readSleeps(stateDir);
   const agents = runningAgents(stateDir, runs);
-  const repo = { name: path.basename(root), root, ...gitInfo(root) };
-  const lead = leadState(stateDir, agents.length);
+  const repo = { name: path.basename(root), root, ...gitInfo(root), icon: projectIcon(root) };
+  const lead = leadState(stateDir, agents.length, now);
   const awake = keepAwake(stateDir);
 
   const { sets, worktrees } = collectSets(root, crewDir);

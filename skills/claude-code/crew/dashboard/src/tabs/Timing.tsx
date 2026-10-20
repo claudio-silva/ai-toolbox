@@ -2,6 +2,8 @@ import { ChartGantt, Route, Timer, Users } from 'lucide-react'
 import type { State } from '@/lib/types'
 import { useNow } from '@/lib/live'
 import { hm, pct, span, when } from '@/lib/format'
+import { rates } from '@/lib/rates'
+import { Duration } from '@/components/Duration'
 import { Chip, Empty, Mono, Note, Panel, Stat } from '@/components/bits'
 import { Gantt } from '@/components/Gantt'
 import { PhaseBar } from '@/components/PhaseBar'
@@ -18,6 +20,7 @@ export function Timing({ state, dark, onTask }: { state: State; dark: boolean; o
     )
   }
   const sum = t.busy + t.idle + t.slept
+  const r = rates(state)
   const comp = [
     { k: 'busy', v: t.busy, cls: 'bg-ph-build', label: 'agents at work' },
     { k: 'idle', v: t.idle, cls: 'bg-st-progress/60', label: 'lead and waiting' },
@@ -30,9 +33,9 @@ export function Timing({ state, dark, onTask }: { state: State; dark: boolean; o
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-        <Stat label="On the clock" value={span(t.clock)} sub={t.until ? `${startLabel} to ${hm(t.until)}` : startLabel} />
-        <Stat label="Agents at work" value={span(t.busy)} sub={`${pct(t.busy, t.clock - t.slept)} of awake time`} />
-        <Stat label="Lead and waiting" value={span(t.idle)} sub="no agent running" />
+        <Stat label="On the clock" value={<Duration secs={t.clock} live={r.clock > 0} />} sub={t.until ? `${startLabel} to ${hm(t.until)}` : startLabel} />
+        <Stat label="Agents at work" value={<Duration secs={t.busy} live={r.busy > 0} />} sub={`${pct(t.busy, t.clock - t.slept)} of awake time`} />
+        <Stat label="Lead and waiting" value={<Duration secs={t.idle} live={r.idle > 0} />} sub="no agent running" />
         <Stat label="Asleep" value={span(t.slept)} sub={t.sleeps.length ? `${t.sleeps.length} sleep${t.sleeps.length === 1 ? '' : 's'}` : 'never slept'} />
       </div>
 
@@ -49,7 +52,7 @@ export function Timing({ state, dark, onTask }: { state: State; dark: boolean; o
       </div>
 
       <Panel title="Agent runs" icon={ChartGantt} bodyClassName="px-1 pb-2">
-        {t.runs.length ? <Gantt timing={t} tasks={cur.tasks} dark={dark} now={now} /> : <p className="px-3 py-2 text-[12.5px] text-muted-foreground">No agent runs yet.</p>}
+        {t.runs.length ? <Gantt timing={t} tasks={cur.tasks} dark={dark} now={now} at={state.generatedAt} onTask={onTask} /> : <p className="px-3 py-2 text-[12.5px] text-muted-foreground">No agent runs yet.</p>}
         <div className="flex flex-wrap gap-x-3 gap-y-1 px-3 text-[11px] text-muted-foreground">
           <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-ph-build" />build</span>
           <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-ph-review" />review</span>
@@ -57,13 +60,13 @@ export function Timing({ state, dark, onTask }: { state: State; dark: boolean; o
           <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-ph-other" />set level</span>
           <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-sleep" />asleep</span>
           <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm border border-st-rework" />CHANGES verdict</span>
-          <span className="ml-auto hidden sm:inline">drag to pan · ctrl + wheel to zoom</span>
+          <span className="ml-auto hidden sm:inline">click a bar to open its task · drag to pan · ctrl + wheel to zoom</span>
         </div>
       </Panel>
 
       {t.taskTime > 0 && (
-        <Panel title={<>Task time <span className="tabular font-normal text-muted-foreground">· {span(t.taskTime)}</span></>} icon={Timer}>
-          <PhaseBar build={t.phases.build} review={t.phases.review} rework={t.phases.rework} />
+        <Panel title={<>Task time <span className="font-normal text-muted-foreground">· <Duration secs={t.taskTime} live={r.taskTime > 0} rate={r.taskTime} /></span></>} icon={Timer}>
+          <PhaseBar build={t.phases.build} review={t.phases.review} rework={t.phases.rework} rates={r.phases} />
           <p className="mt-2 text-xs text-muted-foreground">
             {t.changes > 0 ? <>{t.changes} CHANGES verdict{t.changes === 1 ? '' : 's'} sent work back for rework.</> : 'No CHANGES verdicts so far.'}
           </p>
@@ -98,12 +101,12 @@ export function Timing({ state, dark, onTask }: { state: State; dark: boolean; o
               <button key={p.id} onClick={() => onTask(p.id)} className="grid grid-cols-[3rem_1fr_auto] items-center gap-x-3 gap-y-0.5 rounded-lg px-2 py-1.5 text-left hover:bg-accent/60">
                 <Mono className="font-semibold">{p.id}</Mono>
                 <PhaseBar build={p.build} review={p.review} rework={p.rework} scale={scale} legend={false} />
-                <span className="tabular text-right text-[11.5px] text-muted-foreground">{span(p.active)}</span>
+                <Duration secs={p.active} live={r.task(p.id) > 0} rate={r.task(p.id)} className="text-right text-[11.5px] text-muted-foreground" />
                 <span />
                 <span className="flex flex-wrap gap-x-2.5 text-[11px] text-muted-foreground">
-                  {p.build > 0 && <span>build {span(p.build)}</span>}
-                  {p.review > 0 && <span>review {span(p.review)}</span>}
-                  {p.rework > 0 && <span>rework {span(p.rework)}</span>}
+                  {(['build', 'review', 'rework'] as const).map((ph) => p[ph] > 0 && (
+                    <span key={ph}>{ph} <Duration secs={p[ph]} live={r.taskPhase(p.id, ph) > 0} rate={r.taskPhase(p.id, ph)} /></span>
+                  ))}
                   {p.changes > 0 && <span className="text-st-rework">{p.changes} CHANGES</span>}
                   {p.slept > 0 && <span>slept {span(p.slept)}</span>}
                 </span>
@@ -114,7 +117,7 @@ export function Timing({ state, dark, onTask }: { state: State; dark: boolean; o
               <div className="grid grid-cols-[3rem_1fr_auto] items-center gap-x-3 px-2 py-1.5">
                 <span className="text-[11px] font-semibold text-muted-foreground">Set</span>
                 <span className="flex flex-wrap gap-1">{t.setLevel.types.map((x) => <Chip key={x} className="py-0 text-[10.5px]">{x}</Chip>)}{t.setLevel.slept > 0 && <span className="text-[11px] text-muted-foreground">slept {span(t.setLevel.slept)}</span>}</span>
-                <span className="tabular text-right text-[11.5px] text-muted-foreground">{span(t.setLevel.active)}</span>
+                <Duration secs={t.setLevel.active} live={r.setLevel > 0} rate={r.setLevel} className="text-right text-[11.5px] text-muted-foreground" />
               </div>
             )}
           </div>
@@ -128,7 +131,7 @@ export function Timing({ state, dark, onTask }: { state: State; dark: boolean; o
               <div key={type} className="grid grid-cols-[7.5rem_1fr_4.5rem] items-center gap-3 text-[12.5px]">
                 <span className="truncate">{type}</span>
                 <span className="h-2 overflow-hidden rounded-full bg-muted"><span className="block h-full rounded-full bg-primary/70" style={{ width: `${(secs * 100) / roleMax}%` }} /></span>
-                <span className="tabular text-right text-muted-foreground">{span(secs)}</span>
+                <Duration secs={secs} live={r.role(type) > 0} rate={r.role(type)} className="text-right text-muted-foreground" />
               </div>
             ))}
           </div>

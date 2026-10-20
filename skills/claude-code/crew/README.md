@@ -17,7 +17,7 @@ You are the **founder**: you own the product's direction and taste. The main Cla
 | Read the milestone report; say "continue" or redirect | At each milestone |
 | Send requests or corrections | Any time: the lead acknowledges in 3 lines and queues them |
 | Approve deploys, destructive data operations, pushes and spending above your budget posture | When the lead interrupts you for them |
-| Keep the dashboard open (the URL `.crew/bin/crew status` prints; a Paseo side panel works well); skim `.crew/journal.md` | Whenever you like; nothing waits on it |
+| Keep the dashboard open (the URL the lead gives you when it starts it, or that `.crew/bin/crew status` prints; a Paseo side panel works well); skim `.crew/journal.md` | Whenever you like; nothing waits on it |
 | Run `/crew stop`, then `/crew resume` | When you want everything stopped safely, and later continued in the same session |
 | Run `/crew handoff`, `/clear`, `/crew resume` | When you want a fresh session |
 
@@ -114,15 +114,15 @@ The lead has no context-size threshold: it rolls over only when you run `/crew h
 
 ### The dashboard
 
-A local web page, served by `.crew/dashboard/server.mjs` (Node.js, no dependencies at run time) on `127.0.0.1` at a port that stays the same for a project, so it can live in a browser tab or a Paseo side panel. The session-start hook starts it; `.crew/bin/crew status` prints its URL, and `.crew/bin/crew dashboard start|stop|restart|url` manages it. It is built for a narrow panel and follows the system's light or dark theme.
+A local web page, served by `.crew/dashboard/server.mjs` (Node.js, no dependencies at run time) on `127.0.0.1` at a port that stays the same for a project, so it can live in a browser tab or a Paseo side panel. The session-start hook starts it, and the lead opens its first reply with `Open the dashboard at <url>`; when one was already running for the project (started by another session, by you, or by a Paseo panel) it says nothing. `.crew/bin/crew status` prints its URL, and `.crew/bin/crew dashboard start|stop|restart|url` manages it (`start` exits 3, silently, when one is already running). It is built for a narrow panel and follows the system's light or dark theme. The header shows the project's own icon when the repository has a square one (a favicon, an app icon or a logo); a click switches to crew's mark and back, remembered per project.
 
-It reads the same files the crew writes (the task-set indexes and specs, `queue.md`, `defects.md`, `handoff.md`, the journal, the hook state and git) and pushes a fresh state to the page over server-sent events whenever one of them changes: no polling, and no reload, so the scroll position, the open tab and any open panel stay put. While agents run, a one-minute tick keeps the clocks moving.
+It reads the same files the crew writes (the task-set indexes and specs, `queue.md`, `defects.md`, `handoff.md`, the journal, the hook state and git) and pushes a fresh state to the page over server-sent events whenever one of them changes: no polling, and no reload, so the scroll position, the open tab and any open panel stay put. Running durations tick every second in the page (`02:53:22`, colons blinking) and freeze when the run ends (`1h 19m`); sleep and other closed intervals never tick. Each new journal line shows as a notice at the top for 10 seconds; notices stack, and a click opens the Journal.
 
 | Tab | What it shows |
 | --- | --- |
 | Overview | The current set's progress and stage, the task being worked on, the lead's state (working, waiting for you, stopped), live agents, counts of open questions, requests, defects and compactions, the time on the clock, keep-awake, the last handoff and recent activity |
 | Tasks | The dependency graph with the critical path highlighted, and every task with its status, flags, phase time and agents; a task opens its spec, runs and screenshots |
-| Timing | Sleep, agents at work, and the lead and waiting; a zoomable Gantt chart of every agent run; build, review and rework per task; the critical path and the parallel headroom; time by role |
+| Timing | Sleep, agents at work, and the lead and waiting; a zoomable Gantt chart of every agent run (a bar opens its task); build, review and rework per task; the critical path and the parallel headroom; time by role |
 | Requests | Your open questions first, then queued, scheduled, done and dropped requests |
 | Defects | Deferred, scheduled, fixed and promoted counts, and the open and closed entries |
 | Compactions | Lead and subagent compactions: context before and after, and estimated overhead, savings and net per compaction |

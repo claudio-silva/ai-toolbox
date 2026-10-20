@@ -1,8 +1,9 @@
 // The set's agent runs as a Gantt chart (ECharts custom series): one row per task, plus a
 // set-level row for agents not tied to a task; bars coloured by phase, the computer's sleep as
-// grey bands across all rows, a "now" line while the set is open. Ctrl + wheel or pinch to zoom, drag to pan.
+// grey bands across all rows, a "now" line while the set is open. Ctrl + wheel or pinch to zoom,
+// drag to pan, click a bar to open its task.
 
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import * as echarts from 'echarts/core'
 import type { CustomSeriesRenderItemAPI, CustomSeriesRenderItemParams } from 'echarts'
 import type { Phase, Task, Timing } from '@/lib/types'
@@ -20,7 +21,17 @@ function esc(s: string) {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string)
 }
 
-export function Gantt({ timing, tasks, dark, now }: { timing: Timing; tasks: Task[]; dark: boolean; now: number }) {
+export function Gantt({ timing, tasks, dark, now, at, onTask }: {
+  timing: Timing
+  tasks: Task[]
+  dark: boolean
+  now: number
+  at: number
+  onTask?: (id: string) => void
+}) {
+  // The click handler is bound once per chart; it reads the latest runs and callback from here.
+  const latest = useRef({ timing, onTask })
+  latest.current = { timing, onTask }
   const option = useMemo<EOption>(() => {
     const titles = new Map(tasks.map((t) => [t.id, t.title]))
     const order = tasks.map((t) => t.id).filter((id) => timing.runs.some((r) => r.task === id))
@@ -62,7 +73,7 @@ export function Gantt({ timing, tasks, dark, now }: { timing: Timing; tasks: Tas
       const b = api.coord([api.value(1), 0])
       const cs = params.coordSys as unknown as { x: number; y: number; width: number; height: number }
       const shape = echarts.graphic.clipRectByRect({ x: a[0], y: cs.y, width: Math.max(1, b[0] - a[0]), height: cs.height }, cs)
-      return shape ? { type: 'rect', shape, style: { fill: sleep }, silent: false } : null
+      return shape ? { type: 'rect', shape, style: { fill: sleep } } : null
     }
 
     return {
@@ -79,18 +90,23 @@ export function Gantt({ timing, tasks, dark, now }: { timing: Timing; tasks: Tas
         formatter: (p: { seriesId?: string; value: number[] }) => {
           if (p.seriesId === 'sleep') {
             const s = timing.sleeps[p.value[2]]
-            return `<b>Computer asleep</b><br/>${hm(s.from)}–${hm(s.to)} · ${span(s.secs)}`
+            // The band spans the gap between two clock samples; the sleep inside it was measured.
+            const part = s.secs < s.to - s.from - 60
+            return `<b>Computer asleep ${span(s.secs)}</b><br/>${part ? 'within ' : ''}${hm(s.from)}–${hm(s.to)}`
           }
           const r = timing.runs[p.value[3]]
           const who = r.name ? `${esc(r.name)} <span style="opacity:.6">(${esc(r.type)})</span>` : esc(r.type)
           const task = r.task ? `<b>${esc(r.task)}</b> ${esc(titles.get(r.task) ?? '')}` : '<b>Set level</b>'
           const status = r.open ? 'running' : r.status || 'finished'
+          // An open run's time as of this hover, not as of the last state.
+          const active = r.open && !timing.done ? r.active + Math.max(0, Date.now() / 1000 - at) : r.active
           return [
             task,
             `<div style="margin-top:4px">${who}${r.model ? ` · ${esc(r.model)}` : ''}${r.effort ? ` · ${esc(r.effort)}` : ''}</div>`,
             `<div style="opacity:.75">${PHASE_LABEL[r.phase]}${r.kind === 'resume' ? ' (resumed)' : ''} · ${esc(status)}</div>`,
-            `<div style="opacity:.75">${hm(r.start)}–${r.open ? 'now' : hm(r.end)} · ${span(r.active)} at work${r.slept ? ` · slept ${span(r.slept)}` : ''}</div>`,
+            `<div style="opacity:.75">${hm(r.start)}–${r.open ? 'now' : hm(r.end)} · ${span(active)} at work${r.slept ? ` · slept ${span(r.slept)}` : ''}</div>`,
             r.description ? `<div style="opacity:.6;margin-top:3px">${esc(r.description)}</div>` : '',
+            r.task ? '<div style="opacity:.5;margin-top:3px;font-size:11px">Click to open the task</div>' : '',
           ].join('')
         },
       },
@@ -148,8 +164,29 @@ export function Gantt({ timing, tasks, dark, now }: { timing: Timing; tasks: Tas
         },
       ],
     } as EOption
-  }, [timing, tasks, dark, now])
+  }, [timing, tasks, dark, now, at])
 
   const rows = new Set(timing.runs.map((r) => r.task ?? 'Set')).size
-  return <EChart option={option} height={rows * ROW + 64} notMerge={false} />
+  return (
+    <EChart
+      option={option}
+      height={rows * ROW + 64}
+      notMerge={false}
+      onReady={(c) => {
+        const taskOf = (p: echarts.ECElementEvent) =>
+          p.seriesId === 'runs' ? latest.current.timing.runs[(p.value as number[])[3]]?.task : undefined
+        // Custom series ignore an element's cursor, so every rect gets the hand. zrender sets it before
+        // dispatching mousemove; put it back to the arrow where a click does nothing (sleep, set level).
+        c.on('mousemove', (p) => { if (!taskOf(p)) c.getZr().setCursorStyle('default') })
+        c.on('click', (p) => {
+          const task = taskOf(p)
+          const open = latest.current.onTask
+          if (!task || !open) return
+          // The sheet covers the chart; without this the tooltip stays on top until the mouse moves.
+          c.dispatchAction({ type: 'hideTip' })
+          open(task)
+        })
+      }}
+    />
+  )
 }

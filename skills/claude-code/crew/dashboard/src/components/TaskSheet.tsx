@@ -10,7 +10,9 @@ import { Chip, Mono, StatusBadge } from './bits'
 import { Markdown, fileUrl } from './Markdown'
 import { AgentRow } from './AgentRow'
 import { modelShort, span, when } from '@/lib/format'
+import { rates } from '@/lib/rates'
 import { PhaseBar } from './PhaseBar'
+import { Duration } from './Duration'
 
 export function TaskSheet({ state, taskId, onClose }: { state: State; taskId: string | null; onClose: () => void }) {
   const task = state.current?.tasks.find((t) => t.id === taskId) ?? null
@@ -28,6 +30,8 @@ function TaskBody({ state, task }: { state: State; task: Task }) {
   const agents = state.agents.filter((a) => task.agents.includes(a.id))
   const time = state.current?.timing?.perTask.find((p) => p.id === task.id)
   const runs = state.current?.timing?.runs.filter((r) => r.task === task.id) ?? []
+  const rt = rates(state)
+  const phaseRates = { build: rt.taskPhase(task.id, 'build'), review: rt.taskPhase(task.id, 'review'), rework: rt.taskPhase(task.id, 'rework') }
   return (
     <>
       <SheetHeader className="sticky top-0 z-10 border-b bg-background/90 px-5 pt-5 pb-4 backdrop-blur">
@@ -57,9 +61,9 @@ function TaskBody({ state, task }: { state: State; task: Task }) {
         {time && (
           <section className="flex flex-col gap-2">
             <h3 className="flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase"><Timer className="size-3.5" /> Agent time</h3>
-            <PhaseBar build={time.build} review={time.review} rework={time.rework} />
+            <PhaseBar build={time.build} review={time.review} rework={time.rework} rates={phaseRates} />
             <div className="text-xs text-muted-foreground">
-              {span(time.active)} at work in {time.runs} run{time.runs === 1 ? '' : 's'}
+              <Duration secs={time.active} live={rt.task(task.id) > 0} rate={rt.task(task.id)} className="text-foreground" /> at work in {time.runs} run{time.runs === 1 ? '' : 's'}
               {time.changes > 0 && <> · {time.changes} CHANGES verdict{time.changes === 1 ? '' : 's'}</>}
               {time.slept > 0 && <> · slept {span(time.slept)} during its runs</>}
             </div>
@@ -69,7 +73,7 @@ function TaskBody({ state, task }: { state: State; task: Task }) {
                   <span className="tabular w-[92px] shrink-0 text-muted-foreground">{when(r.start, state.today)}</span>
                   <span className="truncate">{r.name || r.type}</span>
                   <span className="text-muted-foreground">{r.type !== (r.name || r.type) ? r.type : ''}{r.model ? ` · ${modelShort(r.model)}` : ''}</span>
-                  <span className="ml-auto tabular text-muted-foreground">{r.open ? 'running' : r.status || '—'} · {span(r.active)}</span>
+                  <span className="ml-auto tabular text-muted-foreground">{r.open ? 'running' : r.status || '—'} · <Duration secs={r.active} live={r.open && !state.current?.timing?.done} /></span>
                 </li>
               ))}
             </ol>

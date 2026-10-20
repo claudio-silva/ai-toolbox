@@ -131,6 +131,16 @@
   .tabular {
     font-variant-numeric: tabular-nums;
   }
+  /* Tailwind 4 gives buttons the default cursor; everything clickable here shows the hand. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="tab"],
+  summary,
+  a[href],
+  label[for],
+  select {
+    cursor: pointer;
+  }
 }
 
 /* A slow pulse for things that are running. */

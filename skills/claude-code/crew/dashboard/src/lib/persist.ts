@@ -81,9 +81,9 @@ export function useTheme(): [Theme, (t: Theme) => void, boolean] {
     return () => mq.removeEventListener('change', on)
   }, [])
   const dark = theme === 'dark' || (theme === 'system' && systemDark)
-  useLayoutEffect(() => {
-    document.documentElement.classList.toggle('dark', dark)
-  }, [dark])
+  // The charts read the theme's colours from CSS while they render, so the class changes here,
+  // before the children render, not in an effect after them (idempotent).
+  document.documentElement.classList.toggle('dark', dark)
   const set = (t: Theme) => {
     localStorage.setItem(THEME_KEY, t)
     setTheme(t)

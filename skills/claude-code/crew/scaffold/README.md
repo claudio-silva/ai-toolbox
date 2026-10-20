@@ -40,14 +40,15 @@ A compaction line reads: who compacted (`lead (opus · high)`, or the subagent's
 
 ## The dashboard
 
-A local web page that shows what the crew is doing, for a browser tab or a Paseo side panel. `dashboard/server.mjs` (Node.js 20 or later, no dependencies) serves it on `127.0.0.1`, at a port derived from the project's path so the URL stays the same across restarts. The session-start hook starts it in the background, and it runs until you stop it or the computer restarts.
+A local web page that shows what the crew is doing, for a browser tab or a Paseo side panel. `dashboard/server.mjs` (Node.js 20 or later, no dependencies) serves it on `127.0.0.1`, at a port derived from the project's path so the URL stays the same across restarts. The session-start hook starts it in the background, and it runs until you stop it or the computer restarts. One server serves each project, whoever started it: another session, you, or a Paseo panel.
 
+- `bin/crew session start` prints `Open the dashboard at <url>` when this session started it, and nothing when it was already running.
 - `bin/crew status` prints its URL (and starts it if needed).
-- `bin/crew dashboard start|stop|restart|url` manages it.
+- `bin/crew dashboard start|stop|restart|url` manages it; `start` prints nothing and exits 3 when one is already running for the project.
 - `CREW_DASHBOARD=0` in the environment keeps it from starting.
 - `node dashboard/server.mjs state` prints the state the page shows, as JSON.
 
-The server reads the task-set indexes and specs, `queue.md`, `defects.md`, `handoff.md`, the journal, the hook state under `tmp/` and git, and watches them. When one changes, it pushes the new state to every open page over server-sent events; the page updates in place, keeping its scroll position, tab and open panels. Nothing polls: while agents run or the set is open, a one-minute tick keeps the clocks moving, and nothing else happens while the crew is quiet. If the server goes away, the page says so and reconnects when it comes back. Nobody edits anything here: the page only reads.
+The server reads the task-set indexes and specs, `queue.md`, `defects.md`, `handoff.md`, the journal, the hook state under `tmp/` and git, and watches them. When one changes, it pushes the new state to every open page over server-sent events; the page updates in place, keeping its scroll position, tab and open panels. Nothing polls: while agents run or the set is open, the server recomputes once a minute, and nothing else happens while the crew is quiet. In between, the page's running durations tick every second on their own (`02:53:22`, colons blinking) and freeze when the run ends (`1h 19m`); sleep and closed intervals never tick. Each new journal line shows as a notice at the top of the page for 10 seconds; notices stack, and a click opens the Journal. If the server goes away, the page says so and reconnects when it comes back. Nobody edits anything here: the page only reads.
 
 The lead's state sits in the header:
 - **Lead working · since HH:MM**: the lead is working on your last message.
@@ -55,7 +56,9 @@ The lead's state sits in the header:
 - **Waiting for you · since HH:MM**: nothing is running; the crew needs you.
 - **Stopped by you · since HH:MM**: you ran `/crew stop`; `/crew resume` continues.
 
-Task statuses: pending, in progress, in review, rework, accepted, blocked. A task opens a panel with its spec, its agents and runs, its time by phase and its newest screenshots; a set or the last handoff opens as a document.
+The header's icon is the project's own when the repository has a square one (a favicon, an app icon or a logo; the server picks the best by name, size and depth). If it picked a wrong one, click it: it switches to crew's mark, and the page remembers that for this project until you click again.
+
+Task statuses: pending, in progress, in review, rework, accepted, blocked. A task, or its bar on the Timing tab's chart, opens a panel with its spec, its agents and runs, its time by phase and its newest screenshots; a set or the last handoff opens as a document.
 
 The Overview tab also shows **keep awake**: on while Claude Code runs, once `crew session start` has started `caffeinate` (macOS), tied to the Claude Code process so it ends with it; off after `/crew stop`. On battery, closing the lid still sleeps the computer, and the page warns about it. Set `CREW_KEEP_AWAKE=0` in the environment to turn keep-awake off.
 

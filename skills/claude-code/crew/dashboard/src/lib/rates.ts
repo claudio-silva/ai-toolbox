@@ -1,13 +1,15 @@
 // Which totals are still growing, and how fast: one second per second for each agent run still
-// open that adds to it. Worked out from the open runs in the timing, so the page can keep the
-// numbers moving between two states from the server.
+// open that adds to it, and for the lead while it works. Worked out from the state, so the page
+// can keep the numbers moving between two states from the server. Only work ticks: idle time,
+// sleep and elapsed time never do, and nothing ticks once Claude Code has closed (the server
+// then reports no open run and the lead as closed).
 
 import type { Phase, State } from './types'
 
 export interface Rates {
-  clock: number
+  active: number
   busy: number
-  idle: number
+  leadAlone: number
   taskTime: number
   phases: Record<Phase, number>
   task: (id: string) => number
@@ -17,7 +19,7 @@ export interface Rates {
 }
 
 const NONE: Rates = {
-  clock: 0, busy: 0, idle: 0, taskTime: 0, phases: { build: 0, review: 0, rework: 0, other: 0 },
+  active: 0, busy: 0, leadAlone: 0, taskTime: 0, phases: { build: 0, review: 0, rework: 0, other: 0 },
   task: () => 0, taskPhase: () => 0, setLevel: 0, role: () => 0,
 }
 
@@ -26,11 +28,12 @@ export function rates(state: State): Rates {
   if (!t || t.done) return NONE
   const open = t.runs.filter((r) => r.open)
   const onTask = open.filter((r) => r.task)
+  const lead = state.lead.state === 'working'
   const count = (f: (r: (typeof open)[number]) => boolean) => open.filter(f).length
   return {
-    clock: 1,
+    active: open.length || lead ? 1 : 0,
     busy: open.length ? 1 : 0,
-    idle: open.length ? 0 : 1,
+    leadAlone: !open.length && lead ? 1 : 0,
     taskTime: onTask.length,
     phases: {
       build: count((r) => Boolean(r.task) && r.phase === 'build'),

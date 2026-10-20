@@ -15,6 +15,7 @@ cleanup() {
   fi
   pid=$(jq -r '.pid // empty' "$T/project/.crew/tmp/dashboard.json" 2>/dev/null)
   [ -n "$pid" ] && kill "$pid" 2>/dev/null
+  if [ -n "${CREW_CLAUDE_PID:-}" ]; then kill "$CREW_CLAUDE_PID" 2>/dev/null; wait "$CREW_CLAUDE_PID" 2>/dev/null; fi
   rm -rf "$T"
 }
 trap cleanup EXIT
@@ -26,6 +27,9 @@ printf '#!/bin/sh\ncat "%s" 2>/dev/null\n' "$T/sysctl.out" > "$T/stubs/sysctl"
 chmod +x "$T/stubs/caffeinate" "$T/stubs/sysctl"
 printf '24000000\n179643921385406 %s\n' $((24000000 * 5000)) > "$T/sysctl.out"   # awake: 5000 s
 export PATH="$T/stubs:$PATH"
+# Claude Code: a process whose command line says claude, standing in for the one the session runs in.
+claude_stub() { bash -c 'exec -a claude-stub sleep 600' & CREW_CLAUDE_PID=$!; export CREW_CLAUDE_PID; }
+claude_stub
 unset CREW_KEEP_AWAKE
 export CREW_DASHBOARD=0
 command -v node >/dev/null 2>&1 || { printf 'tests/hooks.sh needs Node.js 20 or later\n' >&2; exit 1; }
@@ -247,8 +251,14 @@ check "defect: --promote only with scheduled" "goes with --status scheduled" "$o
 out=$("$CREW" defect D1 --promote --note "it broke T09's ribbon screenshot check")
 check "defect: promoted" "status: scheduled · promoted" "$out"
 check "defect: promotion journaled" "Promoted D1 (Ribbon icon sits 2 px low): it broke T09's ribbon screenshot check" "$(tail -n 1 "$P/.crew/journal.md")"
+check "defect: note kept on the line, last" "· promoted · note: it broke T09's ribbon screenshot check" "$(grep -F '[D1]' "$P/.crew/defects.md")"
+"$CREW" defect D2 --status scheduled --note 'as T10 \ & co' >/dev/null
+check "defect: note taken literally" "· status: scheduled · note: as T10 \\ & co" "$(grep -F '[D2]' "$P/.crew/defects.md")"
+"$CREW" defect D2 --status fixed >/dev/null
+check "defect: older note kept by a transition without one" "· status: fixed · note: as T10 \\ & co" "$(grep -F '[D2]' "$P/.crew/defects.md")"
 "$CREW" defect D2 --status fixed --note "in T10" >/dev/null
 check "defect: fixed journaled" "Fixed D2 (Offline save shows a raw error code): in T10" "$(tail -n 1 "$P/.crew/journal.md")"
+check "model: defect note" "D2 fixed · in T10" "$(model '.defects.items[] | select(.id == "D2") | "\(.id) \(.state) · \(.note)"')"
 check "model: defects summary" "deferred 0 · scheduled 1 · fixed 1 · dropped 0 · promoted 1 of 2" \
   "$(model '.defects.summary | "deferred \(.deferred) · scheduled \(.scheduled) · fixed \(.fixed) · dropped \(.dropped) · promoted \(.promoted) of \(.total)"')"
 check "model: open defect, promoted" "D1 | Ribbon icon sits 2 px low | ribbon (app/src/ribbon.tsx) | T07 review | low | end of set | scheduled (promoted)" \
@@ -290,11 +300,14 @@ b=$((now - 7000))
   printf '%s\t%s\tq1\tqa\t\tfirst\tDONE\n' $((b + 3000)) $((b + 3240))
 } > "$S/runs.tsv"
 printf '%s\t%s\t400\n' $((b + 1500)) $((b + 2000)) > "$S/sleep.tsv"
+# The lead works 2 min before the first run and on into it (agents' time from then), and 5 min
+# alone after the QA run; then it waits.
+printf '%s\tworking\n%s\tidle\n%s\tworking\n%s\tidle\n' $((b - 120)) $((b + 100)) $((b + 3240)) $((b + 3540)) > "$S/lead.tsv"
 "$CREW" status >/dev/null
 tm() { model ".current.timing | $1"; }
 check "timing: set start from the commit that added the index" "$((now - 7200))" "$(tm '.start')"
-check "timing: clock line" "slept 6 min · agents at work 44 min · lead and waiting 1 h 9 min" \
-  "$(tm '"slept \(.slept | span) · agents at work \(.busy | span) · lead and waiting \(.idle | span)"')"
+check "timing: clock line" "slept 6 min · agents at work 44 min · lead alone 7 min · crew at work 51 min · idle 1 h 2 min" \
+  "$(tm '"slept \(.slept | span) · agents at work \(.busy | span) · lead alone \(.leadAlone | span) · crew at work \(.active | span) · idle \(.idle | span)"')"
 check "timing: phase split" "Task time 43 min: build 26 min · review 12 min · rework 5 min · CHANGES verdicts 1" \
   "$(tm '"Task time \(.taskTime | span): build \(.phases.build | span) · review \(.phases.review | span) · rework \(.phases.rework | span) · CHANGES verdicts \(.changes)"')"
 check "timing: critical path and headroom" "T06 → T07 · 40 min · parallel headroom 3 min" \
@@ -308,8 +321,8 @@ check "timing: open set, clock runs" "done=false until=null" "$(tm '"done=\(.don
 # A finished set: every task accepted and nothing running stops the clock at the last run's end.
 cp "$P/.crew/tasks/autosave/index.md" "$T/index.keep"
 sed -i.bak -E 's/^\| (T[0-9]+) \| [a-z ]+ \|/| \1 | accepted |/' "$P/.crew/tasks/autosave/index.md"
-check "timing: a finished set stops the clock" "until $((b + 3240)): 57 min on the clock · slept 6 min · agents at work 44 min · lead and waiting 6 min" \
-  "$(tm '"until \(.until): \(.clock | span) on the clock · slept \(.slept | span) · agents at work \(.busy | span) · lead and waiting \(.idle | span)"')"
+check "timing: a finished set stops the clock" "until $((b + 3240)): 57 min on the clock · slept 6 min · agents at work 44 min · lead alone 2 min · idle 4 min" \
+  "$(tm '"until \(.until): \(.clock | span) on the clock · slept \(.slept | span) · agents at work \(.busy | span) · lead alone \(.leadAlone | span) · idle \(.idle | span)"')"
 cp "$T/index.keep" "$P/.crew/tasks/autosave/index.md"
 
 # ---- 11. keep awake, stop ----
@@ -325,9 +338,10 @@ check "session stop: survives the lead's Stop event" "stopped" "$(model '.lead.s
 hook lead-busy "{$J_BASE,\"prompt\":\"unrelated question\"}" >/dev/null
 check "session stop: survives an unrelated founder prompt" "stopped" "$(model '.lead.state')"
 "$CREW" session start "$SID" >/dev/null
-check "session stop: cleared by session start (/crew resume)" "waiting" "$(model '.lead.state')"
+check "session stop: cleared by session start (/crew resume), which the lead is running" "working" "$(model '.lead.state')"
 hook lead-busy "{$J_BASE,\"prompt\":\"go on\"}" >/dev/null
 check "lead state: working after a prompt" "working since" "$(model '.lead | "\(.state) since \(.since)"')"
+check "lead log: state changes in lead.tsv, not the ones a stop keeps out" "stopped working " "$(tail -n 2 "$S/lead.tsv" | cut -f 2 | tr '\n' ' ')"
 check "lead state: the epoch it started at, for the page's clock" "recent" "$(model '.lead | if (.sinceEpoch // 0) > (now - 120) then "recent" else "sinceEpoch \(.sinceEpoch)" end')"
 [ ! -e "$P/.crew/status.md" ] && ok "dashboard: still no status.md" || ko "dashboard: still no status.md" "found .crew/status.md"
 
@@ -351,6 +365,20 @@ if command -v node >/dev/null 2>&1; then
   "$CREW" dashboard stop >/dev/null
   export CREW_DASHBOARD=0
 fi
+
+# ---- 11c. Claude Code quits: the subagents running in it are not running any more ----
+hook agent-id "{$J_BASE,\"agent_id\":\"orph1\",\"agent_type\":\"builder\"}" >/dev/null
+check "running agent: the session that runs it" "$SID" "$(cat "$S/running/orph1")"
+check "Claude Code running: the agent runs" "working 1" "$(model '"\(.lead.state) \(.agents | length)"')"
+kill "$CREW_CLAUDE_PID"; wait "$CREW_CLAUDE_PID" 2>/dev/null
+check "Claude Code gone: the lead is closed, nothing runs" "closed 0" "$(model '"\(.lead.state) \(.agents | length)"')"
+check "Claude Code gone: the run ended, interrupted" "interrupted false" "$(model '.current.timing.runs | map(select(.agentId == "orph1")) | .[0] | "\(.status) \(.open)"')"
+claude_stub
+"$CREW" session start "$SID" >/dev/null
+check "session start: records the orphaned run as interrupted" "	orph1	builder	" "$(grep interrupted "$S/runs.tsv")"
+[ ! -e "$S/running/orph1" ] && ok "session start: clears the orphaned run" || ko "session start: clears the orphaned run" "running/orph1 still there"
+check "session start: journals it" "interrupted" "$(grep '← builder' "$P/.crew/journal.md" | tail -n 1)"
+check "session start: records the new process" "$CREW_CLAUDE_PID" "$(cat "$S/claude/$SID")"
 
 # ---- 12. hooks never fail ----
 printf 'not json' | "$CREW" hook compact >/dev/null 2>&1; rc=$?

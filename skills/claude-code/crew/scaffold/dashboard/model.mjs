@@ -186,6 +186,7 @@ export function parseQueue(text, kind) {
       if (/^affects:/.test(v)) e.affects = v.replace(/^affects:[ \t]*/, '');
       else if (/^slot:/.test(v)) e.slot = v.replace(/^slot:[ \t]*/, '');
       else if (/^status:/.test(v)) e.status = v.replace(/^status:[ \t]*/, '').toLowerCase();
+      else if (/^note:/.test(v)) e.note = v.replace(/^note:[ \t]*/, '');
       else if (/^default taken:/.test(v)) e.default = v.replace(/^default taken:[ \t]*/, '');
       else text.push(v);
     }
@@ -207,7 +208,7 @@ export function parseDefects(text) {
     const id = l.slice(0, l.indexOf(']'));
     l = l.slice(l.indexOf(']') + 1);
     const p = l.split(' · ');
-    const e = { id, date: trim(p[0]), text: '', where: '', from: '', severity: '', slot: '', status: '', promoted: false };
+    const e = { id, date: trim(p[0]), text: '', where: '', from: '', severity: '', slot: '', status: '', note: '', promoted: false };
     const text = [];
     for (let i = 1; i < p.length; i++) {
       const v = trim(p[i]);
@@ -216,6 +217,7 @@ export function parseDefects(text) {
       else if (/^severity:/.test(v)) e.severity = v.replace(/^severity:[ \t]*/, '').toLowerCase();
       else if (/^slot:/.test(v)) e.slot = v.replace(/^slot:[ \t]*/, '');
       else if (/^status:/.test(v)) e.status = v.replace(/^status:[ \t]*/, '').toLowerCase();
+      else if (/^note:/.test(v)) e.note = v.replace(/^note:[ \t]*/, '');
       else if (v === 'promoted') e.promoted = true;
       else text.push(v);
     }
@@ -356,11 +358,56 @@ function readSleeps(stateDir) {
   return out;
 }
 
-function runningAgents(stateDir, runs) {
+// Which sessions still have their Claude Code process (bin/crew keeps each one's pid in
+// claude/<session>). A session without a recorded pid (an older crew, or none found) counts as
+// running while its transcript was written in the last hour. lastSeen: the newest transcript
+// write, the best guess of when a crew whose processes are all gone stopped.
+export function claudeSessions(stateDir, now = Math.floor(Date.now() / 1000)) {
+  const pids = new Map();
+  for (const sess of listDir(path.join(stateDir, 'claude'))) {
+    const pid = trim(read(path.join(stateDir, 'claude', sess)) || '');
+    if (isInt(pid)) pids.set(sess, Number(pid));
+  }
+  const alive = new Set();
+  if (pids.size) {
+    const out = run('ps', ['-o', 'pid=,args=', '-p', [...pids.values()].join(',')]);
+    const live = new Set();
+    for (const line of out.split('\n')) {
+      const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+      if (m && /claude/.test(m[2])) live.add(Number(m[1]));
+    }
+    for (const [sess, pid] of pids) if (live.has(pid)) alive.add(sess);
+  }
+  let lastSeen = 0;
+  let unknownLive = false;
+  const transcriptOf = new Map();
+  for (const sess of listDir(path.join(stateDir, 'transcripts'))) {
+    const tp = trim(read(path.join(stateDir, 'transcripts', sess)) || '');
+    if (!tp) continue;
+    transcriptOf.set(sess, tp);
+    const m = Math.floor((stat(tp)?.mtimeMs ?? 0) / 1000);
+    if (m > lastSeen) lastSeen = m;
+    if (!pids.has(sess) && m > now - 3600) unknownLive = true;
+  }
+  // No transcript to go by: the last crew event (bin/crew samples the clock at each one).
+  if (!lastSeen) {
+    const ev = trim(read(path.join(stateDir, 'clock')) || '').split(/\s+/)[0];
+    if (isInt(ev)) lastSeen = Number(ev);
+  }
+  return { pids, alive, transcriptOf, lastSeen, live: alive.size > 0 || unknownLive };
+}
+
+// Running subagents (running/<id>, which holds the session that runs it). One whose Claude Code
+// process is gone is not running any more: it goes to `ended`, with its transcript's last write
+// as the end (bin/crew records the same at the next session start).
+function runningAgents(stateDir, runs, sessions) {
   const ids = new Set(runs.map((r) => r.id));
-  return listDir(path.join(stateDir, 'running')).map((id) => {
+  const agents = [];
+  const ended = [];
+  for (const id of listDir(path.join(stateDir, 'running'))) {
     const a = loadAgent(stateDir, id) || { id, type: 'unknown', description: '', model: '', effort: '', name: '', started: 0, since: '', runStart: 0 };
-    return {
+    const sess = trim(read(path.join(stateDir, 'running', id)) || '');
+    const agent = {
       ...a,
       model: a.model || 'default',
       effort: a.effort || 'default',
@@ -368,12 +415,43 @@ function runningAgents(stateDir, runs) {
       kind: ids.has(id) ? 'resume' : 'first',
       taskNum: taskNum(a.description),
     };
-  });
+    const gone = sess && sessions.pids.has(sess) ? !sessions.alive.has(sess) : !sessions.live;
+    if (!gone) { agents.push(agent); continue; }
+    const tp = sessions.transcriptOf.get(sess);
+    const own = tp ? stat(path.join(tp.replace(/\.jsonl$/, ''), 'subagents', `agent-${id}.jsonl`)) : null;
+    const end = Math.floor((own?.mtimeMs ?? (tp ? stat(tp)?.mtimeMs : 0) ?? 0) / 1000) || sessions.lastSeen || agent.runStart;
+    ended.push({ start: agent.runStart, end: Math.max(agent.runStart, end), id, type: agent.type, task: agent.taskNum == null ? '' : String(agent.taskNum), kind: agent.kind, status: 'interrupted' });
+  }
+  return { agents, ended };
+}
+
+// lead.tsv: the lead's state changes (epoch, working|idle|stopped), oldest first.
+function readLeadLog(stateDir) {
+  const t = read(path.join(stateDir, 'lead.tsv'));
+  if (!t) return [];
+  const out = [];
+  for (const line of t.split('\n')) {
+    const [at, st] = line.split('\t');
+    if (isInt(at) && st) out.push({ at: Number(at), state: st });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+// The lead's working intervals: from each "working" to the next change; the last one runs to
+// `until` (now while Claude Code runs, else when it was last seen).
+export function leadWorkIntervals(log, until) {
+  const out = [];
+  for (let i = 0; i < log.length; i++) {
+    if (log[i].state !== 'working') continue;
+    const end = i + 1 < log.length ? log[i + 1].at : until;
+    if (end > log[i].at) out.push([log[i].at, end]);
+  }
+  return out;
 }
 
 // bin/crew writes "<state> HH:MM <epoch>" (older versions: no epoch; it is then taken from HH:MM,
 // today or, when that is still to come, yesterday).
-export function leadState(stateDir, nrun, now = Math.floor(Date.now() / 1000)) {
+export function leadState(stateDir, nrun, now = Math.floor(Date.now() / 1000), sessions = null) {
   const t = trim(read(path.join(stateDir, 'lead')) || '');
   const [st = '', hm = '', ep = ''] = t.split(/\s+/);
   let at = isInt(ep) ? Number(ep) : null;
@@ -386,6 +464,11 @@ export function leadState(stateDir, nrun, now = Math.floor(Date.now() / 1000)) {
   }
   const since = hm || null;
   if (st === 'stopped') return { state: 'stopped', since, sinceEpoch: at, agentsFinishing: nrun };
+  // No Claude Code process left: nobody is working or waiting, whatever the last state said.
+  if (sessions && !sessions.live) {
+    const seen = sessions.lastSeen || at;
+    return { state: 'closed', since: seen ? localHM(seen) : since, sinceEpoch: seen || null };
+  }
   if (st === 'working') return { state: 'working', since, sinceEpoch: at };
   if (nrun > 0) return { state: 'agents', since: null, sinceEpoch: null };
   return { state: 'waiting', since, sinceEpoch: at };
@@ -395,16 +478,19 @@ function keepAwake(stateDir) {
   if (!onPath('caffeinate')) return null;
   let on = false;
   let watched = '';
-  const t = read(path.join(stateDir, 'keep-awake'));
+  let since = null;
+  const file = path.join(stateDir, 'keep-awake');
+  const t = read(file);
   if (t != null) {
     const [pid, w = ''] = trim(t).split(/\s+/);
     watched = w;
     if (isInt(pid) && run('ps', ['-o', 'args=', '-p', pid]).includes('caffeinate')) on = true;
+    if (on) since = Math.floor((stat(file)?.mtimeMs ?? 0) / 1000) || null;
   }
   const stopped = /^stopped/.test(trim(read(path.join(stateDir, 'lead')) || ''));
   let battery = false;
   if (on) battery = (run('pmset', ['-g', 'batt']).split('\n')[0] || '').includes('Battery Power');
-  return { on, mode: on ? (watched === '12h' ? '12h' : 'claude') : null, battery, stopped };
+  return { on, mode: on ? (watched === '12h' ? '12h' : 'claude') : null, since, battery, stopped };
 }
 
 // ---------------------------------------------------------------------------
@@ -550,7 +636,7 @@ export function phaseOf(type, kind) {
 // open: the running agents' current runs (end = now); sleeps: sleep.tsv; start: the set start
 // (epoch or null); done: every task accepted and nothing running (the clock stops at the last
 // run's end). Null when the set has no runs yet.
-export function computeTiming({ tasks, runs, open = [], sleeps, start, now, done = false, agentOf = () => null }) {
+export function computeTiming({ tasks, runs, open = [], sleeps, start, now, done = false, closedAt = null, agentOf = () => null, leadWork = [], leadFrom = null }) {
   const byNum = new Map();
   tasks.forEach((t, k) => byNum.set(t.num, k));
   const all = [
@@ -598,35 +684,49 @@ export function computeTiming({ tasks, runs, open = [], sleeps, start, now, done
     });
   }
 
-  // Agents at work: the union of all run intervals, less the sleep inside it.
-  const ord = [...all].sort((a, b) => a.start - b.start);
-  let busy = 0;
-  let cs = -1;
-  let ce = 0;
-  const flush = () => {
-    if (cs < 0) return;
-    busy += ce - cs;
-    for (const s of sleeps) if (s.from >= cs && s.to <= ce) busy -= s.secs;
-  };
-  for (const r of ord) {
-    if (cs >= 0 && r.start <= ce) { if (r.end > ce) ce = r.end; continue; }
+  // A union of intervals, less the sleep inside it.
+  const unionAwake = (iv) => {
+    const ord = iv.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
+    let total = 0;
+    let cs = -1;
+    let ce = 0;
+    const flush = () => {
+      if (cs < 0) return;
+      total += ce - cs;
+      for (const s of sleeps) if (s.from >= cs && s.to <= ce) total -= s.secs;
+    };
+    for (const [a, b] of ord) {
+      if (cs >= 0 && a <= ce) { if (b > ce) ce = b; continue; }
+      flush();
+      cs = a;
+      ce = b;
+    }
     flush();
-    cs = r.start;
-    ce = r.end;
-  }
-  flush();
-  busy = Math.max(0, busy);
+    return Math.max(0, total);
+  };
 
+  // The elapsed time runs to now, to the set's last run once it is finished, and to the last
+  // sign of Claude Code once it has closed (when it comes back, the gap counts as idle).
   let endt = now;
   if (done) {
     let m = 0;
     for (const r of runs) if (r.start >= (start ?? 0) && r.end > m) m = r.end;
     if (m > 0) endt = m;
+  } else if (closedAt != null) {
+    let m = closedAt;
+    for (const r of all) if (r.end > m) m = r.end;
+    endt = Math.min(now, m);
   }
+  // Agents at work: any subagent running. Crew at work: that, or the lead working. Idle: nothing
+  // running while awake (waiting for the founder, stopped, or Claude Code closed).
+  const runIv = all.map((r) => [r.start, r.end]);
+  const leadIv = leadWork.map(([a, b]) => [Math.max(a, t0), Math.min(b, endt)]);
+  const busy = unionAwake(runIv);
+  const active = Math.max(busy, unionAwake([...runIv, ...leadIv]));
   let slept = 0;
   for (const s of sleeps) if (s.from >= t0 && s.to <= endt) slept += s.secs;
   const clock = endt - t0;
-  const idle = Math.max(0, clock - slept - busy);
+  const idle = Math.max(0, clock - slept - active);
 
   // Critical path over the dependencies, each task weighted by its agent time so far
   // (relaxation, one pass per task, in index order: the same order bin/crew used).
@@ -654,8 +754,8 @@ export function computeTiming({ tasks, runs, open = [], sleeps, start, now, done
 
   const sleepsOut = sleeps.filter((s) => s.to >= t0).map((s) => ({ ...s }));
   return {
-    start, t0, end: endt, done, until: done && endt !== now ? endt : null,
-    clock, slept, busy, idle,
+    start, t0, end: endt, done, until: endt < now ? endt : null,
+    clock, slept, busy, active, leadAlone: active - busy, idle, leadFrom: leadFrom != null && leadFrom > t0 ? leadFrom : null,
     taskTime: tot, phases: ptot, changes: chs, byType,
     criticalPath: { ids: pathIds, seconds: cp, headroom: Math.max(0, tot - cp) },
     perTask: tasks.map((t, k) => ({ id: t.id, ...per[k] })).filter((p) => p.runs > 0),
@@ -934,11 +1034,15 @@ export function buildState(rootIn, opts = {}) {
   const stateDir = path.join(crewDir, 'tmp', 'journal-state');
   const today = localDay(now);
 
-  const runs = readRuns(stateDir);
+  const sessions = claudeSessions(stateDir, now);
+  const recorded = readRuns(stateDir);
   const sleeps = readSleeps(stateDir);
-  const agents = runningAgents(stateDir, runs);
+  const { agents, ended } = runningAgents(stateDir, recorded, sessions);
+  const runs = [...recorded, ...ended];
   const repo = { name: path.basename(root), root, ...gitInfo(root), icon: projectIcon(root) };
-  const lead = leadState(stateDir, agents.length, now);
+  const lead = leadState(stateDir, agents.length, now, sessions);
+  const leadLog = readLeadLog(stateDir);
+  const leadWork = leadWorkIntervals(leadLog, sessions.live ? now : Math.min(now, sessions.lastSeen || now));
   const awake = keepAwake(stateDir);
 
   const { sets, worktrees } = collectSets(root, crewDir);
@@ -983,7 +1087,10 @@ export function buildState(rootIn, opts = {}) {
         start: setStartEpoch(stateDir, set.file),
         now,
         done: agents.length === 0 && set.accepted === set.total,
+        closedAt: sessions.live ? null : sessions.lastSeen || null,
         agentOf,
+        leadWork,
+        leadFrom: leadLog.length ? leadLog[0].at : null,
       });
     }
     current = {

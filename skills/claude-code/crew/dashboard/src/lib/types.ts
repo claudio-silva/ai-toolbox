@@ -75,7 +75,10 @@ export interface Timing {
   clock: number
   slept: number
   busy: number
+  active: number
+  leadAlone: number
   idle: number
+  leadFrom: number | null
   taskTime: number
   phases: { build: number; review: number; rework: number }
   changes: number
@@ -149,6 +152,7 @@ export interface Defect {
   slot: string
   status: string
   state: string
+  note: string
   promoted: boolean
 }
 
@@ -194,8 +198,8 @@ export interface State {
     name: string; root: string; branch: string; sha: string; state: 'branch' | 'detached' | 'none'
     icon: { path: string; w: number; h: number; mtime: number } | null
   }
-  lead: { state: 'working' | 'agents' | 'waiting' | 'stopped'; since: string | null; sinceEpoch: number | null; agentsFinishing?: number }
-  keepAwake: { on: boolean; mode: 'claude' | '12h' | null; battery: boolean; stopped: boolean } | null
+  lead: { state: 'working' | 'agents' | 'waiting' | 'stopped' | 'closed'; since: string | null; sinceEpoch: number | null; agentsFinishing?: number }
+  keepAwake: { on: boolean; mode: 'claude' | '12h' | null; since: number | null; battery: boolean; stopped: boolean } | null
   agents: Agent[]
   current: CurrentSet | null
   sets: TaskSet[]

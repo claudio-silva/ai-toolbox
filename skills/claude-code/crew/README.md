@@ -120,11 +120,11 @@ It reads the same files the crew writes (the task-set indexes and specs, `queue.
 
 | Tab | What it shows |
 | --- | --- |
-| Overview | The current set's progress and stage, the task being worked on, the lead's state (working, waiting for you, stopped), live agents, counts of open questions, requests, defects and compactions, the time on the clock, keep-awake, the last handoff and recent activity |
+| Overview | The current set's progress and stage, the task being worked on, the lead's state (working, waiting for you, stopped, Claude Code closed), live agents, counts of open questions, requests, defects and compactions, the crew's time at work, keep-awake and why it is on or off, the last handoff and recent activity |
 | Tasks | The dependency graph with the critical path highlighted, and every task with its status, flags, phase time and agents; a task opens its spec, runs and screenshots |
-| Timing | Sleep, agents at work, and the lead and waiting; a zoomable Gantt chart of every agent run (a bar opens its task); build, review and rework per task; the critical path and the parallel headroom; time by role |
+| Timing | Crew at work, split into agents at work and the lead alone, then idle and asleep; a zoomable Gantt chart of every agent run (a bar opens its task); build, review and rework per task; the critical path and the parallel headroom; time by role |
 | Requests | Your open questions first, then queued, scheduled, done and dropped requests |
-| Defects | Deferred, scheduled, fixed and promoted counts, and the open and closed entries |
+| Defects | Deferred, scheduled, fixed and promoted counts, the open and closed entries with when they are due, and a legend for the labels |
 | Compactions | Lead and subagent compactions: context before and after, and estimated overhead, savings and net per compaction |
 | Journal | The journal, newest first, filtered by lead, agents or system, with search |
 | Sets | Every task set found, including those in worktrees; each opens its index |

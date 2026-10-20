@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  Bot, Bug, Gauge, GitBranch, Inbox, Layers, ListChecks, Monitor, Moon, Pause, Play, ScrollText, Shrink, Square, Sun, Timer,
+  Bot, Bug, ChevronDown, Gauge, GitBranch, Inbox, Layers, ListChecks, Monitor, Moon, Pause, Play, PowerOff, ScrollText, Shrink, Square, Sun, Timer,
   type LucideIcon,
 } from 'lucide-react'
 import type { State } from '@/lib/types'
 import type { Conn } from '@/lib/live'
 import type { Tab, Theme } from '@/lib/persist'
 import { useClockBase } from '@/lib/clock'
+import { capital } from '@/lib/format'
 import { Duration } from './Duration'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 
 export const TAB_META: Record<Tab, { label: string; icon: LucideIcon }> = {
   overview: { label: 'Overview', icon: Gauge },
@@ -36,6 +38,8 @@ function LeadPill({ state }: { state: State }) {
     icon = Bot; text = `${n} agent${n === 1 ? '' : 's'} working · lead idle`; tone = 'bg-st-review/13 text-st-review ring-st-review/30'; pulse = true
   } else if (lead.state === 'stopped') {
     icon = Square; text = 'Stopped by you'; tone = 'bg-muted text-muted-foreground ring-border'
+  } else if (lead.state === 'closed') {
+    icon = PowerOff; text = 'Claude Code closed'; tone = 'bg-muted text-muted-foreground ring-border'
   }
   const Icon = icon
   const extra = lead.state === 'stopped' && n > 0 ? ` · ${n} finishing` : lead.state === 'working' && n > 0 ? ` · ${n} agent${n === 1 ? '' : 's'}` : ''
@@ -54,7 +58,7 @@ function LeadPill({ state }: { state: State }) {
         {lead.since && lead.state !== 'agents' && (
           <span className="font-normal opacity-75">
             {' '}· since {lead.since}
-            {lead.sinceEpoch != null && <> (<Duration secs={Math.max(0, base - lead.sinceEpoch)} live />)</>}
+            {lead.state === 'working' && lead.sinceEpoch != null && <> (<Duration secs={Math.max(0, base - lead.sinceEpoch)} live />)</>}
           </span>
         )}
       </span>
@@ -146,6 +150,119 @@ function ThemeToggle({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) =
   )
 }
 
+type Badges = Partial<Record<Tab, { n: number | string; tone?: 'warn' | 'muted' }>>
+
+const TAB_CLS = 'relative flex shrink-0 items-center gap-1.5 rounded-md px-2.5 pt-1.5 pb-2.5 text-[12.5px] font-medium whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset'
+
+function TabBadge({ b }: { b?: Badges[Tab] }) {
+  if (!b || b.n === 0 || b.n === '') return null
+  return (
+    <span className={cn(
+      'tabular rounded-full px-1.5 text-[10.5px] leading-4',
+      b.tone === 'warn' ? 'bg-st-progress/18 text-st-progress' : 'bg-muted text-muted-foreground',
+    )}>{b.n}</span>
+  )
+}
+
+function TabLabel({ t, b }: { t: Tab; b?: Badges[Tab] }) {
+  const m = TAB_META[t]
+  const Icon = m.icon
+  return <><Icon className="size-3.5" />{m.label}<TabBadge b={b} /></>
+}
+
+const GAP = 2 // gap-0.5
+
+// The tabs that fit, and a "N more" menu for the rest. The tabs are measured in a hidden copy
+// of the strip, so the split follows the window's width and the badges' contents. The current
+// tab always stays in view; the others keep their order.
+function TabStrip({ tab, setTab, badges }: { tab: Tab; setTab: (t: Tab) => void; badges: Badges }) {
+  const tabs = Object.keys(TAB_META) as Tab[]
+  const box = useRef<HTMLDivElement>(null)
+  const ghost = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState<{ w: number; tabs: number[]; more: number } | null>(null)
+  useLayoutEffect(() => {
+    const measure = () => {
+      const g = ghost.current
+      const b = box.current
+      if (!g || !b) return
+      const ws = Array.from(g.children, (c) => (c as HTMLElement).offsetWidth)
+      setSize({ w: b.clientWidth, tabs: ws.slice(0, -1), more: ws[ws.length - 1] })
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    if (box.current) ro.observe(box.current)
+    if (ghost.current) ro.observe(ghost.current)
+    return () => ro.disconnect()
+  }, [])
+
+  let shown = tabs
+  if (size) {
+    const all = size.tabs.reduce((a, w) => a + w + GAP, -GAP)
+    if (all > size.w) {
+      const avail = size.w - size.more - GAP
+      const ai = tabs.indexOf(tab)
+      const keep = new Set<Tab>([tab])
+      let used = size.tabs[ai]
+      for (let i = 0; i < tabs.length; i++) {
+        if (i === ai) continue
+        if (used + GAP + size.tabs[i] > avail) break
+        keep.add(tabs[i])
+        used += GAP + size.tabs[i]
+      }
+      shown = tabs.filter((t) => keep.has(t))
+    }
+  }
+  const hidden = tabs.filter((t) => !shown.includes(t))
+  const warn = hidden.some((t) => badges[t]?.tone === 'warn')
+
+  return (
+    <div className="relative -mx-3 flex px-2 sm:-mx-5 sm:px-4">
+      <div ref={box} role="tablist" className="flex min-w-0 flex-1 gap-0.5 overflow-hidden">
+        {shown.map((t) => {
+          const active = t === tab
+          return (
+            <button
+              key={t}
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(t)}
+              className={cn(TAB_CLS, active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground')}
+            >
+              <TabLabel t={t} b={badges[t]} />
+              {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-primary" />}
+            </button>
+          )
+        })}
+        {hidden.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button aria-label={`${hidden.length} more tabs`} className={cn(TAB_CLS, 'text-muted-foreground hover:text-foreground data-[state=open]:text-foreground')}>
+                {hidden.length} more
+                <ChevronDown className="size-3.5" />
+                {warn && <span className="absolute top-1.5 right-1 size-1.5 rounded-full bg-st-progress" />}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {hidden.map((t) => (
+                <DropdownMenuItem key={t} onSelect={() => setTab(t)}>
+                  <TabLabel t={t} b={badges[t]} />
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+      {/* Outside the strip, so the strip never gets wider than what it shows (or scrolls). */}
+      <div aria-hidden className="pointer-events-none invisible absolute inset-x-0 top-0 h-0 overflow-hidden">
+        <div ref={ghost} className="flex w-max gap-0.5">
+          {tabs.map((t) => <span key={t} className={TAB_CLS}><TabLabel t={t} b={badges[t]} /></span>)}
+          <span className={TAB_CLS}>{tabs.length - 1} more<ChevronDown className="size-3.5" /></span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, badges }: {
   state: State | null
   conn: Conn
@@ -154,12 +271,8 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
   setTheme: (t: Theme) => void
   tab: Tab
   setTab: (t: Tab) => void
-  badges: Partial<Record<Tab, { n: number | string; tone?: 'warn' | 'muted' }>>
+  badges: Badges
 }) {
-  const strip = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    strip.current?.querySelector<HTMLElement>(`[data-tab="${tab}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [tab])
   return (
     <header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
       <div className="mx-auto flex max-w-5xl flex-col gap-2 px-3 pt-2.5 sm:px-5">
@@ -167,7 +280,7 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
           <Logo state={state} />
           <div className="flex min-w-0 flex-1 flex-col leading-tight">
             <div className="flex items-baseline gap-1.5">
-              <span className="truncate text-[15px] font-semibold tracking-tight">{state?.repo.name ?? 'Crew'}</span>
+              <span className="truncate text-[15px] font-semibold tracking-tight">{state ? capital(state.repo.name) : 'Crew'}</span>
               <span className="text-[11px] font-medium text-muted-foreground">crew</span>
             </div>
             {state && (
@@ -182,37 +295,7 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
           <ThemeToggle theme={theme} setTheme={setTheme} />
         </div>
         {state && <div className="flex min-w-0"><LeadPill state={state} /></div>}
-        <div ref={strip} role="tablist" className="no-scrollbar -mx-3 flex gap-0.5 overflow-x-auto px-2 sm:-mx-5 sm:px-4">
-          {(Object.keys(TAB_META) as Tab[]).map((t) => {
-            const m = TAB_META[t]
-            const Icon = m.icon
-            const b = badges[t]
-            const active = t === tab
-            return (
-              <button
-                key={t}
-                role="tab"
-                data-tab={t}
-                aria-selected={active}
-                onClick={() => setTab(t)}
-                className={cn(
-                  'relative flex shrink-0 items-center gap-1.5 px-2.5 pt-1.5 pb-2.5 text-[12.5px] font-medium whitespace-nowrap transition-colors',
-                  active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                <Icon className="size-3.5" />
-                {m.label}
-                {b && b.n !== 0 && b.n !== '' && (
-                  <span className={cn(
-                    'tabular rounded-full px-1.5 text-[10.5px] leading-4',
-                    b.tone === 'warn' ? 'bg-st-progress/18 text-st-progress' : 'bg-muted text-muted-foreground',
-                  )}>{b.n}</span>
-                )}
-                {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-primary" />}
-              </button>
-            )
-          })}
-        </div>
+        <TabStrip tab={tab} setTab={setTab} badges={badges} />
       </div>
     </header>
   )

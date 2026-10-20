@@ -1,12 +1,14 @@
+import { useState } from 'react'
 import {
   Activity, ArrowRight, BatteryWarning, Bot, Bug, Coffee, FileClock, GitBranch, Inbox, MessageCircleQuestion, Shrink, Sparkles, Timer,
 } from 'lucide-react'
 import type { State } from '@/lib/types'
 import type { Tab } from '@/lib/persist'
-import { hm, pct, span, usd } from '@/lib/format'
+import { pct, span, usd, when } from '@/lib/format'
 import { rates } from '@/lib/rates'
 import { Duration } from '@/components/Duration'
-import { Chip, Empty, Inline, Mono, Note, Panel, Stat, StatusBar, StatusIcon, StatusLegend } from '@/components/bits'
+import { Chip, Empty, HelpBody, HelpButton, Inline, Mono, Note, Panel, Stat, StatusBar, StatusIcon, StatusLegend, Terms } from '@/components/bits'
+import { crewNow, elapsedLabel, TimeBar, TimeHelp } from '@/components/TimeSplit'
 import { AgentRow } from '@/components/AgentRow'
 import { JournalRow } from '@/components/JournalRow'
 import type { Doc } from '@/components/DocSheet'
@@ -70,28 +72,18 @@ function TimingMini({ state, goTab }: { state: State; goTab: (t: Tab) => void })
   const t = state.current?.timing
   if (!t) return null
   const r = rates(state)
-  const parts = [
-    { k: 'busy', v: t.busy, rate: r.busy, cls: 'bg-ph-build', label: 'agents at work' },
-    { k: 'idle', v: t.idle, rate: r.idle, cls: 'bg-st-progress/60', label: 'lead and waiting' },
-    { k: 'slept', v: t.slept, rate: 0, cls: 'bg-sleep', label: 'asleep' },
-  ]
-  const sum = t.busy + t.idle + t.slept
   return (
-    <Panel title="Timing" icon={Timer} action={<button onClick={() => goTab('timing')} className="text-xs text-muted-foreground hover:text-foreground">Details →</button>}>
-      <div className="flex items-baseline gap-2">
-        <Duration secs={t.clock} live={r.clock > 0} className="text-2xl font-semibold tracking-tight" />
-        <span className="text-xs text-muted-foreground">
-          on the clock since {hm(t.t0)}{t.until ? `, to ${hm(t.until)}` : ''}
-        </span>
+    <Panel
+      title="Timing"
+      icon={Timer}
+      action={<button onClick={() => goTab('timing')} className="text-xs text-muted-foreground hover:text-foreground">Details →</button>}
+      help={<TimeHelp t={t} />}
+    >
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <Duration secs={t.active} live={r.active > 0} className="text-2xl font-semibold tracking-tight" />
+        <span className="text-xs text-muted-foreground">crew at work, of {span(t.clock)} elapsed {elapsedLabel(t, state.today)}</span>
       </div>
-      <div className="mt-2.5 flex h-2 w-full overflow-hidden rounded-full bg-muted">
-        {sum > 0 && parts.map((p) => p.v > 0 && <div key={p.k} className={`h-full ${p.cls}`} style={{ width: `${(p.v * 100) / sum}%` }} title={`${p.label} ${span(p.v)}`} />)}
-      </div>
-      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[11.5px] text-muted-foreground">
-        {parts.map((p) => (
-          <span key={p.k} className="inline-flex items-center gap-1.5"><span className={`size-2 rounded-sm ${p.cls}`} />{p.label} <Duration secs={p.v} live={p.rate > 0} className="text-foreground" /></span>
-        ))}
-      </div>
+      <div className="mt-2.5"><TimeBar t={t} r={r} values="time" now={crewNow(state, r)} /></div>
       {t.taskTime > 0 && t.criticalPath.ids.length > 0 && (
         <p className="mt-2.5 text-xs text-muted-foreground">
           Critical path <span className="tabular text-foreground">{span(t.criticalPath.seconds)}</span> of <Duration secs={t.taskTime} live={r.taskTime > 0} rate={r.taskTime} /> task time
@@ -103,20 +95,43 @@ function TimingMini({ state, goTab }: { state: State; goTab: (t: Tab) => void })
 }
 
 function KeepAwake({ state }: { state: State }) {
+  const [open, setOpen] = useState(false)
   const k = state.keepAwake
   if (!k) return null
   const text = k.on
-    ? k.mode === '12h' ? 'Keeping the Mac awake for 12 hours (no Claude process to watch).' : 'Keeping the Mac awake while Claude runs.'
-    : k.stopped ? 'Not keeping the Mac awake: you stopped the run.' : 'Not keeping the Mac awake.'
+    ? `Keeping the Mac awake ${k.mode === '12h' ? 'for 12 hours' : 'while Claude Code runs'}${k.since ? `, since ${when(k.since, state.today)}` : ''}.`
+    : `Not keeping the Mac awake: ${
+      k.stopped ? 'you stopped the crew.' : state.lead.state === 'closed' ? 'Claude Code is closed.' : 'no crew session has turned it on since Claude Code started.'
+    }`
   return (
-    <div className="flex items-start gap-2.5 rounded-xl border bg-card px-3.5 py-2.5 text-[12.5px] shadow-xs">
-      <Coffee className={k.on ? 'mt-0.5 size-4 shrink-0 text-st-progress' : 'mt-0.5 size-4 shrink-0 text-muted-foreground'} />
-      <div className="flex flex-col gap-0.5">
-        <span>{text}</span>
-        {k.on && k.battery && (
-          <span className="inline-flex items-center gap-1 text-xs text-st-rework"><BatteryWarning className="size-3.5" /> On battery: macOS may still sleep when the lid closes.</span>
-        )}
+    <div className="rounded-xl border bg-card px-3.5 py-2.5 text-[12.5px] shadow-xs">
+      <div className="flex items-start gap-2.5">
+        <Coffee className={k.on ? 'mt-0.5 size-4 shrink-0 text-st-progress' : 'mt-0.5 size-4 shrink-0 text-muted-foreground'} />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span>{text}</span>
+          {k.on && k.battery && (
+            <span className="inline-flex items-center gap-1 text-xs text-st-rework"><BatteryWarning className="size-3.5" /> On battery: macOS may still sleep when the lid closes.</span>
+          )}
+        </div>
+        <HelpButton open={open} onClick={() => setOpen(!open)} />
       </div>
+      {open && (
+        <HelpBody className="mt-2">
+          <p>
+            So a long set isn't cut short by the Mac falling asleep, crew holds a macOS <Mono>caffeinate</Mono> assertion while it works: no
+            idle sleep, and no system sleep on mains power. The display can still turn off.
+          </p>
+          <Terms
+            items={[
+              ['Turns on', <>When the crew starts or resumes (<Mono>crew session start</Mono>, the first thing /crew runs). It watches that Claude Code process.</>],
+              ['Turns off', <>When that Claude Code process exits, when you stop the crew (<Mono>/crew stop</Mono>), or never turns on with <Mono>CREW_KEEP_AWAKE=0</Mono> in the environment.</>],
+              ['12 hours', 'When crew cannot find the Claude Code process to watch, it holds for 12 hours instead.'],
+              ['On battery', 'Closing the lid still sleeps a Mac on battery; keep it open or plugged in.'],
+            ]}
+          />
+          <p>This card shows what crew holds right now, checked at each update of the page (at least once a minute).</p>
+        </HelpBody>
+      )}
     </div>
   )
 }

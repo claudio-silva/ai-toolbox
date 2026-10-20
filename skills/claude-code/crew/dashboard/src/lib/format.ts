@@ -59,6 +59,11 @@ export function dayLabel(d: string, today: string): string {
   return dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
 }
 
+// A project's folder name as a title: "sublimewriter" → "Sublimewriter".
+export function capital(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s
+}
+
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`
 }

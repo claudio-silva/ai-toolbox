@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react'
+import { Fragment, useState, type ReactNode } from 'react'
 import {
-  Circle, CircleCheckBig, CircleSlash, LoaderCircle, RotateCw, Eye,
+  ChevronRight, Circle, CircleCheckBig, CircleHelp, CircleSlash, LoaderCircle, RotateCw, Eye,
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -62,25 +62,31 @@ export function StatusLegend({ counts }: { counts: Counts }) {
 
 // ---- layout ----
 
-export function Panel({ title, icon: Icon, action, children, className, bodyClassName }: {
+export function Panel({ title, icon: Icon, action, help, children, className, bodyClassName }: {
   title?: ReactNode
   icon?: LucideIcon
   action?: ReactNode
+  help?: ReactNode
   children: ReactNode
   className?: string
   bodyClassName?: string
 }) {
+  const [open, setOpen] = useState(false)
   return (
     <section className={cn('rounded-xl border bg-card text-card-foreground shadow-xs', className)}>
-      {(title || action) && (
-        <header className="flex items-center justify-between gap-3 px-4 pt-3.5 pb-1">
+      {(title || action || help) && (
+        <header className="flex items-center justify-between gap-2 px-4 pt-3.5 pb-1">
           <h2 className="flex min-w-0 items-center gap-2 text-[13px] font-semibold tracking-tight">
             {Icon && <Icon className="size-4 shrink-0 text-muted-foreground" />}
             <span className="truncate">{title}</span>
           </h2>
-          {action}
+          <span className="flex shrink-0 items-center gap-1">
+            {action}
+            {help && <HelpButton open={open} onClick={() => setOpen(!open)} />}
+          </span>
         </header>
       )}
+      {help && open && <HelpBody className="mx-4 mt-2">{help}</HelpBody>}
       <div className={cn('px-4 pt-2 pb-4', bodyClassName)}>{children}</div>
     </section>
   )
@@ -146,6 +152,67 @@ export function Dot({ className, pulse }: { className?: string; pulse?: boolean 
 
 export function Note({ children }: { children: ReactNode }) {
   return <p className="px-1 text-[11.5px] leading-relaxed text-muted-foreground">{children}</p>
+}
+
+// ---- explanations ----
+// The page explains itself in disclosures that take no room until opened: the "?" in a panel's
+// header (Panel's `help`), or an Explain row under a group. Open, they show formatted text:
+// short paragraphs, small headings and term lists.
+
+export function HelpButton({ open, onClick, label = 'What this shows' }: { open: boolean; onClick: () => void; label?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={open}
+      aria-label={open ? 'Hide the explanation' : label}
+      className={cn(
+        'grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+        open && 'bg-accent text-foreground',
+      )}
+    >
+      <CircleHelp className="size-3.5" />
+    </button>
+  )
+}
+
+export function HelpBody({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={cn('flex flex-col gap-2 rounded-lg bg-muted/60 px-3 py-2.5 text-[12px] leading-relaxed text-muted-foreground', className)}>
+      {children}
+    </div>
+  )
+}
+
+export function HelpHead({ children }: { children: ReactNode }) {
+  return <h3 className="text-[10.5px] font-semibold tracking-wide text-foreground/80 uppercase">{children}</h3>
+}
+
+// A definition list: [term, what it means].
+export function Terms({ items }: { items: [ReactNode, ReactNode][] }) {
+  return (
+    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
+      {items.map(([t, d], i) => (
+        <Fragment key={i}>
+          <dt className="max-w-32 font-medium text-foreground">{t}</dt>
+          <dd>{d}</dd>
+        </Fragment>
+      ))}
+    </dl>
+  )
+}
+
+export function Explain({ title = 'What these mean', children, className }: { title?: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <details className={cn('group', className)}>
+      <summary className="inline-flex list-none items-center gap-1.5 rounded-md px-1 py-0.5 text-[11.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+        <CircleHelp className="size-3.5" />
+        {title}
+        <ChevronRight className="size-3 transition-transform group-open:rotate-90" />
+      </summary>
+      <HelpBody className="mt-1.5">{children}</HelpBody>
+    </details>
+  )
 }
 
 // One line of crew Markdown: `code` and **bold**, nothing else (queue, defect and journal text).

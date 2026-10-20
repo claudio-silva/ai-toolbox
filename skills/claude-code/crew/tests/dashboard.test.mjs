@@ -100,6 +100,20 @@ function png(w, h) {
   return b;
 }
 
+test('computeTiming: the split of the elapsed time, and where it ends', () => {
+  const tasks = [{ id: 'T01', num: 1, depNums: [] }];
+  const runs = [{ start: 1000, end: 1600, id: 'a', type: 'builder', task: '1', kind: 'first', status: 'DONE' }];
+  // The lead worked 900-1100 (overlapping the run by 100 s) and 1700-1800, then waited.
+  const leadWork = M.leadWorkIntervals([{ at: 900, state: 'working' }, { at: 1100, state: 'idle' }, { at: 1700, state: 'working' }, { at: 1800, state: 'idle' }], 9000);
+  assert.deepEqual(leadWork, [[900, 1100], [1700, 1800]]);
+  const base = { tasks, runs, sleeps: [], start: 900, now: 9000, leadWork };
+  const open = M.computeTiming(base);
+  assert.deepEqual([open.until, open.clock, open.busy, open.leadAlone, open.active, open.idle], [null, 8100, 600, 200, 800, 7300]);
+  // Claude Code closed at 2000: nothing grows after it.
+  const closed = M.computeTiming({ ...base, closedAt: 2000 });
+  assert.deepEqual([closed.until, closed.clock, closed.active, closed.idle], [2000, 1100, 800, 300]);
+});
+
 test('imageSize and projectIcon: square images only, the most icon-like first, dependencies skipped', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'crew-icon-'));
   const put = (rel, data) => {

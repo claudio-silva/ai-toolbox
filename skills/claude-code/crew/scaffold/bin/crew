@@ -16,9 +16,12 @@
 #                                       and journal it.
 #   crew defect D<n> --status deferred|scheduled|fixed|dropped [--promote] [--slot <y>] [--note <t>]
 #                                       Move a defect along; --promote marks one that bit other
-#                                       work (status scheduled). Journals the transition.
+#                                       work (status scheduled). The note stays on the line
+#                                       ("note: as T13"). Journals the transition.
 #   crew session start [<session-id>]   Register a crew session (empty id: wildcard "any"),
-#                                       keep the computer awake while Claude Code runs (macOS
+#                                       record its Claude Code process, close the runs of
+#                                       subagents whose process has ended, mark the lead as
+#                                       working, keep the computer awake while Claude Code runs (macOS
 #                                       caffeinate; CREW_KEEP_AWAKE=0 turns it off) and start the
 #                                       dashboard. Prints "Open the dashboard at <url>" when this
 #                                       session started it, here or through its SessionStart hook.
@@ -78,6 +81,14 @@
 #   - Every subagent run (a start or a resume, to its stop) is one line in
 #     tmp/journal-state/runs.tsv: start, end, agent id, type, task number (from the
 #     description's leading T<NN>), first|resume, status keyword.
+#   - The lead's state changes (working at a prompt, idle at its Stop, stopped) are lines in
+#     tmp/journal-state/lead.tsv: epoch, state. Time with the lead working and no subagent
+#     running is the lead's own time.
+#   - Each session's Claude Code process id is kept in tmp/journal-state/claude/<session>, and
+#     each running subagent's session in running/<id>. Subagents run inside that process: when
+#     it is gone (Claude Code quit or crashed), its subagents are no longer running. The next
+#     `crew session start`, or the session's next SessionStart in a new process, records their
+#     runs as "interrupted", ending at their transcript's last write.
 #   - Every crew event samples two clocks: the wall clock and the awake-time clock (macOS: the
 #     mach absolute clock, which stops while the computer sleeps). Wall time minus awake time
 #     between two samples is time asleep; 2 min or more is journaled and kept in
@@ -142,7 +153,7 @@ set_paths() {
 ensure_dirs() {
   mkdir -p "$TMP_DIR" "$CREW_DIR/task-data" "$STATE/sessions" "$STATE/pending" \
     "$STATE/agents" "$STATE/running" "$STATE/transcripts" "$STATE/lead-model" \
-    "$STATE/compact/scan" "$STATE/index-rows" "$STATE/set-start" 2>/dev/null
+    "$STATE/compact/scan" "$STATE/index-rows" "$STATE/set-start" "$STATE/claude" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -205,6 +216,7 @@ epoch_to_day() { REPLY=$(date -r "$1" '+%Y-%m-%d' 2>/dev/null || date -d "@$1" '
 
 # file_size PATH -> prints the size in bytes (fails when the file is missing).
 file_size() { stat -f %z "$1" 2>/dev/null || stat -c %s "$1" 2>/dev/null; }
+file_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null; }
 
 # fmt_k 166954 -> REPLY "167k"; fmt_secs 6600 -> REPLY "1 h 50 min".
 fmt_k() { REPLY=$(awk -v n="${1:-0}" 'BEGIN { if (n >= 1000) printf "%dk", int(n / 1000 + 0.5); else printf "%d", n }'); }
@@ -360,31 +372,108 @@ keep_awake_stop() {
   return 0
 }
 
-# keep_awake_start: hold a caffeinate assertion (-i: no idle sleep; -s: no system sleep on AC
-# power) for as long as the Claude Code process that runs this session lives, found by walking
-# up the process tree; 12 hours when it cannot be found. Closing the lid on battery still
-# sleeps a Mac. Writes "<caffeinate pid> <watched pid | 12h>" to $STATE/keep-awake.
-keep_awake_start() {
-  local pid=$PPID target="" comm args i
-  keep_awake_stop
-  [ "${CREW_KEEP_AWAKE:-1}" != 0 ] || return 0
-  command -v caffeinate >/dev/null 2>&1 || return 0
+# claude_pid -> REPLY: the Claude Code process this command runs under, found by walking up
+# the process tree; empty when there is none. CREW_CLAUDE_PID overrides it (tests).
+claude_pid() {
+  local pid=$PPID comm args i
+  REPLY=${CREW_CLAUDE_PID:-}
+  [ -z "$REPLY" ] || return 0
   for i in 1 2 3 4 5 6 7 8; do
     case "$pid" in ''|*[!0-9]*) break ;; esac
     [ "$pid" -gt 1 ] || break
     comm=$(ps -o comm= -p "$pid" 2>/dev/null)
     args=$(ps -o args= -p "$pid" 2>/dev/null)
     case "${comm##*/} $args" in
-      'claude '*|*claude-code*|*@anthropic-ai/claude*) target=$pid; break ;;
+      'claude '*|*claude-code*|*@anthropic-ai/claude*) REPLY=$pid; return 0 ;;
     esac
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
   done
+}
+
+# claude_alive PID: the process runs and is Claude Code (not a reused pid).
+claude_alive() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$1" 2>/dev/null || return 1
+  case $(ps -o args= -p "$1" 2>/dev/null) in *claude*) return 0 ;; esac
+  return 1
+}
+
+# keep_awake_start: hold a caffeinate assertion (-i: no idle sleep; -s: no system sleep on AC
+# power) for as long as the Claude Code process that runs this session lives; 12 hours when it
+# cannot be found. Closing the lid on battery still sleeps a Mac. Writes "<caffeinate pid>
+# <watched pid | 12h>" to $STATE/keep-awake.
+keep_awake_start() {
+  local target
+  keep_awake_stop
+  [ "${CREW_KEEP_AWAKE:-1}" != 0 ] || return 0
+  command -v caffeinate >/dev/null 2>&1 || return 0
+  claude_pid; target=$REPLY
   if [ -n "$target" ]; then
     nohup caffeinate -i -s -w "$target" >/dev/null 2>&1 &
   else
     nohup caffeinate -i -s -t 43200 >/dev/null 2>&1 &
   fi
   printf '%s %s\n' "$!" "${target:-12h}" > "$STATE/keep-awake"
+}
+
+# note_claude SESSION: record the Claude Code process running SESSION in $STATE/claude/<SESSION>,
+# so the dashboard can tell a crew that stopped with it from one at work. When the session had
+# another process before (a restart or --resume), the subagents it was running ended with it.
+note_claude() {
+  local f="$STATE/claude/$1" old=""
+  [ -n "$1" ] || return 0
+  claude_pid
+  [ -n "$REPLY" ] || return 0
+  old=$(cat "$f" 2>/dev/null)
+  [ "$old" != "$REPLY" ] || return 0
+  printf '%s\n' "$REPLY" > "$f"
+  [ -z "$old" ] || reap_orphans "$1"
+}
+
+# reap_orphans [SESSION]: close the runs of subagents whose Claude Code process has ended
+# (subagents run inside it, so they ended too): recorded as "interrupted" at their transcript's
+# last write, and journaled. With SESSION, that session's subagents; without, those of every
+# session whose recorded process is gone.
+reap_orphans() {
+  local f id sess pid tp at start
+  for f in "$STATE/running"/*; do
+    [ -e "$f" ] || continue
+    id=${f##*/}
+    sess=$(cat "$f" 2>/dev/null)
+    [ -n "$sess" ] || continue
+    if [ -n "${1:-}" ]; then
+      [ "$sess" = "$1" ] || continue
+    else
+      pid=$(cat "$STATE/claude/$sess" 2>/dev/null)
+      [ -n "$pid" ] || continue
+      claude_alive "$pid" && continue
+    fi
+    load_agent "$id" || A_TYPE=unknown
+    start=${A_RUN_START:-$A_STARTED}
+    tp=$(cat "$STATE/transcripts/$sess" 2>/dev/null)
+    at=""
+    [ -z "$tp" ] || at=$(file_mtime "${tp%.jsonl}/subagents/agent-$id.jsonl")
+    [ -n "$at" ] || [ -z "$tp" ] || at=$(file_mtime "$tp")
+    # No transcript to date it: the lead's last state change, while that process still ran
+    # (never now: the gap since may be hours with nothing running).
+    case "$at" in ''|*[!0-9]*) at=$(tail -n 1 "$STATE/lead.tsv" 2>/dev/null | cut -f 1) ;; esac
+    case "$at" in ''|*[!0-9]*) at=${start:-} ;; esac
+    case "$at" in ''|*[!0-9]*) now_parts; at=$NOW_EPOCH ;; esac
+    case "$start" in ''|*[!0-9]*) ;; *) [ "$at" -ge "$start" ] || at=$start ;; esac
+    record_run "$id" "$start" "${A_TYPE:-unknown}" "$A_DESC" interrupted "$at"
+    rm -f "$f"
+    JOURNAL_AT=$at journal_append "← ${A_TYPE:-unknown}" "interrupted${A_DESC:+ · $A_DESC} (its Claude Code session ended)"
+  done
+}
+
+# lead_log STATE: append "<epoch>\t<working|idle|stopped>" to lead.tsv when the lead's state
+# changes, for the dashboard's lead time.
+lead_log() {
+  local last
+  now_parts
+  last=$(tail -n 1 "$STATE/lead.tsv" 2>/dev/null)
+  [ "${last#*$TAB}" != "$1" ] || return 0
+  printf '%s\t%s\n' "$NOW_EPOCH" "$1" >> "$STATE/lead.tsv"
 }
 
 # ---------------------------------------------------------------------------
@@ -997,13 +1086,14 @@ task_num() {
 }
 
 # record_run ID START TYPE DESC STATUS: append one finished run to runs.tsv (see the header).
-record_run() {
-  local kind=first
+record_run() {  # ID START TYPE DESC STATUS [END, default now]
+  local kind=first end
   case "$2" in ''|*[!0-9]*) return 0 ;; esac
   now_parts
+  end=${6:-$NOW_EPOCH}
   if [ -f "$RUNS" ] && awk -F'\t' -v id="$1" '$3 == id { f = 1 } END { exit !f }' "$RUNS"; then kind=resume; fi
   task_num "$4"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$2" "$NOW_EPOCH" "$1" "${3:-unknown}" "$REPLY" "$kind" "$5" >> "$RUNS"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$2" "$end" "$1" "${3:-unknown}" "$REPLY" "$kind" "$5" >> "$RUNS"
 }
 
 hook_agent_start() {
@@ -1042,16 +1132,18 @@ hook_agent_resume() {
 }
 
 hook_agent_id() {
-  local id pfile rec desc model effort name
+  local id pfile rec desc model effort name sess=""
   [ -n "$J_AGENT_TYPE" ] && [ -n "$J_AGENT_ID" ] || return 0
   ensure_dirs
   lock_take
+  # running/<id> holds the session whose Claude Code process runs the agent.
+  [ -z "$J_SESSION" ] || { safe_name "$J_SESSION"; sess=$REPLY; }
   safe_name "$J_AGENT_ID"; id=$REPLY
   if [ -f "$STATE/agents/$id" ]; then
     # A resume: the agent is already known; it is running again, in a new run.
     now_parts
     printf 'run_start=%s\n' "$NOW_EPOCH" >> "$STATE/agents/$id"
-    : > "$STATE/running/$id"
+    printf '%s\n' "$sess" > "$STATE/running/$id"
     return 0
   fi
   now_parts
@@ -1081,7 +1173,7 @@ hook_agent_id() {
     printf 'since=%s\n' "$NOW_HM"
     printf 'run_start=%s\n' "$NOW_EPOCH"
   } > "$STATE/agents/$id"
-  : > "$STATE/running/$id"
+  printf '%s\n' "$sess" > "$STATE/running/$id"
 }
 
 hook_agent_stop() {
@@ -1129,7 +1221,7 @@ hook_lead() {  # $1 = working | idle
   # "stopped" (crew session stop) sticks until `crew session start` runs again (/crew resume).
   case $(cat "$STATE/lead" 2>/dev/null) in
     stopped*) ;;
-    *) printf '%s %s %s\n' "$1" "$NOW_HM" "$NOW_EPOCH" > "$STATE/lead" ;;
+    *) printf '%s %s %s\n' "$1" "$NOW_HM" "$NOW_EPOCH" > "$STATE/lead"; lead_log "$1" ;;
   esac
   [ "$1" = working ] || return 0
   # UserPromptSubmit: while work is in flight, one line keeps founder requests out of running agents.
@@ -1148,8 +1240,12 @@ hook_session_start() {
   ensure_dirs
   safe_name "$J_SESSION"
   printf '%s %s\n' "$J_HOOK_MODEL" "$J_EFFORT_LVL" > "$STATE/lead-model/$REPLY" 2>/dev/null
+  local sess=$REPLY
   remember_transcript "$J_SESSION" "$J_TRANSCRIPT"
-  dashboard_autostart "$REPLY"
+  lock_take
+  note_claude "$sess"
+  lock_release
+  dashboard_autostart "$sess"
 }
 
 # PreCompact: guess who is compacting, leave a note for the SessionStart(compact) hook that
@@ -1397,16 +1493,23 @@ cmd_defect() {
       fi
       grep -q -E "^[[:space:]]*- \[$text\]" "$DEFECTS" || { printf 'crew defect: no entry %s in %s\n' "$text" "$DEFECTS" >&2; return 1; }
       queue_field "$slot"; slot=$REPLY
+      queue_field "$note"; note=$REPLY
       tmp="$DEFECTS.new"
-      awk -v id="$text" -v st="$status" -v slot="$slot" -v prom="$promote" '
+      # The note stays last on the line ("note: as T13"), and an older one stays until replaced.
+      # It reaches awk through the environment: -v would read backslashes as escapes.
+      CREW_NOTE=$note awk -v id="$text" -v st="$status" -v slot="$slot" -v prom="$promote" '
         !done && $0 ~ ("^[ \t]*- \\[" id "\\]") {
+          note = ENVIRON["CREW_NOTE"]; at = index($0, " · note: ")
+          if (at) { if (note == "") note = substr($0, at + length(" · note: ")); $0 = substr($0, 1, at - 1) }
           if ($0 !~ /· status: /) $0 = $0 " · status: deferred"
           sub(/· status: [A-Za-z]+/, "· status: " st)
           if (slot != "") {
             if ($0 ~ /· slot: /) sub(/· slot: [^·]*/, "· slot: " slot " "); else sub(/· status: /, "· slot: " slot " · status: ")
           }
           if (prom == 1 && $0 !~ /· promoted/) $0 = $0 " · promoted"
-          gsub(/  +·/, " ·"); done = 1
+          gsub(/  +·/, " ·")
+          if (note != "") $0 = $0 " · note: " note
+          done = 1
         }
         { print }' "$DEFECTS" > "$tmp" && mv -f "$tmp" "$DEFECTS"
       line=$(grep -m 1 -E "^[[:space:]]*- \[$text\]" "$DEFECTS")
@@ -1462,10 +1565,15 @@ cmd_session() {
       if [ -n "$sid" ]; then safe_name "$sid"; sid=$REPLY; else sid=any; fi
       touch "$STATE/sessions/$sid"
       clock_sample
+      note_claude "$sid"
+      reap_orphans
       keep_awake_start
       # Prune registrations (and per-session notes) older than 30 days.
-      find "$STATE/sessions" "$STATE/lead-model" "$STATE/transcripts" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
-      rm -f "$STATE/lead" 2>/dev/null
+      find "$STATE/sessions" "$STATE/lead-model" "$STATE/transcripts" "$STATE/claude" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
+      # The lead is at work: it is running this command (this also clears "stopped").
+      now_parts
+      printf 'working %s %s\n' "$NOW_HM" "$NOW_EPOCH" > "$STATE/lead"
+      lead_log working
       lock_release
       settle_compactions
       lock_release
@@ -1476,6 +1584,7 @@ cmd_session() {
       now_parts
       # Sticky until the next `crew session start`; the hooks leave it alone.
       printf 'stopped %s %s\n' "$NOW_HM" "$NOW_EPOCH" > "$STATE/lead"
+      lead_log stopped
       keep_awake_stop
       lock_release
       printf 'Crew marked as stopped at %s\n' "$NOW_HM" ;;

@@ -3,7 +3,7 @@ import { Bot, Crown, Shrink } from 'lucide-react'
 import type { Compaction, State } from '@/lib/types'
 import { kTokens, modelShort, span, usd, when } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { Chip, Empty, Mono, Note, Panel, Stat } from '@/components/bits'
+import { Chip, Empty, Explain, HelpHead, Mono, Panel, Stat, Terms } from '@/components/bits'
 import { EChart, cssColor, type EOption } from '@/components/EChart'
 
 function Chart({ rows, today, dark }: { rows: Compaction[]; today: string; dark: boolean }) {
@@ -114,11 +114,37 @@ export function Compactions({ state, dark }: { state: State; dark: boolean }) {
   const max = Math.max(1, ...c.rows.map((r) => r.pre))
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-        <Stat icon={Crown} label="Lead" value={s.lead.count} sub={s.lead.count ? `at ~${kTokens(s.lead.avgPre)}${s.lead.interval ? ` · every ~${span(s.lead.interval)}` : ''}` : 'none'} />
-        <Stat icon={Bot} label="Agents" value={s.sub.count} sub={s.sub.count ? `at ~${kTokens(s.sub.avgPre)}${s.sub.afterStart ? ` · ~${span(s.sub.afterStart)} in` : ''}` : 'none'} />
-        <Stat label="Overhead" value={usd(s.overhead)} sub="summarising" />
-        <Stat label="Net" value={usd(s.net)} sub={s.saved != null ? `saved ${usd(s.saved)} so far` : 'savings unknown'} tone={s.net == null ? undefined : s.net >= 0 ? 'good' : 'bad'} />
+      <div className="flex flex-col gap-2.5">
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+          <Stat icon={Crown} label="Lead" value={s.lead.count} sub={s.lead.count ? `at ~${kTokens(s.lead.avgPre)}${s.lead.interval ? ` · every ~${span(s.lead.interval)}` : ''}` : 'none'} />
+          <Stat icon={Bot} label="Agents" value={s.sub.count} sub={s.sub.count ? `at ~${kTokens(s.sub.avgPre)}${s.sub.afterStart ? ` · ~${span(s.sub.afterStart)} in` : ''}` : 'none'} />
+          <Stat label="Overhead" value={usd(s.overhead)} sub="summarising" />
+          <Stat label="Net" value={usd(s.net)} sub={s.saved != null ? `saved ${usd(s.saved)} so far` : 'savings unknown'} tone={s.net == null ? undefined : s.net >= 0 ? 'good' : 'bad'} />
+        </div>
+        <Explain>
+          <p>
+            When the lead's or an agent's context fills up, Claude Code compacts it: it summarises the conversation so far and carries on from the
+            summary. A compaction costs one summarising request, and every later request in that session is cheaper because it carries less.
+          </p>
+          <Terms
+            items={[
+              ['Lead, Agents', 'How many compactions, the average context size when they happened, and how often (the lead) or how far into a run (agents).'],
+              ['Overhead', 'What the summarising requests cost.'],
+              ['Saved', 'What the requests after each compaction would have paid to carry the context it dropped. It grows while the session goes on.'],
+              ['Net', 'Saved minus overhead: green once compacting has paid for itself.'],
+              ['auto, manual', 'What triggered it: the context filled up, or /compact.'],
+              ['turns since', 'Requests made after it; "counting" while that session goes on.'],
+            ]}
+          />
+          <p>
+            Estimates at Anthropic list prices, with a warm cache. Not measured: files re-read after a compaction, and detail the summary lost.
+          </p>
+          <HelpHead>Tuning</HelpHead>
+          <p>
+            Change when compaction happens with <Mono>/autocompact &lt;size&gt;</Mono>, <Mono>modelSettings</Mono>, or{' '}
+            <Mono>autoCompactWindow</Mono> in an agent definition (see <Mono>.crew/README.md</Mono>).
+          </p>
+        </Explain>
       </div>
 
       <Panel
@@ -141,11 +167,6 @@ export function Compactions({ state, dark }: { state: State; dark: boolean }) {
         <ul className="divide-y divide-border/60">{recent.map((r) => <Row key={`${r.epoch}-${r.id}`} r={r} today={state.today} max={max} />)}</ul>
       </Panel>
 
-      <Note>
-        Estimates at Anthropic list prices, warm cache. Overhead: the summarisation request. Saved: what later requests would have paid to carry the
-        dropped context. Not measured: re-reads after a compaction and lost detail. Tune windows with <Mono>/autocompact &lt;size&gt;</Mono>,{' '}
-        <Mono>modelSettings</Mono>, or <Mono>autoCompactWindow</Mono> in an agent definition (see <Mono>.crew/README.md</Mono>).
-      </Note>
     </div>
   )
 }

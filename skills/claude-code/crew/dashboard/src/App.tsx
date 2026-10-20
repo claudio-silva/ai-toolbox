@@ -7,6 +7,7 @@ import { TaskSheet } from '@/components/TaskSheet'
 import { DocSheet, type Doc } from '@/components/DocSheet'
 import { EventToasts } from '@/components/EventToasts'
 import { ClockBase } from '@/lib/clock'
+import { capital } from '@/lib/format'
 import { Overview } from '@/tabs/Overview'
 import { Tasks } from '@/tabs/Tasks'
 import { Timing } from '@/tabs/Timing'
@@ -39,7 +40,7 @@ export default function App() {
     if (!state) return
     const cur = state.current
     const done = cur ? `${cur.accepted}/${cur.total}` : ''
-    document.title = `${done ? `${done} · ` : ''}${state.repo.name} · Crew`
+    document.title = `${done ? `${done} · ` : ''}${capital(state.repo.name)} · Crew`
   }, [state])
 
   const badges = useMemo(() => {
@@ -88,9 +89,9 @@ export default function App() {
             <div key={tab} className="animate-in fade-in-0 duration-200">
               {tab === 'overview' && <Overview state={state} goTab={setTab} onTask={setTaskId} onDoc={setDoc} />}
               {tab === 'tasks' && <Tasks state={state} onTask={setTaskId} onDoc={setDoc} />}
-              {tab === 'timing' && <Timing state={state} dark={dark} onTask={setTaskId} />}
+              {tab === 'timing' && <Timing state={state} dark={dark} onTask={setTaskId} goTab={setTab} />}
               {tab === 'queue' && <Queue state={state} />}
-              {tab === 'defects' && <Defects state={state} />}
+              {tab === 'defects' && <Defects state={state} onTask={setTaskId} />}
               {tab === 'compactions' && <Compactions state={state} dark={dark} />}
               {tab === 'journal' && <Journal state={state} />}
               {tab === 'sets' && <Sets state={state} onDoc={setDoc} />}

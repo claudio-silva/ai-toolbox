@@ -5,3 +5,4 @@ Leaf defects that reviews and QA found and the lead deferred: low or medium seve
 ## Defects
 
 <!-- - [D1] 2026-10-19 · <symptom, as a user would see it> · where: <surface or files> · from: T04 review · severity: low · slot: end of set · status: deferred -->
+<!-- A transition rewrites the status and keeps its --note last: · status: scheduled · note: as T13 (· promoted when deferring it backfired) -->

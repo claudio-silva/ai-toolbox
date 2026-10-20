@@ -21,7 +21,11 @@
     "Stop": [
       { "hooks": [ { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.crew/bin/crew", "args": ["hook", "lead-idle"] } ] }
     ],
+    "PreCompact": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.crew/bin/crew", "args": ["hook", "pre-compact"] } ] }
+    ],
     "SessionStart": [
+      { "matcher": "startup|resume|clear|fork", "hooks": [ { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.crew/bin/crew", "args": ["hook", "session-start"] } ] },
       { "matcher": "compact", "hooks": [ { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.crew/bin/crew", "args": ["hook", "compact"] } ] }
     ]
   }

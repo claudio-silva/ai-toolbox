@@ -45,6 +45,36 @@ A 1M window is therefore a safety margin, not a target. Long memory belongs in *
 
 Rule: if losing your context right now would lose a decision, write it down now.
 
-## Handoff
+## Compaction: what survives, and how crew keeps its rules in context
 
-The founder rolls the session over with `/crew handoff`, then `/clear`, then `/crew resume` (`commands/handoff.md`, `commands/resume.md`).
+Compaction replaces the conversation with a summary. Claude Code then re-injects from disk: the system prompt, the project-root `CLAUDE.md`, auto memory, the bodies of invoked skills (from v2.1.304, capped at 5,000 tokens per skill and 25,000 in total, oldest dropped first), up to five recently read files, and the output of `SessionStart` hooks matching `compact`. Everything else, including earlier hook context and nested or path-scoped rules, survives only as far as the summary kept it. Hooks cannot tell which agent compacted (see the comment block at the top of `.crew/bin/crew`), so every reminder is written so that it is safe for both roles.
+
+Crew relies on five layers, in this order:
+
+1. **State in files.** The state file, the plan, the index, the specs and `.crew/queue.md` hold everything that must survive. If losing context now would lose a decision, write it down now.
+2. **`CLAUDE.md`.** `/crew setup` writes a short crew block there (the pointer to `CREW.md`, the request rule, where state lives). It is re-injected after every compaction, for the lead and for subagents, and costs a few hundred tokens per session.
+3. **`SKILL.md` under 5,000 tokens (about 16 KB).** At that size Claude Code re-injects the whole skill after a compaction (v2.1.304 or later); truncation keeps the start of the file, so the rules that must survive sit near the top. If the skill's rules are no longer in your context, invoke the `crew` skill again: it costs about 4K tokens.
+4. **The compaction hooks.** `PreCompact` appends crew's instructions to the summarizer (keep the request rule, the task statuses, the live agents, unwritten decisions and the next step; for a subagent, its spec path, verified criteria, changed files and report format). `SessionStart(compact)` adds a conditional reminder: read `CREW.md`, the queue, the active index and the state file only if they are no longer in context; run `ListAgents` only if unsure which subagents are live. A subagent is reminded of its spec path, never of the lead's duties.
+5. **`UserPromptSubmit` while work is in flight.** One line per founder message reminds you to queue requests before acting on them.
+
+**Re-reads cost tokens.** After a compaction, read a file only when it is no longer in your context: the summary and the five automatic re-reads often already hold it.
+
+### Measuring compactions
+
+Every compaction is logged (`.crew/journal.md`, "Context compacted · <agent> · 267k → 14k · 57 s · auto · ≈$0.33") and tracked on the dashboard under "Compactions": how many for the lead and for subagents, the context size at which each one happened, how often (the lead: time between its compactions; subagents: time from start to compaction), and three estimates per compaction at Anthropic list prices:
+
+- **overhead** ≈ `pre × cache-read price + post × output price` (the summarization request, warm cache; a cold cache after an idle gap longer than the TTL costs up to the full input price, which hooks cannot see);
+- **saved so far** ≈ `turns since × (pre − post) × cache-read price` (what the API requests made after the compaction would have paid to carry the dropped context);
+- **net** = saved − overhead.
+
+Not measured: the re-reads an agent performs after a compaction, and the detail that the summary lost. Read the numbers with that in mind:
+
+- **Net ≤ 0 or a small "turns since"** on most rows of a role: it compacts too early for the work it does. Raise that model's window.
+- **Subagents compacting mid-task** (builders at ~170k with hours to go): the task is too big for one context, or the window is too small. Prefer smaller tasks, then a larger window for that agent.
+- **The lead compacting rarely at a very large context**: each turn is paying for context it no longer uses; a smaller window saves on every turn and the summary loses little when state is in files.
+
+Windows are set per model with `/autocompact <size>` (saved under `modelSettings.<model>.autoCompactWindow`, Claude Code v2.1.288 or later), for every model with `autoCompactWindow` in a settings file, for one subagent with `autoCompactWindow: <tokens>` in its definition's frontmatter (v2.1.296 or later), or for one launch with `--autocompact`. A 1M window is a ceiling, not a target.
+
+## Handoff and stop
+
+The founder rolls the session over with `/crew handoff`, then `/clear`, then `/crew resume` (`commands/handoff.md`, `commands/resume.md`). `/crew stop` stops every running subagent safely in the current session and waits; `/crew resume` continues from the handoff it wrote (`commands/stop.md`).

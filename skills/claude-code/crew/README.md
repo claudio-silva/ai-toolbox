@@ -18,6 +18,7 @@ You are the **founder**: you own the product's direction and taste. The main Cla
 | Send requests or corrections | Any time: the lead acknowledges in 3 lines and queues them |
 | Approve deploys, destructive data operations, pushes and spending above your budget posture | When the lead interrupts you for them |
 | Watch `.crew/status.md`; skim `.crew/journal.md` | Whenever you like; nothing waits on it |
+| Run `/crew stop`, then `/crew resume` | When you want everything stopped safely, and later continued in the same session |
 | Run `/crew handoff`, `/clear`, `/crew resume` | When you want a fresh session |
 
 ### From idea to milestone
@@ -87,9 +88,10 @@ If a request makes running work pointless, the lead stops those agents at once. 
 flowchart LR
   S["/crew setup<br/>(once)"] --> R["Restart"] --> W["Work: the lead keeps going<br/>through compactions"]
   W --> H["/crew handoff<br/>(waits for running agents)"] --> C["/clear"] --> U["/crew resume"] --> W
+  W --> P["/crew stop<br/>(stops agents safely)"] --> U
 ```
 
-The lead has no context-size threshold: it rolls over only when you run `/crew handoff`. State lives in files (`docs/CREW.md`, the state file, `.crew/`), so a fresh session picks up exactly where the last one stopped.
+The lead has no context-size threshold: it rolls over only when you run `/crew handoff`. State lives in files (`docs/CREW.md`, the state file, `.crew/`), so a fresh session picks up exactly where the last one stopped. Compactions are expected: a `CLAUDE.md` block, the skill's size and the compaction hooks keep the crew's rules in context, each compaction is journaled with its cost, and the dashboard's Compactions section shows what each one saved, so you can tune the per-model compaction windows from real data (`reference/context.md`).
 
 ## What's inside
 
@@ -102,9 +104,10 @@ The lead has no context-size threshold: it rolls over only when you run `/crew h
 - **Briefs and reports** — templates for task dispatch, review, final review, debug escalation, QA, planning and advisor briefs, plus the milestone report
 - **Quality** — tests that matter over test counts, QC checkpoints, and a screenshot review rubric
 - **Git and worktree discipline** — a branch per task set, a commit per accepted task, a local merge at set close, and parallel builders in worktrees with a lifecycle that prepares each worktree (`.crew/worktree/setup.sh`) and keeps its task data when it is removed
-- **Journal and dashboard** — hooks log every subagent start, resume and finish to `.crew/journal.md`; `.crew/status.md` is a Markdown and Mermaid dashboard re-rendered on every crew event
+- **Journal and dashboard** — hooks log every subagent start, resume, finish and compaction to `.crew/journal.md`; `.crew/status.md` is a Markdown and Mermaid dashboard re-rendered on every crew event, with a Compactions section (counts, sizes, intervals, estimated overhead and savings per compaction)
+- **Compaction strategy** — state in files, a `CLAUDE.md` block and a `SKILL.md` small enough to be re-injected, `PreCompact` instructions per role, a conditional post-compaction reminder, and a one-line request reminder while work is in flight; subagents never receive the lead's instructions
 - **Task data** — screenshots, reports over the cap and logs per task in `.crew/task-data/<id>/`
-- **Commands** — `/crew setup` (scaffolds `.crew/`, merges hooks and settings, installs the agents, writes `docs/CREW.md`), `/crew handoff` and `/crew resume` for session rollover
+- **Commands** — `/crew setup` (scaffolds `.crew/`, merges hooks and settings, installs the agents, writes `docs/CREW.md`), `/crew handoff` and `/crew resume` for session rollover, `/crew stop` to stop every subagent safely (and `/crew resume` to continue)
 - **Progressive disclosure** — `SKILL.md` holds what the lead needs at every step; everything else loads only at its trigger
 
 ### The status dashboard
@@ -173,7 +176,7 @@ flowchart LR
 
 ---
 
-The full file also has a requests diagram (Queued / Scheduled / Done), the newest screenshots of the current task, every task set found, and the last handoff.
+The full file also has a requests diagram (Queued / Scheduled / Done), the Compactions section, the newest screenshots of the current task, every task set found, and the last handoff.
 
 ### The `.crew/` layout in a project
 
@@ -218,7 +221,8 @@ Claude Code only (`aitools.json` sets `platforms`): the roles rely on Claude Cod
 | `SKILL.md` | The lead's core: commands, session start, the work loop, roles, routing, lifecycle, briefs, quality, context, journal, and the Read-when table |
 | `commands/setup.md` | `/crew setup`: prerequisites, scaffold, `.gitignore`, settings and hooks, agents, `CREW.md`, verification |
 | `commands/handoff.md` | `/crew handoff`: wait for running work, write `.crew/handoff.md` |
-| `commands/resume.md` | `/crew resume`: read the handoff, check HEAD, continue |
+| `commands/resume.md` | `/crew resume`: read the handoff, check HEAD, continue (after a handoff or after `/crew stop`) |
+| `commands/stop.md` | `/crew stop`: stop every running subagent safely, record where things are, report |
 | `reference/founder.md` | The three tiers, batched questions and default-taking, the question timeout, milestones |
 | `reference/requests.md` | Handling founder messages during work: classify, assess, route, acknowledge; the queue; draining |
 | `reference/planning.md` | From idea, brainstorm or PRD to a confirmed plan; framework selection; what a crew plan must answer |
@@ -226,7 +230,7 @@ Claude Code only (`aitools.json` sets `platforms`): the roles rely on Claude Cod
 | `reference/briefs.md` | Brief and report templates |
 | `reference/roles.md` | Role cards, the model facts snapshot behind each choice, and how to refresh it |
 | `reference/testing.md` | Testing policy, QC checkpoints, screenshot review rubric |
-| `reference/context.md` | The lead's context and cost economics, and where state lives |
+| `reference/context.md` | The lead's context and cost economics, where state lives, what survives a compaction and how to read the compaction numbers |
 | `scaffold/README.md` | Copied to `<project>/.crew/README.md`: what each file is, the journal, the dashboard legend |
 | `scaffold/queue.md` | The empty request and question queue |
 | `scaffold/bin/crew` | The crew script: journal, dashboard, hook handlers, session registration, worktree setup and teardown |
@@ -237,4 +241,5 @@ Claude Code only (`aitools.json` sets `platforms`): the roles rely on Claude Cod
 | `templates/agents/*.md` | Subagent definitions copied into `<project>/.claude/agents/` by setup (advisor, builder, debugger, planner, qa, reviewer, scout, worker) |
 | `templates/CREW.md` | Template for the per-project rules file (deviations only) |
 | `templates/settings.json` | Hooks, the permission rule and `worktree.baseRef`, merged into `<project>/.claude/settings.json` |
-| `aitools.json` | Install metadata: Claude Code only |
+| `tests/hooks.sh` | Fixture tests for the crew script (compaction hooks, requests, reminders); not installed |
+| `aitools.json` | Install metadata: Claude Code only; leaves `tests/` out |

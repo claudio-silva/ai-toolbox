@@ -36,7 +36,7 @@ You own `.crew/tasks/<plan-slug>/index.md`; builders never edit it.
    - Stage by path the files the builder listed under CHANGED, plus the `.crew/` state files (index, queue, handoff, plan).
    - Commit: `T<NN> <slug>: <summary>`.
    - Set the row to `accepted`, append Facts.
-   - Drain the queue (`reference/requests.md`).
+   - Drain the queue (`reference/requests.md`): `.crew/bin/crew request R<n> --status scheduled` for each entry that becomes a task, `--status done` for one this task delivered.
    - Journal the acceptance when it closes a milestone or the set; the hooks already log each agent.
 6. **CHANGES:** set `rework`; resume the builder with the findings (counts toward its 5 follow-ups); then a fresh reviewer gets the previous findings with the new report.
 7. **Failure:** routing rule 6 in `SKILL.md`.

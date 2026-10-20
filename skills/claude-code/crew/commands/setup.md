@@ -56,7 +56,8 @@ Merge `<skill>/templates/settings.json` into `<project>/.claude/settings.json` (
 - Never remove existing keys.
 - Merge arrays by value: add a hook entry or an allow rule only when an identical one is absent.
 - Set `worktree.baseRef` to `"head"`. If it holds another value, replace it and say so: crew requires it.
-- Every hook, the `permissions.allow` rule and `worktree.baseRef` are required.
+- Every hook, the `permissions.allow` rule and `worktree.baseRef` are required. The hooks include `PreCompact` and two `SessionStart` entries (`startup|resume|clear|fork` and `compact`): they are how crew identifies who compacted and keeps its rules in context (`reference/context.md`, "Compaction").
+- An older `SessionStart` entry with matcher `compact` and the same command is identical: keep it, add the rest.
 
 Do the merge with `jq` (for example `jq -s '.[0] * .[1]'` for objects, then de-duplicate the arrays), write to a temp file, then move it into place. Validate with `jq . .claude/settings.json`. If writing or validation fails, **abort setup** with the reason.
 
@@ -87,19 +88,25 @@ Copy `<skill>/templates/agents/*.md` to `.claude/agents/`. For existing files, d
 - Show the diff, and log the migration in the crew decisions log.
 - If the state file has a handoff or "Next session" section crew used, tell the founder it is superseded by `.crew/handoff.md` and offer to remove it. Do not remove it without confirmation.
 
-## 8. Pointer
+## 8. Pointer block in `CLAUDE.md`
 
-Add this line to `CLAUDE.md`, or to `AGENTS.md` if the project uses only that file (use the real `CREW.md` path):
+Add this block to `CLAUDE.md` (or to `AGENTS.md` if the project uses only that file), with the real `CREW.md` path. The project-root `CLAUDE.md` is re-injected after every compaction, for the lead and for subagents, so these lines are the floor that survives when everything else is summarized:
 
 ```
-Multi-agent rules: docs/CREW.md (crew skill). Crew state: .crew/.
+<!-- crew:begin -->
+Multi-agent rules: docs/CREW.md (crew skill). Crew state: .crew/ (queue.md, tasks/, plans/, handoff.md).
+Crew lead (the main session): every founder request is queued first (`.crew/bin/crew request "<text>"`) and never added to a running agent; drain the queue only at task-acceptance boundaries. If the crew skill's rules are not in your context, invoke the `crew` skill.
+Crew subagents: work only from your brief and your task spec; report in the format the brief asked for.
+<!-- crew:end -->
 ```
+
+On re-runs, replace everything between the markers. If the file has the older single pointer line (`Multi-agent rules: … Crew state: .crew/.`) without markers, replace that line with the block.
 
 ## 9. Lead settings (user level)
 
 - Read the question timeout: `jq -r '.askUserQuestionTimeout // empty' ~/.claude/settings.json`.
 - If it is absent or shorter than `10m` (`60s`, `5m`), ask the founder in one `AskUserQuestion` whether to set it to `10m` ("Set to 10m (Recommended)" first). A founder who is present but busy needs time to notice and think; a founder who is away loses nothing, because the lead takes recorded defaults. Never offer a shorter value. When accepted, write it with `jq` to a temp file, move it into place, and validate with `jq .`. When declined, leave it as it is: unset means questions stay open until answered; a shorter value stays the founder's choice.
-- Recommend, without changing anything: the main session on `opus` at effort `high`; auto memory on (needed by `memory:` agents). Compaction settings are the founder's choice.
+- Recommend, without changing anything: the main session on `opus` at effort `high`; auto memory on (needed by `memory:` agents). Compaction windows are the founder's choice; the dashboard's Compactions section gives the data to tune them (`/autocompact <size>` per model, or `autoCompactWindow` in an agent definition).
 
 ## 10. Journal
 
@@ -123,19 +130,27 @@ Run each check and report pass or fail:
    ```
    adds one line; the same payload with `"session_id":"unknown"` adds nothing.
 5. `.crew/bin/crew worktree setup --dry-run` prints the steps it would run.
-6. `jq . .claude/settings.json` succeeds.
+6. `jq . .claude/settings.json` succeeds, and `jq '.hooks | keys' .claude/settings.json` lists `PreCompact`, `SessionStart`, `SubagentStart`, `SubagentStop`, `UserPromptSubmit`, `Stop`, `PreToolUse` and `PostToolUse`.
 7. `git check-ignore .crew/journal.md .crew/status.md .crew/task-data/x .crew/tmp/x` prints all 4 paths (`-q` accepts only one path).
 8. `git check-ignore -q .crew/queue.md` fails (the queue is committed).
+9. The compaction reminder is addressed to the lead when nothing runs:
+   ```
+   printf '%s' '{"session_id":"<this session id>","hook_event_name":"SessionStart","source":"compact","transcript_path":"/none"}' | .crew/bin/crew hook compact
+   ```
+   prints one line starting with `Crew: context was compacted. If any of these are no longer in your context`. It writes no journal line (the compaction record comes from the transcript, not from the hook).
+10. `.crew/bin/crew request "setup check" --dry-run` prints a `- [R1] …` line (or the next number) and changes nothing.
+11. The `CLAUDE.md` block is present: `grep -c 'crew:begin' CLAUDE.md` prints 1 (or in `AGENTS.md`).
 
 Any failure → fix it before continuing.
 
 ## 12. Next session
 
-- Agent definitions hot-reload, except when `.claude/agents/` did not exist when the session started. Hook changes are treated as needing a restart.
-- After a first setup, tell the founder to restart the session. After a re-run, only when hooks changed.
+- Agent definitions hot-reload, except when `.claude/agents/` did not exist when the session started. Hook changes are treated as needing a restart; `settings.json` hooks are read at session start.
+- After a first setup, tell the founder to restart the session. After a re-run, only when hooks changed (a re-run that adds the `PreCompact` or `SessionStart` entries does).
+- A project that patched `.crew/bin/crew` by hand (for example a stopgap for the compaction reminder) gets the skill's version in step 2; show the diff and say what the stopgap did is now handled by the script.
 - In the setup session itself, when a role's definition is not loaded yet, emulate the role: use `general-purpose`, pass the role's `model` and `effort`, and put the role file's body at the top of the brief.
 - **Check in the next session:** a trivial scout delegation returns a capped report; the journal shows its start and stop lines; the dashboard lists it under Live agents while it runs. If the stop line is missing, the session guard does not hold inside subagent hooks: report that to the founder instead of guessing.
 
 ## 13. Re-running
 
-After a skill update, run `/crew setup` again. It repeats every step; everything merges, nothing is overwritten. Journal "Re-ran crew setup".
+After a skill update, run `/crew setup` again. It repeats every step; everything merges, nothing is overwritten. Journal "Re-ran crew setup". Restart the session when hooks changed.

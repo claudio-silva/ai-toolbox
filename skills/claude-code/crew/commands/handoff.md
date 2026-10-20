@@ -1,6 +1,6 @@
 # `/crew handoff`
 
-Reader: the lead. Read on `/crew handoff`. The founder's flow is `/crew handoff`, `/clear`, `/crew resume`.
+Reader: the lead. Read on `/crew handoff`. The founder's flow is `/crew handoff`, `/clear`, `/crew resume`. To pause without a new session, the founder runs `/crew stop` instead (`commands/stop.md`).
 
 1. **Wait for running work.** Say "Preparing the handoff." Find running subagents with `ListAgents`, or `.crew/bin/crew running` when `ListAgents` is not available.
    - If any is running, say "Waiting for ongoing work to finish." Start nothing new.

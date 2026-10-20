@@ -1,6 +1,6 @@
 # T<NN> — <task title>
 
-**Flags:** judgement, cross-cutting, discovery, or none · **Depends on:** <task numbers, or nothing>
+**Flags:** judgement, cross-cutting, discovery, or none · **Depends on:** <task numbers, or nothing> · **Requests:** <R<n> from `.crew/queue.md`, or none>
 
 ## Objective
 <1–2 sentences: what changes, and what goes wrong today because it has not. Quote the plan's requirement where it applies.>

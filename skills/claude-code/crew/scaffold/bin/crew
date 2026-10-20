@@ -6,7 +6,13 @@
 #
 # Modes
 #   crew journal <text...>              Log a lead action: "- HH:MM · lead · <text>".
+#   crew request "<text>" [--affects <x>] [--slot <y>] [--urgent] [--dry-run]
+#                                       Queue a founder request as the next R<n> in
+#                                       .crew/queue.md, journal it, refresh the dashboard.
+#   crew request R<n> --status queued|scheduled|done|dropped [--slot <y>] [--affects <x>] [--note <t>]
+#                                       Move a request along; journals the transition.
 #   crew session start [<session-id>]   Register a crew session (empty id: wildcard "any").
+#   crew session stop                   Mark the crew as stopped by the founder (/crew stop).
 #   crew running                        List running subagents (kept by the hooks).
 #   crew status                         Render the dashboard .crew/status.md now.
 #   crew worktree setup [<path>] [--dry-run]
@@ -22,8 +28,9 @@
 #                                       agent-resume (PreToolUse SendMessage), agent-id
 #                                       (SubagentStart), agent-stop (SubagentStop),
 #                                       file-changed (PostToolUse Edit|Write), lead-busy
-#                                       (UserPromptSubmit), lead-idle (Stop), compact
-#                                       (SessionStart compact).
+#                                       (UserPromptSubmit), lead-idle (Stop), session-start
+#                                       (SessionStart startup|resume|clear|fork), pre-compact
+#                                       (PreCompact), compact (SessionStart compact).
 #
 # Rules that matter
 #   - Every `crew hook` mode exits 0, whatever happens: exit 2 from a PreToolUse hook
@@ -32,7 +39,21 @@
 #   - Hook modes need jq. Everything else works without it.
 #   - All files live in the main checkout of the repository (root resolution below), so
 #     hooks running in worktrees write one journal and one dashboard per repository.
+#   - Hooks never read a whole transcript: tail, grep and jq on bounded ranges only.
 #   - Set CREW_DEBUG=1 to see stderr from hook modes.
+#
+# Compactions (Claude Code 2.1.303, verified 2026-10-20)
+#   - PreCompact, SessionStart(compact) and PostCompact fire inside subagents too, but their
+#     input carries the parent's session id and the MAIN transcript path, and no agent_id or
+#     agent_type. The input cannot say who compacted. `pre-compact` guesses it from the
+#     transcripts (the agent whose newest API response carried the largest context is the one
+#     that hit its window) and `compact` cross-checks the input's `model` against the lead's
+#     model recorded by `session-start`. When unsure, the reminder is phrased for both roles;
+#     a subagent never receives the lead's instructions.
+#   - The compact_boundary record (preTokens, postTokens, durationMs, trigger) is written to
+#     the transcript AFTER the compaction hooks have run, so the detailed journal line and the
+#     compaction log are written by the next crew event ("settling"), with the compaction's
+#     own local time.
 
 # Make sure git acts on the directories we name, not on an inherited repository.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
@@ -83,7 +104,8 @@ set_paths() {
 
 ensure_dirs() {
   mkdir -p "$TMP_DIR" "$CREW_DIR/task-data" "$STATE/sessions" "$STATE/pending" \
-    "$STATE/agents" "$STATE/running" 2>/dev/null
+    "$STATE/agents" "$STATE/running" "$STATE/transcripts" "$STATE/lead-model" \
+    "$STATE/compact/scan" "$STATE/index-rows" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -128,6 +150,33 @@ now_parts() {  # sets NOW_DAY (YYYY-MM-DD), NOW_HM (HH:MM), NOW_EPOCH
   d=$(date '+%Y-%m-%d %H:%M %s')
   NOW_DAY=${d%% *}; d=${d#* }
   NOW_HM=${d%% *}; NOW_EPOCH=${d#* }
+}
+
+# iso_to_epoch "2026-10-20T07:30:54.318Z" -> REPLY epoch seconds (empty when unparsable).
+# The system's date does the conversion (BSD form first, then GNU), never arithmetic by hand.
+iso_to_epoch() {
+  local t=${1%%.*}
+  t=${t%Z}
+  REPLY=$(date -u -j -f '%Y-%m-%dT%H:%M:%S' "$t" '+%s' 2>/dev/null) ||
+    REPLY=$(date -u -d "${t}Z" '+%s' 2>/dev/null) || REPLY=""
+  case $REPLY in ''|*[!0-9]*) REPLY="" ;; esac
+}
+
+# epoch_to_hm EPOCH -> REPLY local HH:MM; epoch_to_day EPOCH -> REPLY local YYYY-MM-DD.
+epoch_to_hm() { REPLY=$(date -r "$1" '+%H:%M' 2>/dev/null || date -d "@$1" '+%H:%M' 2>/dev/null); }
+epoch_to_day() { REPLY=$(date -r "$1" '+%Y-%m-%d' 2>/dev/null || date -d "@$1" '+%Y-%m-%d' 2>/dev/null); }
+
+# file_size PATH -> prints the size in bytes (fails when the file is missing).
+file_size() { stat -f %z "$1" 2>/dev/null || stat -c %s "$1" 2>/dev/null; }
+
+# fmt_k 166954 -> REPLY "167k"; fmt_secs 6600 -> REPLY "1 h 50 min".
+fmt_k() { REPLY=$(awk -v n="${1:-0}" 'BEGIN { if (n >= 1000) printf "%dk", int(n / 1000 + 0.5); else printf "%d", n }'); }
+fmt_secs() {
+  local s=${1:-0}
+  case $s in ''|*[!0-9]*) s=0 ;; esac
+  if [ "$s" -lt 100 ]; then REPLY="$s s"
+  elif [ "$s" -lt 3600 ]; then REPLY="$((s / 60)) min"
+  else REPLY="$((s / 3600)) h $(((s % 3600) / 60)) min"; fi
 }
 
 # ---------------------------------------------------------------------------
@@ -193,8 +242,11 @@ journal_open_today() {
 }
 
 # journal_append HEAD TEXT: append "- HH:MM · HEAD[ [branch]] · TEXT", then render.
+# JOURNAL_AT=<epoch> in the environment dates the line at that moment instead of now (used
+# for compactions, which are logged when their record becomes readable). An earlier day is
+# written as "YYYY-MM-DD HH:MM".
 journal_append() {
-  local head text
+  local head text when
   oneline "$1"; head=$REPLY
   oneline "$2"; text=$REPLY
   ensure_dirs
@@ -202,10 +254,16 @@ journal_append() {
   now_parts
   writer_suffix
   journal_open_today
+  when=$NOW_HM
+  if [ -n "${JOURNAL_AT:-}" ]; then
+    epoch_to_hm "$JOURNAL_AT"; when=$REPLY
+    epoch_to_day "$JOURNAL_AT"
+    [ "$REPLY" = "$NOW_DAY" ] || when="$REPLY $when"
+  fi
   if [ -n "$text" ]; then
-    printf '%s\n' "- $NOW_HM · $head$SUFFIX · $text" >> "$JOURNAL"
+    printf '%s\n' "- $when · $head$SUFFIX · $text" >> "$JOURNAL"
   else
-    printf '%s\n' "- $NOW_HM · $head$SUFFIX" >> "$JOURNAL"
+    printf '%s\n' "- $when · $head$SUFFIX" >> "$JOURNAL"
   fi
   render_locked
 }
@@ -230,10 +288,10 @@ agent_frontmatter() {
     }' "$f" 2>/dev/null
 }
 
-# load_agent ID: sets A_TYPE A_DESC A_MODEL A_EFFORT A_NAME A_SINCE from agents/<id>.
+# load_agent ID: sets A_TYPE A_DESC A_MODEL A_EFFORT A_NAME A_SINCE A_STARTED from agents/<id>.
 load_agent() {
   local line
-  A_TYPE=""; A_DESC=""; A_MODEL=""; A_EFFORT=""; A_NAME=""; A_SINCE=""
+  A_TYPE=""; A_DESC=""; A_MODEL=""; A_EFFORT=""; A_NAME=""; A_SINCE=""; A_STARTED=""
   [ -f "$STATE/agents/$1" ] || return 1
   while IFS= read -r line; do
     case $line in
@@ -243,9 +301,429 @@ load_agent() {
       effort=*) A_EFFORT=${line#effort=} ;;
       name=*) A_NAME=${line#name=} ;;
       since=*) A_SINCE=${line#since=} ;;
+      started=*) A_STARTED=${line#started=} ;;
     esac
   done < "$STATE/agents/$1"
   return 0
+}
+
+# ---------------------------------------------------------------------------
+# Compactions: who compacted, reminders, journal lines, economics
+# ---------------------------------------------------------------------------
+
+# Prices in USD per million tokens: Anthropic list prices as read on 2026-10-20 from
+# https://platform.claude.com/docs/en/about-claude/pricing (the one place prices live;
+# update the date with the numbers). Haiku 5.5 has a second tier for prompts over 100K.
+# price_for MODEL PRE_TOKENS -> sets P_ALIAS and P_READ P_OUT P_IN P_WRITE5M (empty: unknown).
+price_for() {
+  model_alias "$1"; P_ALIAS=$REPLY
+  P_READ=""; P_OUT=""; P_IN=""; P_WRITE5M=""
+  case $P_ALIAS in
+    fable)  P_READ=0.25; P_OUT=50;   P_IN=10;   P_WRITE5M=12.50 ;;
+    opus)   P_READ=0.20; P_OUT=20;   P_IN=4;    P_WRITE5M=5 ;;
+    sonnet) P_READ=0.10; P_OUT=10;   P_IN=2;    P_WRITE5M=2.50 ;;
+    haiku)
+      if [ "${2:-0}" -gt 100000 ] 2>/dev/null; then P_READ=0.05; P_OUT=2.50; P_IN=0.50; P_WRITE5M=0.625
+      else P_READ=0.01; P_OUT=0.50; P_IN=0.10; P_WRITE5M=0.125; fi ;;
+  esac
+}
+
+# model_alias MODEL -> REPLY: fable | opus | sonnet | haiku | "" (unknown or "default").
+model_alias() {
+  case $(printf '%s' "$1" | tr '[:upper:]' '[:lower:]') in
+    *fable*|*mythos*) REPLY=fable ;;
+    *opus*) REPLY=opus ;;
+    *sonnet*) REPLY=sonnet ;;
+    *haiku*) REPLY=haiku ;;
+    *) REPLY="" ;;
+  esac
+}
+
+# compact_cost PRE POST MODEL -> REPLY: estimated USD as a number ("" when the model is unknown).
+# The summarization request re-reads the context at the cache-read price and writes the
+# summary at the output price. After an idle gap longer than the cache TTL the re-read costs
+# the full input price instead (up to 10x more); a hook cannot tell, so this is the warm case.
+compact_cost() {
+  price_for "$3" "$1"
+  REPLY=""
+  [ -n "$P_READ" ] || return 0
+  REPLY=$(awk -v pre="$1" -v post="$2" -v r="$P_READ" -v o="$P_OUT" 'BEGIN { printf "%.4f", (pre * r + post * o) / 1000000 }')
+}
+
+# fmt_usd 0.3312 -> REPLY "≈$0.33" ("" for empty, "<$0.01" for tiny).
+fmt_usd() {
+  REPLY=""
+  [ -n "$1" ] || return 0
+  REPLY=$(awk -v c="$1" 'BEGIN { if (c < 0.005) printf "<$0.01"; else printf "≈$%.2f", c }')
+}
+
+# transcript_kind PATH -> T_KIND (lead | sub) and T_ID (the agent id for a subagent).
+# A subagent's transcript is <project>/<session>/subagents/agent-<id>.jsonl.
+transcript_kind() {
+  T_KIND=lead; T_ID=""
+  case $1 in
+    */subagents/agent-*.jsonl) T_ID=${1##*/agent-}; T_ID=${T_ID%.jsonl}; T_KIND=sub ;;
+  esac
+}
+
+# describe_agent ID META_DIR: sets D_LABEL D_TYPE D_NAME D_DESC D_MODEL D_EFFORT D_STARTED from the
+# crew agent record, completed from the transcript's agent-<id>.meta.json and the agent
+# definition's frontmatter. Label: "s2a-t07-builder (builder · sonnet · high)".
+describe_agent() {
+  local id=$1 meta="$2/agent-$1.meta.json" m mt mn mm me md
+  D_TYPE=""; D_NAME=""; D_DESC=""; D_MODEL=""; D_EFFORT=""; D_STARTED=""
+  safe_name "$id"
+  if load_agent "$REPLY"; then
+    D_TYPE=$A_TYPE; D_NAME=$A_NAME; D_DESC=$A_DESC; D_MODEL=$A_MODEL; D_EFFORT=$A_EFFORT; D_STARTED=$A_STARTED
+  fi
+  [ "$D_MODEL" != default ] || D_MODEL=""
+  [ "$D_EFFORT" != default ] || D_EFFORT=""
+  if [ -f "$meta" ]; then
+    m=$(jq -r '[.agentType // "", .name // "", .model // "", .effort // "", .description // ""] | join("\u001f")' "$meta" 2>/dev/null)
+    IFS=$US read -r mt mn mm me md <<< "$m"
+    [ -n "$D_TYPE" ] || D_TYPE=$mt
+    [ -n "$D_NAME" ] || D_NAME=$mn
+    [ -n "$D_MODEL" ] || D_MODEL=$mm
+    [ -n "$D_EFFORT" ] || D_EFFORT=$me
+    [ -n "$D_DESC" ] || D_DESC=$md
+  fi
+  [ -n "$D_MODEL" ] || D_MODEL=$(agent_frontmatter "$D_TYPE" model)
+  [ -n "$D_EFFORT" ] || D_EFFORT=$(agent_frontmatter "$D_TYPE" effort)
+  oneline "$D_NAME"; D_NAME=$REPLY
+  oneline "$D_TYPE"; D_TYPE=$REPLY
+  model_alias "$D_MODEL"; m=${REPLY:-$D_MODEL}
+  if [ -n "$D_NAME" ]; then D_LABEL="$D_NAME (${D_TYPE:-subagent} · ${m:-?} · ${D_EFFORT:-?})"
+  else D_LABEL="${D_TYPE:-subagent} (${m:-?} · ${D_EFFORT:-?})"; fi
+}
+
+# lead_model SID: sets LM_MODEL LM_ALIAS LM_EFFORT LM_LABEL from what session-start recorded.
+lead_model() {
+  LM_MODEL=""; LM_ALIAS=""; LM_EFFORT=""; LM_LABEL=lead
+  safe_name "$1"
+  { read -r LM_MODEL LM_EFFORT < "$STATE/lead-model/$REPLY"; } 2>/dev/null || return 0
+  model_alias "$LM_MODEL"; LM_ALIAS=${REPLY:-$LM_MODEL}
+  [ -z "$LM_MODEL" ] || LM_LABEL="lead ($LM_ALIAS${LM_EFFORT:+ · $LM_EFFORT})"
+}
+
+# remember_transcript SID PATH: keep the main transcript path per session, so commands run
+# by the lead (no hook input) can settle compactions too.
+remember_transcript() {
+  [ -n "$1" ] && [ -n "$2" ] || return 0
+  safe_name "$1"
+  local f="$STATE/transcripts/$REPLY"
+  [ "$(cat "$f" 2>/dev/null)" = "$2" ] || printf '%s\n' "$2" > "$f" 2>/dev/null
+}
+
+# last_context PATH -> REPLY: context size (input + cache read + cache write tokens) of the
+# newest API response in the transcript, read from its last 400 KB; 0 when none.
+last_context() {
+  REPLY=$(tail -c 400000 "$1" 2>/dev/null | grep '"type":"assistant"' | grep '"usage":{' | tail -n 1 |
+    jq -r '.message.usage | ((.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0))' 2>/dev/null)
+  case $REPLY in ''|*[!0-9]*) REPLY=0 ;; esac
+}
+
+running_any() { ls "$STATE/running"/* >/dev/null 2>&1; }
+
+# guess_compacting_agent: the compaction hooks do not say which agent is compacting (see the
+# header). Pick the transcript whose newest API response carried the largest context: that
+# is the one that reached its window. Sets G_KIND (lead | sub | unknown), G_ID, G_LABEL, G_MODEL.
+guess_compacting_agent() {
+  local f id best=0 second=0 best_kind=lead best_id="" c dir
+  G_KIND=lead; G_ID=""; G_LABEL=lead; G_MODEL=""
+  lead_model "$J_SESSION"; G_LABEL=$LM_LABEL; G_MODEL=$LM_MODEL
+  running_any || return 0
+  [ -n "$J_TRANSCRIPT" ] && [ -f "$J_TRANSCRIPT" ] || { G_KIND=unknown; return 0; }
+  dir="${J_TRANSCRIPT%.jsonl}/subagents"
+  last_context "$J_TRANSCRIPT"; best=$REPLY
+  for f in "$STATE/running"/*; do
+    [ -e "$f" ] || continue
+    id=${f##*/}
+    [ -f "$dir/agent-$id.jsonl" ] || continue
+    last_context "$dir/agent-$id.jsonl"; c=$REPLY
+    if [ "$c" -gt "$best" ]; then second=$best; best=$c; best_kind=sub; best_id=$id
+    elif [ "$c" -gt "$second" ]; then second=$c; fi
+  done
+  # Ambiguous when the runner-up is within 15% of the best, or nothing was readable.
+  if [ "$best" -le 0 ] || [ $((second * 100)) -gt $((best * 85)) ]; then G_KIND=unknown; return 0; fi
+  G_KIND=$best_kind; G_ID=$best_id
+  if [ "$G_KIND" = sub ]; then describe_agent "$G_ID" "$dir"; G_LABEL=$D_LABEL; G_MODEL=$D_MODEL; fi
+}
+
+# live_indexes: prints the main-checkout index files without a Closed: line.
+live_indexes() {
+  local f rec closed
+  for f in "$CREW_DIR"/tasks/*/index.md; do
+    [ -f "$f" ] || continue
+    rec=$(parse_index summary "$f" 2>/dev/null)
+    IFS=$US read -r _ _ _ closed _ _ <<< "$rec"
+    [ -z "$closed" ] && printf '%s\n' "$f"
+  done
+}
+
+# in_flight_rows -> REPLY: "T07 in progress, T08 in review" over the live indexes; "" when none.
+in_flight_rows() {
+  local f id key
+  REPLY=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    while IFS=$US read -r id key _; do
+      case $key in
+        progress|review|rework) status_look "$key"; REPLY="${REPLY:+$REPLY, }$id $WORD" ;;
+      esac
+    done <<EOF
+$(parse_index rows "$f" 2>/dev/null)
+EOF
+  done <<EOF
+$(live_indexes)
+EOF
+}
+
+# spec_path_for AGENT_ID -> REPLY: the spec of the task named by the agent's description
+# ("T07 …"), relative to the project root; "" when unknown.
+spec_path_for() {
+  local f id spec tnum re='^[Tt]0*([0-9]+)([^0-9]|$)' want
+  REPLY=""
+  [ -n "$1" ] || return 0
+  safe_name "$1"
+  load_agent "$REPLY" || return 0
+  [[ $A_DESC =~ $re ]] || return 0
+  want=${BASH_REMATCH[1]}
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    while IFS=$US read -r id _ _ _ _ spec; do
+      tnum=$(printf '%s' "$id" | tr -cd '0-9' | sed 's/^0*//')
+      if [ "$tnum" = "$want" ] && [ -n "$spec" ]; then
+        spec=${spec//\`/}
+        REPLY="${f%/index.md}/$spec"; REPLY=${REPLY#"$ROOT"/}
+        return 0
+      fi
+    done <<EOF
+$(parse_index rows "$f" 2>/dev/null)
+EOF
+  done <<EOF
+$(live_indexes)
+EOF
+}
+
+# compact_instructions KIND ID: custom compaction instructions for the summarizer (PreCompact
+# stdout). Phrased for the role when it is known, for both roles when it is not.
+compact_instructions() {
+  local lead sub agents="" f id idx
+  if [ "$1" != sub ]; then
+    for f in "$STATE/running"/*; do
+      [ -e "$f" ] || continue
+      id=${f##*/}
+      load_agent "$id" || continue
+      agents="${agents:+$agents; }${A_NAME:-$A_TYPE} [$id]: ${A_DESC:-?}"
+    done
+    idx=$(live_indexes | sed "s#^$ROOT/##" | tr '\n' ' ')
+  fi
+  lead="You are the lead of a crew of subagents, working under the crew skill. Keep in the summary: 1) the crew rules in force, above all that every founder request becomes a queue entry (.crew/bin/crew request) before anything else and is never added to a running agent; 2) the active task set and each task's status${idx:+ (index: ${idx% })}; 3) every live subagent with its name, id, task and what you are waiting for from it${agents:+ (now: $agents)}; 4) founder requests or questions not yet in .crew/queue.md, and decisions not yet in the decisions log; 5) the exact next step. Keep file paths verbatim."
+  sub="You are a subagent of a crew. Keep in the summary: your task id and the spec path, each acceptance criterion with whether it is verified and the evidence, every file you changed, the report format your brief requires (its first line is the status keyword), decisions and deviations so far, and your exact next step. Keep file paths verbatim."
+  case $1 in
+    lead) printf '%s\n' "Crew: $lead" ;;
+    sub) printf '%s\n' "Crew: $sub" ;;
+    *) printf '%s\n' "Crew: if you are the main session: $lead If you are a subagent: $sub" ;;
+  esac
+}
+
+# compact_reminder KIND SPEC: the post-compaction reminder (SessionStart compact stdout),
+# conditional so that nothing already in context is re-read.
+compact_reminder() {
+  local lead sub
+  lead="If any of these are no longer in your context, read them: CREW.md (path in the CLAUDE.md or AGENTS.md pointer), .crew/queue.md, the active index under .crew/tasks/, and the state file. Run ListAgents (or \`.crew/bin/crew running\`) if you are not sure which subagents are live. If the crew skill's rules are no longer in your context, invoke the crew skill again. Founder messages are still governed by the request rules: queue first (\`.crew/bin/crew request\`), never add scope to a running agent."
+  sub="If your task spec or brief is no longer in your context, re-read it${2:+ (spec: $2)}, then continue from your last verified step and report in the format your brief asked for."
+  case $1 in
+    lead) printf '%s\n' "Crew: context was compacted. $lead" ;;
+    sub) printf '%s\n' "Crew: context was compacted. $sub" ;;
+    *) printf '%s\n' "Crew: context was compacted. If you are a subagent: $sub If you are the lead (the main session): $lead" ;;
+  esac
+}
+
+# turns_in PATH FROM [TO] -> REPLY: distinct assistant message ids (API requests) in the byte range.
+turns_in() {
+  local from=$2 to=${3:-}
+  if [ -n "$to" ] && [ "$to" -gt "$from" ]; then
+    REPLY=$(tail -c +$((from + 1)) "$1" 2>/dev/null | head -c $((to - from)) | grep '"type":"assistant"' | grep -o '"id":"msg_[A-Za-z0-9]*"' | sort -u | wc -l | tr -d ' ')
+  else
+    REPLY=$(tail -c +$((from + 1)) "$1" 2>/dev/null | grep '"type":"assistant"' | grep -o '"id":"msg_[A-Za-z0-9]*"' | sort -u | wc -l | tr -d ' ')
+  fi
+  case $REPLY in ''|*[!0-9]*) REPLY=0 ;; esac
+}
+
+# The compaction log: one TAB-separated line per compaction in $STATE/compactions.tsv:
+#   1 epoch  2 iso  3 kind  4 id  5 label  6 model  7 effort  8 pre  9 post  10 durationMs
+#   11 trigger  12 cost_usd  13 transcript  14 boundary_offset  15 turns_after ("-" = open)
+#   16 agent_started_epoch
+COMPACTIONS=""
+set_compactions_path() { COMPACTIONS="$STATE/compactions.tsv"; }
+
+# freeze_previous PATH NEW_OFFSET: the previous compaction of this transcript is now closed;
+# count the API requests made between the two boundaries.
+freeze_previous() {
+  local tmp="$COMPACTIONS.new" n
+  [ -f "$COMPACTIONS" ] || return 0
+  n=$(awk -F'\t' -v p="$1" '$13 == p && $15 == "-" { print NR ":" $14 }' "$COMPACTIONS" | tail -n 1)
+  [ -n "$n" ] || return 0
+  turns_in "$1" "${n#*:}" "$2"
+  awk -F'\t' -v OFS='\t' -v line="${n%%:*}" -v t="$REPLY" 'NR == line { $15 = t } { print }' "$COMPACTIONS" > "$tmp" && mv -f "$tmp" "$COMPACTIONS"
+}
+
+# record_compaction PATH SID OFFSET RECORD: log one compact_boundary record (journal + tsv).
+record_compaction() {
+  local path=$1 sid=$2 boff=$3 ts="" trig="" pre=0 post=0 dur=0 epoch kind id label model effort started="" cost text prek postk durs
+  eval "$(printf '%s' "$4" | jq -r '
+    def s: if . == null then "" else tostring end;
+    @sh "ts=\(.timestamp | s)",
+    @sh "trig=\(.compactMetadata.trigger | s)",
+    @sh "pre=\(.compactMetadata.preTokens | s)",
+    @sh "post=\(.compactMetadata.postTokens | s)",
+    @sh "dur=\(.compactMetadata.durationMs | s)"' 2>/dev/null)" || return 0
+  case $pre in ''|*[!0-9]*) pre=0 ;; esac
+  case $post in ''|*[!0-9]*) post=0 ;; esac
+  case $dur in ''|*[!0-9]*) dur=0 ;; esac
+  [ -n "$trig" ] || trig=auto
+  now_parts
+  iso_to_epoch "$ts"; epoch=${REPLY:-$NOW_EPOCH}
+  transcript_kind "$path"; kind=$T_KIND
+  if [ "$kind" = sub ]; then
+    id=$T_ID
+    describe_agent "$id" "$(dirname "$path")"
+    label=$D_LABEL; model=$D_MODEL; effort=$D_EFFORT; started=$D_STARTED
+  else
+    id=lead
+    lead_model "$sid"
+    label=$LM_LABEL; model=$LM_MODEL; effort=$LM_EFFORT
+  fi
+  compact_cost "$pre" "$post" "$model"; cost=$REPLY
+  freeze_previous "$path" "$boff"
+  oneline "$label"; label=$REPLY
+  printf '%s\n' "$epoch$TAB$ts$TAB$kind$TAB$id$TAB$label$TAB$model$TAB$effort$TAB$pre$TAB$post$TAB$dur$TAB$trig$TAB$cost$TAB$path$TAB$boff$TAB-$TAB$started" >> "$COMPACTIONS"
+  fmt_k "$pre"; prek=$REPLY
+  fmt_k "$post"; postk=$REPLY
+  text="Context compacted · $label · $prek → $postk"
+  if [ "$dur" -gt 0 ]; then fmt_secs $(((dur + 500) / 1000)); text="$text · $REPLY"; fi
+  text="$text · $trig"
+  fmt_usd "$cost"; [ -z "$REPLY" ] || text="$text · $REPLY"
+  JOURNAL_AT=$epoch journal_append "system" "$text"
+}
+
+# settle_transcript PATH SID: log the compact_boundary records appended since the last scan.
+# Only the new bytes are read; a partial last line is left for the next scan.
+settle_transcript() {
+  local path=$1 sid=$2 key off size out line start last_start end
+  safe_name "$path"; key=$REPLY
+  off=$(cat "$STATE/compact/scan/$key" 2>/dev/null)
+  case $off in ''|*[!0-9]*) off=0 ;; esac
+  size=$(file_size "$path") || return 0
+  if [ "$size" -lt "$off" ]; then off=0; fi
+  [ "$size" -gt "$off" ] || return 0
+  out=$(tail -c +$((off + 1)) "$path" 2>/dev/null | LC_ALL=C awk -v base="$off" '
+    { start = base + pos; pos += length($0) + 1; last = start
+      if (index($0, "\"compact_boundary\"") && index($0, "\"type\":\"system\"")) print start "\t" $0 }
+    END { print "END\t" last "\t" base + pos }')
+  last_start=""; end=""
+  while IFS=$TAB read -r start line; do
+    case $start in
+      END) last_start=${line%%$TAB*}; end=${line#*$TAB} ;;
+      *[!0-9]*|'') ;;
+      *) record_compaction "$path" "$sid" "$start" "$line" ;;
+    esac
+  done <<EOF
+$out
+EOF
+  [ -n "$end" ] || return 0
+  # A file not ending in a newline has a partial last line: rescan it next time.
+  if [ "$(tail -c 1 "$path" 2>/dev/null | wc -l | tr -d ' ')" = 1 ]; then off=$end; else off=$last_start; fi
+  printf '%s\n' "$off" > "$STATE/compact/scan/$key" 2>/dev/null
+}
+
+# freeze_open_rows: close the "turns after" count of compactions whose agent has stopped, or
+# whose session is no longer registered, so renders only count turns for live transcripts.
+freeze_open_rows() {
+  local rows nr path boff kind id tmp="$COMPACTIONS.new"
+  [ -s "$COMPACTIONS" ] || return 0
+  rows=$(awk -F'\t' '$15 == "-" { print NR "\t" $13 "\t" $14 "\t" $3 "\t" $4 }' "$COMPACTIONS")
+  [ -n "$rows" ] || return 0
+  while IFS=$TAB read -r nr path boff kind id; do
+    [ -n "$nr" ] || continue
+    if [ "$kind" = sub ]; then
+      [ -e "$STATE/running/$id" ] && continue
+    else
+      # The lead's row stays open while its transcript is alive (modified within the hour).
+      [ -f "$path" ] && [ -z "$(find "$path" -mmin +60 2>/dev/null)" ] && continue
+    fi
+    if [ -f "$path" ]; then turns_in "$path" "$boff"; else REPLY=0; fi
+    awk -F'\t' -v OFS='\t' -v line="$nr" -v t="$REPLY" 'NR == line { $15 = t } { print }' "$COMPACTIONS" > "$tmp" && mv -f "$tmp" "$COMPACTIONS"
+  done <<EOF
+$rows
+EOF
+}
+
+# settle_compactions: scan the transcripts of every known session (main, then the subagent
+# transcripts modified since the last scan) and log new compactions. Runs on every crew
+# event and command, under the lock.
+settle_compactions() {
+  local f sid main dir sub mark="$STATE/compact/last-scan" newmark="$STATE/compact/last-scan.new"
+  command -v jq >/dev/null 2>&1 || return 0
+  set_compactions_path
+  lock_take
+  freeze_open_rows
+  for f in "$STATE/transcripts"/*; do
+    [ -f "$f" ] || continue
+    sid=${f##*/}
+    session_registered "$sid" || continue
+    main=$(cat "$f" 2>/dev/null)
+    [ -n "$main" ] && [ -f "$main" ] || continue
+    settle_transcript "$main" "$sid"
+    dir="${main%.jsonl}/subagents"
+    [ -d "$dir" ] || continue
+    : > "$newmark"
+    if [ -f "$mark" ]; then
+      while IFS= read -r sub; do
+        [ -n "$sub" ] || continue
+        settle_transcript "$sub" "$sid"
+      done <<EOF
+$(find "$dir" -maxdepth 1 -name 'agent-*.jsonl' -newer "$mark" 2>/dev/null)
+EOF
+    else
+      for sub in "$dir"/agent-*.jsonl; do
+        [ -f "$sub" ] || continue
+        settle_transcript "$sub" "$sid"
+      done
+    fi
+    mv -f "$newmark" "$mark" 2>/dev/null
+  done
+}
+
+# check_index_additions PATH: when the lead adds task rows to an index that already had rows,
+# flag any new row whose spec has no "Requests:" line (scope added without a queue entry).
+# Sets REPLY to the note for the lead ("" when nothing to flag).
+check_index_additions() {
+  local path=$1 rel key stored now id spec dir flagged="" line
+  REPLY=""
+  rel=${path#"$ROOT"/.crew/}
+  safe_name "$rel"; key=$REPLY
+  now=$(parse_index rows "$path" 2>/dev/null | cut -d"$US" -f1,6)
+  stored=$(cat "$STATE/index-rows/$key" 2>/dev/null)
+  if [ -n "$stored" ] && [ -z "$J_AGENT_TYPE" ]; then
+    dir=$(dirname "$path")
+    while IFS=$US read -r id spec; do
+      [ -n "$id" ] || continue
+      printf '%s\n' "$stored" | grep -q -x -F "$id" && continue
+      spec=${spec//\`/}
+      if [ -n "$spec" ] && [ -f "$dir/$spec" ] && ! grep -q -i -E '(^[[:space:]]*(-[[:space:]]*)?|· )(\*\*)?Requests:' "$dir/$spec"; then
+        flagged="${flagged:+$flagged, }$id"
+      fi
+    done <<EOF
+$now
+EOF
+  fi
+  printf '%s\n' "$now" | cut -d"$US" -f1 > "$STATE/index-rows/$key" 2>/dev/null
+  [ -n "$flagged" ] || return 0
+  line="$flagged added to $rel without a Requests: line in the spec. If it comes from a founder request, queue it first (.crew/bin/crew request) and add \"Requests: R<n>\" to the spec; if it is planned work, add \"Requests: none\"."
+  journal_append "system" "$line"
+  REPLY=$line
 }
 
 # ---------------------------------------------------------------------------
@@ -380,6 +858,95 @@ md_url() {
   REPLY=${REPLY//)/%29}
 }
 
+# compaction_counts -> REPLY "lead 1 · subagents 8" ("" when none).
+compaction_counts() {
+  local l=0 s=0
+  REPLY=""
+  set_compactions_path
+  [ -s "$COMPACTIONS" ] || return 0
+  l=$(awk -F'\t' '$3 == "lead"' "$COMPACTIONS" | wc -l | tr -d ' ')
+  s=$(awk -F'\t' '$3 == "sub"' "$COMPACTIONS" | wc -l | tr -d ' ')
+  [ "$((l + s))" -gt 0 ] || return 0
+  REPLY="lead $l · subagents $s"
+}
+
+# render_compactions: the "## Compactions" section: a summary line, the last 12 compactions
+# with the estimated overhead and savings of each, and the model behind the numbers.
+# Overhead ≈ pre × cache-read price + post × output price (the summarization request).
+# Savings so far ≈ turns since × (pre − post) × cache-read price: what the API requests made
+# after the compaction would have paid to carry the dropped context.
+render_compactions() {
+  local n epoch iso kind id label model effort pre post dur trig cost path boff turns started
+  local aug="" when read_price day
+  set_compactions_path
+  [ -s "$COMPACTIONS" ] || return 0
+  now_parts
+  n=0
+  while IFS=$TAB read -r epoch iso kind id label model effort pre post dur trig cost path boff turns started; do
+    [ -n "$epoch" ] || continue
+    n=$((n + 1))
+    if [ "$turns" = "-" ]; then
+      if [ -f "$path" ]; then turns_in "$path" "$boff"; turns=$REPLY; else turns=0; fi
+    fi
+    price_for "$model" "$pre"; read_price=${P_READ:-0}
+    epoch_to_hm "$epoch"; when=$REPLY
+    epoch_to_day "$epoch"; day=$REPLY
+    [ "$day" = "$NOW_DAY" ] || when="$day $when"
+    aug="$aug$epoch$TAB$kind$TAB$label$TAB$pre$TAB$post$TAB$dur$TAB$trig$TAB${cost:-}$TAB$turns$TAB$read_price$TAB${started:-0}$TAB$when$NL"
+  done < "$COMPACTIONS"
+  [ "$n" -gt 0 ] || return 0
+  printf '## Compactions\n\n'
+  printf '%s' "$aug" | awk -F'\t' -v rows=12 '
+    function span(s,  h, m) {
+      s = int(s + 0.5)
+      if (s < 100) return s " s"
+      if (s < 3600) return int(s / 60) " min"
+      h = int(s / 3600); m = int((s % 3600) / 60)
+      return h " h " m " min"
+    }
+    function k(n) { return (n >= 1000) ? int(n / 1000 + 0.5) "k" : n }
+    function usd(c) { if (c == "") return "—"; c += 0; if (c < -0.005) return sprintf("≈−$%.2f", -c); return (c < 0.005) ? "<$0.01" : sprintf("≈$%.2f", c) }
+    function cell(t) { gsub(/\|/, "\\|", t); return t }
+    {
+      n++
+      epoch[n] = $1; kind[n] = $2; label[n] = $3; pre[n] = $4 + 0; post[n] = $5 + 0; dur[n] = $6 + 0
+      trig[n] = $7; cost[n] = $8; turns[n] = $9 + 0; rp[n] = $10 + 0; started[n] = $11 + 0; when[n] = $12
+      saved[n] = turns[n] * (pre[n] - post[n]) * rp[n] / 1000000
+      cnt[kind[n]]++; presum[kind[n]] += pre[n]
+      if (cost[n] != "") { over += cost[n]; overknown = 1 }
+      if (rp[n] > 0) { savesum += saved[n]; saveknown = 1 }
+      if (kind[n] == "lead") { if (lastlead > 0) { gapsum += epoch[n] - lastlead; gaps++ } lastlead = epoch[n] }
+      else if (started[n] > 0 && epoch[n] >= started[n]) { subgap += epoch[n] - started[n]; subgaps++ }
+    }
+    END {
+      line = ""
+      if (cnt["lead"] > 0) {
+        line = "lead: " cnt["lead"] " (at ~" k(presum["lead"] / cnt["lead"]) " tokens"
+        if (gaps > 0) line = line ", every ~" span(gapsum / gaps)
+        line = line ")"
+      }
+      if (cnt["sub"] > 0) {
+        line = line (line == "" ? "" : " · ") "subagents: " cnt["sub"] " (at ~" k(presum["sub"] / cnt["sub"]) " tokens"
+        if (subgaps > 0) line = line ", ~" span(subgap / subgaps) " after start"
+        line = line ")"
+      }
+      if (overknown) line = line " · est. overhead " usd(over)
+      if (saveknown) line = line " · est. saved so far " usd(savesum) " · net " usd(savesum - over)
+      print line "\n"
+      print "| When | Agent | Before → after | Took | Trigger | Turns since | Est. overhead | Est. saved | Net |"
+      print "|---|---|---|---|---|---|---|---|---|"
+      s = n - rows + 1; if (s < 1) s = 1
+      for (i = s; i <= n; i++) {
+        netc = (cost[i] == "" || rp[i] <= 0) ? "" : saved[i] - cost[i]
+        sv = (rp[i] > 0) ? usd(saved[i]) : "—"
+        printf "| %s | %s | %s → %s | %s | %s | %s | %s | %s | %s |\n", when[i], cell(label[i]), k(pre[i]), k(post[i]),
+          (dur[i] > 0 ? span(dur[i] / 1000) : "—"), trig[i], turns[i], usd(cost[i]), sv, (netc == "" ? "—" : usd(netc))
+      }
+      print ""
+      print "*Estimates at Anthropic list prices (2026-10-20), warm cache. Overhead: the summarization request; saved: what later requests would have paid to carry the dropped context. Not measured: re-reads after a compaction and lost detail. Tune windows with `/autocompact <size>`, `modelSettings`, or `autoCompactWindow` in an agent definition (see `.crew/README.md`).*\n"
+    }'
+}
+
 # Write the dashboard to stdout. Run in a subshell by render_locked.
 render_body() {
   local repo branch sha lead_state lead_hm lead_line nrun f id
@@ -408,7 +975,10 @@ render_body() {
   if [ -f "$STATE/lead" ]; then
     read -r lead_state lead_hm < "$STATE/lead"
   fi
-  if [ "$lead_state" = working ]; then
+  if [ "$lead_state" = stopped ]; then
+    lead_line="⏹ stopped by you since $lead_hm"
+    [ "$nrun" -eq 0 ] || lead_line="$lead_line · $nrun agent(s) still finishing"
+  elif [ "$lead_state" = working ]; then
     lead_line="▶ working since $lead_hm"
   elif [ "$nrun" -gt 0 ]; then
     lead_line="▶ agents working, lead idle"
@@ -557,7 +1127,10 @@ EOF
       printf -- '- **Current task:** none open\n'
     fi
   fi
-  printf -- '- **Open founder questions:** %s · **Queued requests:** %s\n\n' "$qopen" "$rqueued"
+  printf -- '- **Open founder questions:** %s · **Queued requests:** %s\n' "$qopen" "$rqueued"
+  compaction_counts
+  [ -z "$REPLY" ] || printf -- '- **Compactions:** %s\n' "$REPLY"
+  printf '\n'
 
   if [ "$cur" -ge 0 ]; then
     printf '## Tasks\n\n'
@@ -702,6 +1275,9 @@ EOF
     printf '\n'
   fi
 
+  # ---- Compactions ----
+  render_compactions
+
   # ---- Recent activity: last 12 journal events, dated when not from today ----
   printf '## Recent activity\n\n'
   if [ -f "$JOURNAL" ] && grep -q '^- ' "$JOURNAL" 2>/dev/null; then
@@ -789,7 +1365,7 @@ read_hook_json() {
   local out
   J_SESSION=""; J_CWD=""; J_TOOL=""; J_AGENT_TYPE=""; J_AGENT_ID=""; J_SUBTYPE=""; J_DESC=""
   J_MODEL=""; J_EFFORT=""; J_NAME=""; J_ISO=""; J_TO=""; J_SUMMARY=""; J_MESSAGE=""; J_FILE=""
-  J_LAST=""
+  J_LAST=""; J_TRANSCRIPT=""; J_SOURCE=""; J_TRIGGER=""; J_HOOK_MODEL=""; J_EFFORT_LVL=""
   out=$(printf '%s' "$INPUT" | jq -r '
     def s: if . == null then "" elif type == "string" then . else tostring end;
     ((.tool_input | objects) // {}) as $t |
@@ -798,6 +1374,11 @@ read_hook_json() {
     @sh "J_TOOL=\(.tool_name | s)",
     @sh "J_AGENT_TYPE=\(.agent_type | s)",
     @sh "J_AGENT_ID=\(.agent_id | s)",
+    @sh "J_TRANSCRIPT=\(.transcript_path | s)",
+    @sh "J_SOURCE=\(.source | s)",
+    @sh "J_TRIGGER=\(.trigger | s)",
+    @sh "J_HOOK_MODEL=\(.model | s)",
+    @sh "J_EFFORT_LVL=\((.effort | if type == "object" then .level else . end) | s)",
     @sh "J_SUBTYPE=\($t.subagent_type | s)",
     @sh "J_DESC=\($t.description | s)",
     @sh "J_MODEL=\($t.model | s)",
@@ -922,7 +1503,7 @@ hook_agent_stop() {
 }
 
 hook_file_changed() {
-  local path dir base pdir
+  local path dir base pdir note=""
   path=$J_FILE
   [ -n "$path" ] || return 0
   case $path in /*) ;; *) path="$WRITER_CWD/$path" ;; esac
@@ -931,7 +1512,15 @@ hook_file_changed() {
   dir=$(dirname "$path")
   pdir=$(cd "$dir" 2>/dev/null && pwd -P) || return 0
   case "$pdir/" in "$ROOT/.crew/"*) ;; *) return 0 ;; esac
-  render_with_lock
+  ensure_dirs
+  lock_take
+  if [ "$base" = index.md ]; then
+    check_index_additions "$pdir/$base"
+    note=$REPLY
+  fi
+  render_locked
+  # PostToolUse: the note reaches the lead as additional context.
+  [ -z "$note" ] || jq -nc --arg c "Crew: $note" '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $c}}'
 }
 
 hook_lead() {  # $1 = working | idle
@@ -939,20 +1528,73 @@ hook_lead() {  # $1 = working | idle
   ensure_dirs
   lock_take
   now_parts
-  printf '%s %s\n' "$1" "$NOW_HM" > "$STATE/lead"
+  # "stopped" (crew session stop) sticks until `crew session start` runs again (/crew resume).
+  case $(cat "$STATE/lead" 2>/dev/null) in
+    stopped*) ;;
+    *) printf '%s %s\n' "$1" "$NOW_HM" > "$STATE/lead" ;;
+  esac
   render_locked
+  [ "$1" = working ] || return 0
+  # UserPromptSubmit: while work is in flight, one line keeps founder requests out of running agents.
+  in_flight_rows
+  local flight=$REPLY n=0
+  if running_any; then n=$(ls "$STATE/running" | wc -l | tr -d ' '); fi
+  [ -n "$flight" ] || [ "$n" -gt 0 ] || return 0
+  printf '%s\n' "Crew: work is in flight (${flight:-no index row in progress}${flight:+; }${n} agent(s) running). Queue any request in this message first (.crew/bin/crew request \"<text>\"), then act on it; never add it to a running agent or edit a spec an agent is working from."
 }
 
+# SessionStart startup|resume|clear|fork: remember the lead's model (and effort when given) for
+# this session, so a compaction's model can be checked against it. Runs before the session is
+# registered, so it has no session guard and writes nothing else.
+hook_session_start() {
+  [ -n "$J_SESSION" ] && [ -n "$J_HOOK_MODEL" ] || return 0
+  ensure_dirs
+  safe_name "$J_SESSION"
+  printf '%s %s\n' "$J_HOOK_MODEL" "$J_EFFORT_LVL" > "$STATE/lead-model/$REPLY" 2>/dev/null
+  remember_transcript "$J_SESSION" "$J_TRANSCRIPT"
+}
+
+# PreCompact: guess who is compacting, leave a note for the SessionStart(compact) hook that
+# follows, and print custom compaction instructions for that role.
+hook_pre_compact() {
+  ensure_dirs
+  guess_compacting_agent
+  now_parts
+  printf '%s\n' "$NOW_EPOCH$TAB$G_KIND$TAB$G_ID$TAB$G_LABEL$TAB$G_MODEL$TAB${J_TRIGGER:-auto}" > "$STATE/compact/pending" 2>/dev/null
+  compact_instructions "$G_KIND" "$G_ID"
+}
+
+# SessionStart compact: the post-compaction reminder, addressed to the role when it is known.
+# The journal line and the compaction log follow at the next crew event (see the header).
 hook_compact() {
-  [ -z "$J_AGENT_TYPE" ] || return 0
-  printf '%s\n' "Crew: the conversation was just compacted. Before continuing, re-read CREW.md (path in the CLAUDE.md or AGENTS.md pointer), .crew/queue.md, the active index under .crew/tasks/, and the state file; then run ListAgents, or \`.crew/bin/crew running\` when ListAgents is not available, to find live subagents."
-  journal_append "system" "Context compacted"
+  local kind=unknown id="" pe pk pid _rest alias spec=""
+  ensure_dirs
+  if [ -f "$STATE/compact/pending" ]; then
+    now_parts
+    IFS=$TAB read -r pe pk pid _rest < "$STATE/compact/pending"
+    rm -f "$STATE/compact/pending"
+    case $pe in *[!0-9]*|'') pe=0 ;; esac
+    if [ $((NOW_EPOCH - pe)) -le 600 ]; then kind=$pk; id=$pid; fi
+  fi
+  if [ "$kind" = unknown ] && ! running_any; then kind=lead; fi
+  # The compacting agent's model differs from the lead's: a subagent for sure.
+  lead_model "$J_SESSION"
+  if [ -n "$J_HOOK_MODEL" ] && [ -n "$LM_ALIAS" ]; then
+    model_alias "$J_HOOK_MODEL"; alias=$REPLY
+    if [ -n "$alias" ] && [ "$alias" != "$LM_ALIAS" ] && [ "$kind" != sub ]; then kind=sub; id=""; fi
+  fi
+  if [ "$kind" = lead ] && [ -z "$LM_MODEL" ] && [ -n "$J_HOOK_MODEL" ] && ! running_any; then
+    safe_name "$J_SESSION"
+    printf '%s %s\n' "$J_HOOK_MODEL" "$J_EFFORT_LVL" > "$STATE/lead-model/$REPLY" 2>/dev/null
+  fi
+  [ "$kind" != sub ] || { spec_path_for "$id"; spec=$REPLY; }
+  compact_reminder "$kind" "$spec"
 }
 
 run_hook() {
   local mode=${1:-}
   case $mode in
-    agent-start|agent-resume|agent-id|agent-stop|file-changed|lead-busy|lead-idle|compact) ;;
+    agent-start|agent-resume|agent-id|agent-stop|file-changed|lead-busy|lead-idle|compact|pre-compact|session-start) ;;
     *) return 0 ;;
   esac
   # Guard 1: this root is a crew project.
@@ -964,10 +1606,12 @@ run_hook() {
     return 0
   fi
   read_hook_json || return 0
+  if [ "$mode" = session-start ]; then hook_session_start; return 0; fi
   # Guard 2: a registered crew session (or the wildcard).
   session_registered "$J_SESSION" || return 0
   WRITER_CWD=$PWD
   if [ -n "$J_CWD" ] && [ -d "$J_CWD" ]; then WRITER_CWD=$J_CWD; fi
+  remember_transcript "$J_SESSION" "$J_TRANSCRIPT"
   # Guard 3: per-mode checks live at the top of each handler.
   case $mode in
     agent-start) hook_agent_start ;;
@@ -977,8 +1621,11 @@ run_hook() {
     file-changed) hook_file_changed ;;
     lead-busy) hook_lead working ;;
     lead-idle) hook_lead idle ;;
+    pre-compact) hook_pre_compact ;;
     compact) hook_compact ;;
   esac
+  # Compactions whose record has appeared since the last event get their journal line now.
+  settle_compactions
   return 0
 }
 
@@ -992,24 +1639,148 @@ cmd_journal() {
     return 1
   fi
   WRITER_CWD=$PWD
+  settle_compactions
   journal_append "lead" "$*"
 }
 
-cmd_session() {
-  if [ "${1:-}" != start ]; then
-    printf 'usage: crew session start [<session-id>]\n' >&2
-    return 1
+# queue_field TEXT -> REPLY: one line, with the " · " separator the queue format uses replaced.
+queue_field() {
+  oneline "$1"
+  REPLY=${REPLY// · / - }
+  REPLY=${REPLY//|/\/}
+}
+
+cmd_request() {
+  local text="" affects="" slot="" status="" note="" urgent=0 dry=0 queue="$CREW_DIR/queue.md" n entry tmp line verb
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --affects) affects=${2:-}; shift ;;
+      --slot) slot=${2:-}; shift ;;
+      --status) status=${2:-}; shift ;;
+      --note) note=${2:-}; shift ;;
+      --urgent) urgent=1 ;;
+      --dry-run) dry=1 ;;
+      --*) printf 'crew request: unknown option %s\n' "$1" >&2; return 1 ;;
+      *) text="${text:+$text }$1" ;;
+    esac
+    shift
+  done
+  WRITER_CWD=$PWD
+  settle_compactions
+  ensure_dirs
+  now_parts
+  if [ ! -f "$queue" ]; then
+    printf '# Crew queue\n\n## Requests from the founder\n\n## Questions for the founder\n' > "$queue"
   fi
+  case $text in
+    R[0-9]*)
+      # A transition: crew request R<n> --status <status> [--slot …] [--affects …] [--note …]
+      case $status in queued|scheduled|done|dropped) ;; *) printf 'usage: crew request R<n> --status queued|scheduled|done|dropped [--slot <y>] [--affects <x>] [--note <text>]\n' >&2; return 1 ;; esac
+      grep -q -E "^[[:space:]]*- \[$text\]" "$queue" || { printf 'crew request: no entry %s in %s\n' "$text" "$queue" >&2; return 1; }
+      queue_field "$slot"; slot=$REPLY
+      queue_field "$affects"; affects=$REPLY
+      tmp="$queue.new"
+      awk -v id="$text" -v st="$status" -v slot="$slot" -v aff="$affects" '
+        !done && $0 ~ ("^[ \t]*- \\[" id "\\]") {
+          if ($0 !~ /· status: /) $0 = $0 " · status: queued"
+          sub(/· status: [A-Za-z]+/, "· status: " st)
+          if (slot != "") {
+            if ($0 ~ /· slot: /) sub(/· slot: [^·]*/, "· slot: " slot " "); else sub(/· status: /, "· slot: " slot " · status: ")
+          }
+          if (aff != "") {
+            if ($0 ~ /· affects: /) sub(/· affects: [^·]*/, "· affects: " aff " "); else sub(/· slot: /, "· affects: " aff " · slot: ")
+          }
+          gsub(/  +·/, " ·"); done = 1
+        }
+        { print }' "$queue" > "$tmp" && mv -f "$tmp" "$queue"
+      line=$(grep -m 1 -E "^[[:space:]]*- \[$text\]" "$queue")
+      entry=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*- \[R[0-9]+\] [^·]*· //; s/ · affects:.*$//; s/ · slot:.*$//; s/ · status:.*$//')
+      trunc "$entry" 60; entry=$REPLY
+      case $status in
+        scheduled) verb="Scheduled $text ($entry)${note:+ $note}" ;;
+        done) verb="Done $text ($entry)${note:+: $note}" ;;
+        dropped) verb="Dropped $text ($entry)${note:+: $note}" ;;
+        *) verb="Re-queued $text ($entry)${note:+: $note}" ;;
+      esac
+      [ "$dry" = 1 ] || journal_append "lead" "$verb"
+      printf '%s\n' "$line"
+      return 0 ;;
+  esac
+  [ -n "$text" ] || { printf 'usage: crew request "<request in the founder'"'"'s words>" [--affects <x>] [--slot <y>] [--urgent] [--dry-run]\n' >&2; return 1; }
+  [ -z "$status" ] || { printf 'crew request: --status applies to an existing R<n>\n' >&2; return 1; }
+  # Next number: real entries only (the scaffold's format comment holds an example id).
+  n=$(grep -E '^[[:space:]]*- \[R[0-9]+\]' "$queue" | grep -o -E '\[R[0-9]+\]' | tr -cd '0-9\n' | sort -n | tail -n 1)
+  n=$((${n:-0} + 1))
+  queue_field "$text"; text=$REPLY
+  queue_field "$affects"; affects=$REPLY
+  queue_field "$slot"; slot=$REPLY
+  if [ -z "$slot" ]; then if [ "$urgent" = 1 ]; then slot="now (urgent)"; else slot="tbd"; fi; fi
+  entry="- [R$n] $NOW_DAY · $text · affects: ${affects:-—} · slot: $slot · status: queued"
+  if [ "$dry" = 1 ]; then printf '%s\n' "$entry"; return 0; fi
+  tmp="$queue.new"
+  # Urgent entries go first in the section, others after the last entry; an empty section gets
+  # the entry after its heading (and after the format comment, when present).
+  awk -v entry="$entry" -v urgent="$urgent" '
+    { line[NR] = $0 }
+    END {
+      sec = 0; send = NR; first = 0; last = 0
+      for (i = 1; i <= NR; i++) {
+        if (!sec) { if (line[i] ~ /^## Requests from the founder/) sec = i; continue }
+        if (line[i] ~ /^## /) { send = i - 1; break }
+        if (line[i] ~ /^[ \t]*- \[R[0-9]+\]/) { if (!first) first = i; last = i }
+      }
+      if (!sec) {
+        for (i = 1; i <= NR; i++) print line[i]
+        print ""; print "## Requests from the founder"; print ""; print entry
+        exit
+      }
+      if (urgent && first) { at = first - 1; before = 0 }
+      else if (last) { at = last; before = 0 }
+      else {
+        at = sec
+        while (at < send && line[at + 1] ~ /^<!--/) { at++; while (at < send && line[at] !~ /-->/) at++ }
+        if (at < send && line[at + 1] ~ /^[ \t]*$/) at++
+        before = 1
+      }
+      for (i = 1; i <= NR; i++) {
+        print line[i]
+        if (i == at) {
+          if (before && line[i] !~ /^[ \t]*$/) print ""
+          print entry
+          if (before && (i == NR || line[i + 1] !~ /^[ \t]*$/)) print ""
+        }
+      }
+      if (at == 0) { print entry }
+    }' "$queue" > "$tmp" && mv -f "$tmp" "$queue"
+  journal_append "lead" "Queued R$n: $text${slot:+, slot: $slot}"
+  printf '%s\n' "$entry"
+}
+
+cmd_session() {
   local sid=${2:-}
   ensure_dirs
-  lock_take
-  if [ -n "$sid" ]; then safe_name "$sid"; sid=$REPLY; else sid=any; fi
-  touch "$STATE/sessions/$sid"
-  # Prune registrations older than 30 days.
-  find "$STATE/sessions" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
-  render_locked
-  lock_release
-  printf 'Crew session registered: %s\n' "$sid"
+  case ${1:-} in
+    start)
+      lock_take
+      if [ -n "$sid" ]; then safe_name "$sid"; sid=$REPLY; else sid=any; fi
+      touch "$STATE/sessions/$sid"
+      # Prune registrations (and per-session notes) older than 30 days.
+      find "$STATE/sessions" "$STATE/lead-model" "$STATE/transcripts" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
+      rm -f "$STATE/lead" 2>/dev/null
+      render_locked
+      lock_release
+      settle_compactions
+      printf 'Crew session registered: %s\n' "$sid" ;;
+    stop)
+      lock_take
+      now_parts
+      # Sticky until the next `crew session start`; the hooks leave it alone.
+      printf 'stopped %s\n' "$NOW_HM" > "$STATE/lead"
+      render_locked
+      lock_release
+      printf 'Crew marked as stopped at %s\n' "$NOW_HM" ;;
+    *) printf 'usage: crew session start [<session-id>] | crew session stop\n' >&2; return 1 ;;
+  esac
 }
 
 cmd_running() {
@@ -1026,6 +1797,7 @@ cmd_running() {
 }
 
 cmd_status() {
+  settle_compactions
   render_with_lock
   printf 'Rendered %s\n' "$STATUS"
 }
@@ -1290,6 +2062,7 @@ case ${1:-} in
     exit 0
     ;;
   journal) shift; cmd_journal "$@"; rc=$? ;;
+  request) shift; cmd_request "$@"; rc=$? ;;
   session) shift; cmd_session "$@"; rc=$? ;;
   running) cmd_running; rc=$? ;;
   status) cmd_status; rc=$? ;;

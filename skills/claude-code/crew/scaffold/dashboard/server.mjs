@@ -3,9 +3,12 @@
 //
 // Installed by `/crew setup` as <project>/.crew/dashboard/server.mjs; started by
 // `.crew/bin/crew session start` and `.crew/bin/crew dashboard`. Node.js 20 or later, no
-// dependencies. One server per repository, on 127.0.0.1, on a port that stays the same for the
-// project (kept in .crew/tmp/dashboard.json), so a browser tab or a Paseo side panel keeps working
-// across restarts.
+// dependencies. One server per repository, on a port that stays the same for the project (kept in
+// .crew/tmp/dashboard.json), so a browser tab or a Paseo side panel keeps working across restarts.
+// It listens on every interface, so a phone or a tablet on the same network (or tailnet) can open
+// it: this computer reaches it by a local name (127.0.0.1, localhost; any port, for an SSH tunnel)
+// with nothing more, anything else needs the project's key (.crew/tmp/dashboard.key), which the
+// printed URL carries. With CREW_DASHBOARD_LAN=0 it listens on 127.0.0.1 only.
 //
 //   node server.mjs start [--root <dir>]     Start in the background and print the URL. When one already
 //                                            runs for this project: print nothing, exit 3.
@@ -29,6 +32,7 @@
 
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
@@ -98,6 +102,8 @@ const CREW = path.join(ROOT, '.crew');
 const TMP = path.join(CREW, 'tmp');
 const INFO = path.join(TMP, 'dashboard.json');
 const LOG = path.join(TMP, 'dashboard.log');
+const KEY = path.join(TMP, 'dashboard.key');
+const LAN = process.env.CREW_DASHBOARD_LAN !== '0';
 const LOCK = path.join(TMP, 'journal.lock');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -116,6 +122,45 @@ function hashPort(root) {
   return 47100 + (h % 800);
 }
 function urlFor(port) { return `http://127.0.0.1:${port}/`; }
+
+// This computer's address for other devices: a private one on Wi-Fi or Ethernet (the local
+// network), else a Tailscale one (100.64.0.0/10). Never a VM bridge or a container network, nor a
+// public address: a server on the internet is better reached through an SSH tunnel, on 127.0.0.1.
+function lanAddress() {
+  let best = '';
+  let rank = 9;
+  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
+    for (const a of addrs || []) {
+      if (a.internal || a.family !== 'IPv4') continue;
+      const r = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a.address) && /^(en|eth|wl)/.test(name) ? 0
+        : /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(a.address) ? 1 : 9;
+      if (r < rank) { best = a.address; rank = r; }
+    }
+  }
+  return best;
+}
+
+// The key other devices need: in the URL once, then in a cookie. Kept across restarts so a
+// bookmark on a phone keeps working; delete the file and restart the dashboard to change it.
+function accessKey(create) {
+  try {
+    const k = fs.readFileSync(KEY, 'utf8').trim();
+    if (k) return k;
+  } catch { /* none yet */ }
+  if (!create) return '';
+  const k = crypto.randomBytes(12).toString('base64url');
+  fs.mkdirSync(TMP, { recursive: true });
+  fs.writeFileSync(KEY, `${k}\n`, { mode: 0o600 });
+  return k;
+}
+
+// The URL to print: on the network when the server listens there and the computer has an
+// address, worked out now (it changes with the network); otherwise this computer's.
+function shareUrl(info) {
+  const addr = info.lan ? lanAddress() : '';
+  const key = addr ? accessKey(false) : '';
+  return addr && key ? `http://${addr}:${info.port}/?key=${key}` : info.url;
+}
 
 function ping(port) {
   return new Promise((resolve) => {
@@ -156,7 +201,7 @@ async function cmdStart() {
   for (let i = 0; i < 60; i++) {
     await sleep(100);
     const info = await running();
-    if (info) { process.stdout.write(`Dashboard: ${info.url}\n`); return 0; }
+    if (info) { process.stdout.write(`Dashboard: ${shareUrl(info)}\n`); return 0; }
   }
   let tail = '';
   try { tail = fs.readFileSync(LOG, 'utf8').trim().split('\n').slice(-5).join('\n'); } catch { /* none */ }
@@ -176,7 +221,7 @@ async function cmdStop() {
 async function cmdUrl() {
   const cur = await running();
   if (!cur) { process.stdout.write('Dashboard: not running\n'); return 1; }
-  process.stdout.write(`${cur.url}\n`);
+  process.stdout.write(`${shareUrl(cur)}\n`);
   return 0;
 }
 
@@ -220,7 +265,25 @@ const NOT_BUILT = `<!doctype html><meta charset="utf-8"><title>Crew dashboard</t
 <h1>Crew dashboard</h1><p>The page is not installed in <code>.crew/dashboard/app/</code>. Run <code>/crew setup</code> again.</p>
 <p>The model is at <a href="/api/state">/api/state</a>.</p></body>`;
 
+const NO_KEY = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Crew dashboard</title>
+<body style="font:15px system-ui;margin:2rem;max-width:40rem">
+<h1>Crew dashboard</h1><p>From another device, this page needs the project's key. On the computer running the crew, run
+<code>.crew/bin/crew dashboard url</code> and open the whole address it prints, <code>?key=</code> included.</p></body>`;
+
 const inside = (file, dir) => file === dir || file.startsWith(dir + path.sep);
+const loopback = (addr) => /^(127\.|::1$|::ffff:127\.)/.test(addr || '');
+const LOCAL_NAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
+function cookie(req, name) {
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const at = part.indexOf('=');
+    if (at > 0 && part.slice(0, at).trim() === name) return part.slice(at + 1).trim();
+  }
+  return '';
+}
+function sameKey(a, b) {
+  const x = Buffer.from(a), y = Buffer.from(b);
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
 
 async function cmdServe() {
   const clients = new Set();
@@ -229,6 +292,7 @@ async function cmdServe() {
   let current = null;
   let build = buildId();
   let port = 0;
+  const key = accessKey(true);
 
   // ---- the model ----
   let timer = null;
@@ -380,13 +444,21 @@ async function cmdServe() {
   };
 
   const server = http.createServer((req, res) => {
-    // Only this machine, by name: no DNS-rebinding page can read the project.
-    const host = String(req.headers.host || '');
-    if (![`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`].includes(host)) {
-      send(res, 403, 'text/plain', 'Forbidden');
-      return;
+    // This computer, by a local name (on any port, for an SSH tunnel): no DNS-rebinding page can
+    // read the project. Anyone else, another device or a proxy: with the key, which a page on
+    // another site cannot know; it comes in the URL once and is then kept in a cookie per port.
+    const name = String(req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
+    const u = new URL(req.url || '/', 'http://localhost');
+    if (!(loopback(req.socket.remoteAddress) && LOCAL_NAMES.has(name))) {
+      const jar = `crew_key_${port}`;
+      const given = u.searchParams.get('key');
+      if (given && sameKey(given, key)) {
+        res.setHeader('Set-Cookie', `${jar}=${key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
+      } else if (!sameKey(cookie(req, jar), key)) {
+        send(res, 403, 'text/html; charset=utf-8', NO_KEY);
+        return;
+      }
     }
-    const u = new URL(req.url || '/', `http://${host}`);
     if (req.method !== 'GET' && req.method !== 'HEAD') { send(res, 405, 'text/plain', 'Method not allowed'); return; }
     if (u.pathname === '/api/ping') {
       send(res, 200, 'application/json', JSON.stringify({ app: APP_ID, root: ROOT, pid: process.pid, version: SERVER_VERSION }));
@@ -465,12 +537,23 @@ async function cmdServe() {
     const onOk = () => { server.off('error', onErr); resolve('ok'); };
     server.once('error', onErr);
     server.once('listening', onOk);
-    server.listen(p, '127.0.0.1');
+    server.listen(p, LAN ? '0.0.0.0' : '127.0.0.1');
   });
   const prev = readInfo();
   let candidate = opts.port || (prev && prev.root === ROOT && prev.port) || hashPort(ROOT);
   for (let attempt = 0; attempt < 40; attempt++) {
-    const r = await listen(candidate);
+    let r = await listen(candidate);
+    if (r === 'ok' && LAN) {
+      // macOS lets 0.0.0.0 bind beside a server on 127.0.0.1 alone, which then keeps this
+      // computer's requests: the port is only ours when 127.0.0.1 answers with this process.
+      port = candidate;
+      const me = await ping(candidate);
+      if (me?.pid !== process.pid) {
+        port = 0;
+        await new Promise((done) => server.close(done));
+        r = 'EADDRINUSE';
+      }
+    }
     if (r === 'ok') { port = candidate; break; }
     if (r !== 'EADDRINUSE') { log(`cannot listen on ${candidate}: ${r}`); candidate++; continue; }
     const other = await ping(candidate);
@@ -484,9 +567,9 @@ async function cmdServe() {
   if (!port) { log('no free port'); process.exit(1); }
 
   fs.mkdirSync(TMP, { recursive: true });
-  const info = { app: APP_ID, pid: process.pid, port, url: urlFor(port), root: ROOT, started: new Date().toISOString(), node: process.versions.node };
+  const info = { app: APP_ID, pid: process.pid, port, url: urlFor(port), lan: LAN, root: ROOT, started: new Date().toISOString(), node: process.versions.node };
   fs.writeFileSync(INFO, JSON.stringify(info, null, 2) + '\n');
-  log(`serving ${ROOT} at ${info.url} (pid ${process.pid})`);
+  log(`serving ${ROOT} at ${info.url}${LAN ? ` and on the network at ${shareUrl(info).replace(/key=.*/, 'key=…')}` : ''} (pid ${process.pid})`);
   recompute();
 }
 

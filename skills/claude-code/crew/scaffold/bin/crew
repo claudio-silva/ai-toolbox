@@ -35,8 +35,11 @@
 #                                       .crew/dashboard/server.mjs (Node.js 20+), live over
 #                                       Server-Sent Events. `start` (the default) prints its URL,
 #                                       or nothing and exit status 3 when one already runs for
-#                                       this project. CREW_DASHBOARD=0 keeps session start,
-#                                       status and the SessionStart hook from starting it.
+#                                       this project. The URL is for other devices too: the
+#                                       local network address and the project's key.
+#                                       CREW_DASHBOARD=0 keeps session start, status and the
+#                                       SessionStart hook from starting it; CREW_DASHBOARD_LAN=0
+#                                       keeps it on 127.0.0.1.
 #   crew worktree setup [<path>] [--dry-run]
 #                                       Prepare a worktree: .worktreeinclude copies,
 #                                       .crew/tmp/, .crew/task-data/, worktree.json,

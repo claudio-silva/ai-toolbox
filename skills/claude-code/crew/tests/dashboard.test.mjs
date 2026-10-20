@@ -1,5 +1,5 @@
 // Tests for the dashboard: the model's parsers, and the server live (state pushed over SSE when a
-// crew file changes, the Host and file guards). The timing, defect, compaction and lead-state
+// crew file changes, the Host, key and file guards). The timing, defect, compaction and lead-state
 // numbers are checked end to end by tests/hooks.sh.
 // Run from the skill directory: node --test tests/
 import test from 'node:test';
@@ -155,7 +155,7 @@ function get(url, headers = {}) {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', (d) => { body += d; });
-      res.on('end', () => resolve({ status: res.statusCode, body }));
+      res.on('end', () => resolve({ status: res.statusCode, body, cookie: res.headers['set-cookie']?.[0] ?? '' }));
     }).on('error', reject);
   });
 }
@@ -201,7 +201,7 @@ function events(url) {
   };
 }
 
-test('server: pushes the new state when a crew file changes; guards Host and files', async (t) => {
+test('server: pushes the new state when a crew file changes; guards Host, key and files', async (t) => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'crew-dash-')));
   const crew = path.join(root, '.crew');
   fs.mkdirSync(path.join(crew, 'tasks', 'autosave'), { recursive: true });
@@ -234,7 +234,30 @@ test('server: pushes the new state when a crew file changes; guards Host and fil
   const second = JSON.parse(await es.next('state'));
   assert.equal(second.current.accepted, 2);
 
+  // This computer by a local name, on any port (an SSH tunnel); anything else needs the key.
   assert.equal((await get(`${url}api/state`, { Host: 'evil.example:80' })).status, 403);
+  assert.equal((await get(`${url}api/state`, { Host: 'localhost:8080' })).status, 200);
+  const key = fs.readFileSync(path.join(crew, 'tmp', 'dashboard.key'), 'utf8').trim();
+  assert.match(key, /^[\w-]{16}$/);
+  assert.equal((await get(`${url}api/state?key=wrong`, { Host: 'evil.example:80' })).status, 403);
+  const keyed = await get(`${url}api/state?key=${key}`, { Host: 'evil.example:80' });
+  assert.equal(keyed.status, 200);
+  assert.match(keyed.cookie, new RegExp(`^crew_key_${port}=${key}; Path=/;.*HttpOnly`));
+  const jar = keyed.cookie.split(';')[0];
+  assert.equal((await get(`${url}api/state`, { Host: 'evil.example:80', Cookie: `a=1; ${jar}` })).status, 200);
+  assert.equal((await get(`${url}api/state`, { Host: 'evil.example:80', Cookie: `crew_key_${port + 1}=${key}` })).status, 403);
+  // Another device: the printed URL carries this computer's address and the key.
+  const printed = spawnSync(process.execPath, [path.join(DASH, 'server.mjs'), 'url', '--root', root], { encoding: 'utf8' }).stdout.trim();
+  const addr = /^http:\/\/([\d.]+):(\d+)\/\?key=(.+)$/.exec(printed);
+  if (addr && addr[1] !== '127.0.0.1') {
+    assert.deepEqual([addr[2], addr[3]], [String(port), key]);
+    const lan = `http://${addr[1]}:${port}/`;
+    assert.equal((await get(`${lan}api/state`)).status, 403);
+    assert.equal((await get(`${lan}api/state?key=${key}`)).status, 200);
+    assert.equal((await get(`${lan}api/state`, { Cookie: jar })).status, 200);
+  } else {
+    assert.equal(printed, url);
+  }
   const inside = await get(`${url}files?p=${encodeURIComponent(path.join(crew, 'tasks', 'autosave', 'index.md'))}`);
   assert.equal(inside.status, 200);
   const outside = await get(`${url}files?p=${encodeURIComponent(path.join(root, 'secret.txt'))}`);

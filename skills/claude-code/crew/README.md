@@ -114,7 +114,9 @@ The lead has no context-size threshold: it rolls over only when you run `/crew h
 
 ### The dashboard
 
-A local web page, served by `.crew/dashboard/server.mjs` (Node.js, no dependencies at run time) on `127.0.0.1` at a port that stays the same for a project, so it can live in a browser tab or a Paseo side panel. The session-start hook starts it, and the lead opens its first reply with `Open the dashboard at <url>`; when one was already running for the project (started by another session, by you, or by a Paseo panel) it says nothing. `.crew/bin/crew status` prints its URL, and `.crew/bin/crew dashboard start|stop|restart|url` manages it (`start` exits 3, silently, when one is already running). It is built for a narrow panel and follows the system's light or dark theme. The header shows the project's own icon when the repository has a square one (a favicon, an app icon or a logo); a click switches to crew's mark and back, remembered per project.
+A local web page, served by `.crew/dashboard/server.mjs` (Node.js, no dependencies at run time) at a port that stays the same for a project, so it can live in a browser tab or a Paseo side panel. The session-start hook starts it, and the lead opens its first reply with `Open the dashboard at <url>`; when one was already running for the project (started by another session, by you, or by a Paseo panel) it says nothing. `.crew/bin/crew status` prints its URL, and `.crew/bin/crew dashboard start|stop|restart|url` manages it (`start` exits 3, silently, when one is already running). It is built for a narrow panel and follows the system's light or dark theme. The header shows the project's own icon when the repository has a square one (a favicon, an app icon or a logo); a click switches to crew's mark and back, remembered per project.
+
+It also opens on a phone or a tablet on the same Wi-Fi or Tailscale network. The printed URL uses the computer's local address and the project's key (`http://192.168.1.20:47242/?key=…`), which the page then keeps in a cookie. On the computer itself, and through an SSH tunnel to a remote one (`ssh -N -L 47242:127.0.0.1:47242 server`), `http://127.0.0.1:<port>/` needs no key.
 
 It reads the same files the crew writes (the task-set indexes and specs, `queue.md`, `defects.md`, `handoff.md`, the journal, the hook state and git) and pushes a fresh state to the page over server-sent events whenever one of them changes: no polling, and no reload, so the scroll position, the open tab and any open panel stay put. Running durations tick every second in the page (`02:53:22`, colons blinking) and freeze when the run ends (`1h 19m`); sleep and other closed intervals never tick. Each new journal line shows as a notice at the top for 10 seconds; notices stack, and a click opens the Journal.
 
@@ -129,7 +131,7 @@ It reads the same files the crew writes (the task-set indexes and specs, `queue.
 | Journal | The journal, newest first, filtered by lead, agents or system, with search |
 | Sets | Every task set found, including those in worktrees; each opens its index |
 
-Set `CREW_DASHBOARD=0` in the environment to keep it from starting. Without Node.js 20 or later, everything else works and the dashboard is skipped.
+Set `CREW_DASHBOARD=0` in the environment to keep it from starting, or `CREW_DASHBOARD_LAN=0` to keep it on `127.0.0.1`, for this computer only. Without Node.js 20 or later, everything else works and the dashboard is skipped.
 
 ### The `.crew/` layout in a project
 
@@ -149,7 +151,7 @@ docs/CREW.md                 committed (project facts and deviations from the de
 .crew/journal.md             gitignored (history, for the founder)
 .crew/dashboard/             gitignored (the dashboard server and page, installed by /crew setup)
 .crew/task-data/<id>/        gitignored (screenshots/, reports/, logs/ per task)
-.crew/tmp/                   gitignored (lock, hook state, the dashboard's port and log)
+.crew/tmp/                   gitignored (lock, hook state, the dashboard's port, key and log)
 .claude/worktrees/           gitignored
 ```
 

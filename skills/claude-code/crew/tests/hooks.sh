@@ -350,7 +350,7 @@ check "lead state: the epoch it started at, for the page's clock" "recent" "$(mo
 if command -v node >/dev/null 2>&1; then
   export CREW_DASHBOARD=1
   out=$("$CREW" session start "$SID")
-  check "session start: announces the dashboard it started" "Open the dashboard at http://127.0.0.1:" "$out"
+  check "session start: announces the dashboard it started" "Open the dashboard at http://" "$out"
   out=$("$CREW" session start "$SID")
   check_not "session start: silent when the dashboard already runs" "Open the dashboard" "$out"
   out=$("$CREW" dashboard start); rc=$?
@@ -359,7 +359,7 @@ if command -v node >/dev/null 2>&1; then
   hook session-start "{$J_BASE,\"source\":\"startup\",\"model\":\"claude-opus-5-5\",\"effort\":{\"level\":\"high\"}}" >/dev/null
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do "$CREW" dashboard url >/dev/null && break; sleep 0.3; done
   out=$("$CREW" session start "$SID")
-  check "session start: announces the dashboard its SessionStart hook started" "Open the dashboard at http://127.0.0.1:" "$out"
+  check "session start: announces the dashboard its SessionStart hook started" "Open the dashboard at http://" "$out"
   out=$("$CREW" session start "$SID")
   check_not "session start: announces it once" "Open the dashboard" "$out"
   "$CREW" dashboard stop >/dev/null

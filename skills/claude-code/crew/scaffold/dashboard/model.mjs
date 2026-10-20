@@ -1,0 +1,895 @@
+// The crew dashboard's model: everything the page shows, computed from .crew/ and git.
+//
+// Installed by `/crew setup` as <project>/.crew/dashboard/model.mjs; used by server.mjs.
+// No dependencies. Reads only, except the set-start cache that bin/crew also keeps
+// (tmp/journal-state/set-start/). The bash script records state (hooks, journal, queue,
+// defects, runs, sleep, compactions); this module turns it into one JSON object.
+//
+//   buildState(root, { now }) -> the state the page renders (see the shape at the bottom).
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+
+export const MODEL_VERSION = 1;
+
+const TASK_RE = /^[Tt]0*([0-9]+)([^0-9]|$)/;
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg)$/i;
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+
+function read(p) {
+  try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
+}
+function stat(p) {
+  try { return fs.statSync(p); } catch { return null; }
+}
+function isDir(p) { return stat(p)?.isDirectory() ?? false; }
+function isFile(p) { return stat(p)?.isFile() ?? false; }
+function listDir(p) {
+  try { return fs.readdirSync(p).sort(); } catch { return []; }
+}
+function trim(s) { return String(s ?? '').replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, ''); }
+function realpath(p) {
+  try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+}
+function num(s) {
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+function isInt(s) { return /^[0-9]+$/.test(String(s ?? '')); }
+
+// Git with a clean environment: act on the directory we name, never on an inherited repository.
+const GIT_ENV = { ...process.env };
+delete GIT_ENV.GIT_DIR;
+delete GIT_ENV.GIT_WORK_TREE;
+delete GIT_ENV.GIT_INDEX_FILE;
+function git(cwd, args) {
+  try {
+    return execFileSync('git', ['-C', cwd, ...args], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: GIT_ENV,
+    }).replace(/\n$/, '');
+  } catch { return ''; }
+}
+function run(cmd, args) {
+  try {
+    return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 });
+  } catch { return ''; }
+}
+function onPath(cmd) {
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    try { fs.accessSync(path.join(dir, cmd), fs.constants.X_OK); return true; } catch { /* next */ }
+  }
+  return false;
+}
+
+// safeName: the file name bin/crew derives from a text (byte-wise, like `tr -c` under LC_ALL=C).
+export function safeName(s) {
+  let out = '';
+  for (const b of Buffer.from(String(s), 'utf8')) {
+    const c = String.fromCharCode(b);
+    out += b < 128 && /[A-Za-z0-9._-]/.test(c) ? c : '_';
+  }
+  if (out === '' || out === '.' || out === '..') out = '_' + out;
+  return out;
+}
+
+// Local calendar day and HH:MM of an epoch (seconds).
+export function localDay(epoch) {
+  const d = new Date(epoch * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+export function localHM(epoch) {
+  const d = new Date(epoch * 1000);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// The task number of a description that starts with T<NN> (7 for "T07 autosave"); null otherwise.
+export function taskNum(text) {
+  const m = TASK_RE.exec(text || '');
+  return m ? Number(m[1]) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Parsers (the same rules as bin/crew's awk)
+// ---------------------------------------------------------------------------
+
+export function statusKey(s) {
+  const l = String(s).toLowerCase();
+  if (l.includes('accept')) return 'accepted';
+  if (l.includes('review')) return 'review';
+  if (l.includes('rework')) return 'rework';
+  if (l.includes('block')) return 'blocked';
+  if (l.includes('progress')) return 'progress';
+  return 'pending';
+}
+
+function indexField(line, label) {
+  let s = line.replace(new RegExp('^.*' + label + ':[ \\t]*'), '');
+  s = s.replace(/\*\*/g, '').replace(/`/g, '');
+  return trim(s);
+}
+
+// An index: title, Closed / Stage / Branch lines, and the task table
+// (#, Status, Task, Flags, Depends on, Spec). Dependencies may be written T01, 01 or 1.
+export function parseIndex(text) {
+  let title = '';
+  let closed = '';
+  let stage = '';
+  let branch = '';
+  const raw = [];
+  for (const line of String(text).split('\n')) {
+    if (title === '' && /^# /.test(line)) {
+      title = trim(line.slice(2).replace(/\r$/, '').replace(/[ \t]+(—|-)[ \t]+tasks[ \t]*$/, ''));
+    }
+    if (/^[ \t]*(-[ \t]+)?(\*\*)?Closed:/.test(line)) closed = indexField(line, 'Closed') || 'yes';
+    if (/^[ \t]*(-[ \t]+)?(\*\*)?Stage:/.test(line)) {
+      stage = indexField(line, 'Stage');
+      if (stage.startsWith('<')) stage = '';
+    }
+    if (/^[ \t]*(-[ \t]+)?(\*\*)?Branch:/.test(line)) branch = indexField(line, 'Branch');
+    if (/^[ \t]*\|/.test(line)) {
+      const f = line.split('|');
+      if (f.length < 8) continue;
+      const id = trim(f[1]);
+      if (!/^[A-Za-z]*[0-9]+$/.test(id)) continue;
+      raw.push({
+        id,
+        num: Number(id.replace(/[^0-9]/g, '')),
+        status: statusKey(trim(f[2])),
+        title: trim(f[3]).replace(/\t/g, ' '),
+        flags: trim(f[4]),
+        deps: trim(f[5]),
+        spec: trim(f[6]),
+      });
+    }
+  }
+  const rows = raw.map((r, i) => {
+    const deps = [];
+    for (const m of r.deps.matchAll(/[0-9]+/g)) {
+      const k = Number(m[0]);
+      const j = raw.findIndex((x, jj) => x.num === k && jj !== i);
+      if (j >= 0) deps.push(raw[j].id);
+    }
+    let flags = r.flags;
+    if (flags === '—' || flags === '-' || flags.toLowerCase() === 'none') flags = '';
+    return {
+      id: r.id,
+      num: r.num,
+      status: r.status,
+      title: r.title,
+      flags: flags ? flags.split(',').map((x) => trim(x)).filter(Boolean) : [],
+      deps,
+      spec: r.spec.replace(/`/g, ''),
+    };
+  });
+  return { title, closed, stage, branch, rows };
+}
+
+// Queue entries of one kind: R (requests) or F (founder questions).
+export function parseQueue(text, kind) {
+  const re = new RegExp('^[ \\t]*- \\[' + kind + '[0-9]+\\]');
+  const out = [];
+  for (const line of String(text).split('\n')) {
+    if (!re.test(line)) continue;
+    let l = line.replace(/^[ \t]*- \[/, '');
+    const id = l.slice(0, l.indexOf(']'));
+    l = l.slice(l.indexOf(']') + 1);
+    const p = l.split(' · ');
+    const e = { id, date: trim(p[0]), text: '', affects: '', slot: '', status: '', default: '' };
+    const text = [];
+    for (let i = 1; i < p.length; i++) {
+      const v = trim(p[i]);
+      if (/^affects:/.test(v)) e.affects = v.replace(/^affects:[ \t]*/, '');
+      else if (/^slot:/.test(v)) e.slot = v.replace(/^slot:[ \t]*/, '');
+      else if (/^status:/.test(v)) e.status = v.replace(/^status:[ \t]*/, '').toLowerCase();
+      else if (/^default taken:/.test(v)) e.default = v.replace(/^default taken:[ \t]*/, '');
+      else text.push(v);
+    }
+    e.text = text.join(' · ');
+    e.state = (e.status.split(/[ \t(]/)[0] || '');
+    if (kind === 'R') delete e.default;
+    else { delete e.affects; delete e.slot; }
+    out.push(e);
+  }
+  return out;
+}
+
+// Defect entries: id, date, symptom, where, from, severity, slot, status, promoted.
+export function parseDefects(text) {
+  const out = [];
+  for (const line of String(text).split('\n')) {
+    if (!/^[ \t]*- \[D[0-9]+\]/.test(line)) continue;
+    let l = line.replace(/^[ \t]*- \[/, '');
+    const id = l.slice(0, l.indexOf(']'));
+    l = l.slice(l.indexOf(']') + 1);
+    const p = l.split(' · ');
+    const e = { id, date: trim(p[0]), text: '', where: '', from: '', severity: '', slot: '', status: '', promoted: false };
+    const text = [];
+    for (let i = 1; i < p.length; i++) {
+      const v = trim(p[i]);
+      if (/^where:/.test(v)) e.where = v.replace(/^where:[ \t]*/, '');
+      else if (/^from:/.test(v)) e.from = v.replace(/^from:[ \t]*/, '');
+      else if (/^severity:/.test(v)) e.severity = v.replace(/^severity:[ \t]*/, '').toLowerCase();
+      else if (/^slot:/.test(v)) e.slot = v.replace(/^slot:[ \t]*/, '');
+      else if (/^status:/.test(v)) e.status = v.replace(/^status:[ \t]*/, '').toLowerCase();
+      else if (v === 'promoted') e.promoted = true;
+      else text.push(v);
+    }
+    e.text = text.join(' · ');
+    e.state = e.status.replace(/[ \t].*$/, '');
+    out.push(e);
+  }
+  return out;
+}
+
+export function defectSummary(items) {
+  const s = { total: items.length, deferred: 0, deferredMedium: 0, scheduled: 0, fixed: 0, dropped: 0, promoted: 0 };
+  for (const d of items) {
+    if (d.state in s && d.state !== 'total') s[d.state]++;
+    if (d.promoted) s.promoted++;
+    if (d.state === 'deferred' && d.severity === 'medium') s.deferredMedium++;
+  }
+  return s;
+}
+
+// Split "actor · text" after the time: the actor may hold " · " inside parentheses
+// ("→ builder (sonnet · high)"), the text is kept whole.
+function splitActor(rest) {
+  let depth = 0;
+  for (let i = 0; i < rest.length; i++) {
+    const c = rest[i];
+    if (c === '(' || c === '[') depth++;
+    else if ((c === ')' || c === ']') && depth > 0) depth--;
+    else if (depth === 0 && rest.startsWith(' · ', i)) return [rest.slice(0, i), rest.slice(i + 3)];
+  }
+  return [rest, ''];
+}
+
+const STATUS_WORDS = new Set(['DONE', 'PARTIAL', 'BLOCKED', 'ACCEPT', 'CHANGES', 'RECOMMENDATION', 'finished']);
+
+export function parseJournalLine(s, day) {
+  const e = { day, time: '', actor: '', branch: '', text: '', kind: 'other' };
+  const i = s.indexOf(' · ');
+  const when = i < 0 ? s : s.slice(0, i);
+  const m = /^([0-9]{4}-[0-9]{2}-[0-9]{2}) ([0-9]{1,2}:[0-9]{2})$/.exec(when);
+  if (m) { e.day = m[1]; e.time = m[2]; } else e.time = when;
+  if (i < 0) return e;
+  let [actor, text] = splitActor(s.slice(i + 3));
+  const b = /^(.*) \[([^\]]+)\]$/.exec(actor);
+  if (b) { actor = b[1]; e.branch = b[2]; }
+  e.actor = actor;
+  e.text = text;
+  if (actor === 'lead') e.kind = 'lead';
+  else if (actor === 'system') e.kind = 'system';
+  else if (actor.startsWith('←')) e.kind = 'stop';
+  else if (actor.startsWith('↺')) e.kind = 'resume';
+  else if (/(^|\s)→(\s|$)/.test(actor)) e.kind = 'start';
+  if (e.kind === 'start') {
+    const a = /^(?:(\S+) )?→ (\S+)(?: \((.+) · (.+)\))?$/.exec(actor);
+    if (a) Object.assign(e, { by: a[1] || '', agentType: a[2], model: a[3] || '', effort: a[4] || '' });
+  } else if (e.kind === 'stop') {
+    e.agentType = actor.replace(/^←\s*/, '');
+    const w = text.split(' · ')[0];
+    if (STATUS_WORDS.has(w)) e.status = w;
+  } else if (e.kind === 'resume') {
+    e.agentName = actor.replace(/^↺\s*/, '');
+  }
+  return e;
+}
+
+export function parseJournal(text, limit = 400) {
+  let day = '';
+  const out = [];
+  for (const line of String(text).split('\n')) {
+    const h = /^## ([0-9]{4}-[0-9]{2}-[0-9]{2})/.exec(line);
+    if (h) { day = h[1]; continue; }
+    if (!line.startsWith('- ')) continue;
+    out.push(parseJournalLine(line.slice(2).replace(/\r$/, ''), day));
+  }
+  return { total: out.length, entries: out.slice(-limit) };
+}
+
+export function parseHandoff(text) {
+  const lines = String(text).split('\n');
+  const first = (re) => lines.find((l) => re.test(l));
+  const w = first(/^# Crew handoff[ \t]*—[ \t]*/);
+  const where = first(/Where we are:/);
+  const next = first(/Next step:/);
+  return {
+    written: w ? trim(w.replace(/^# Crew handoff[ \t]*—[ \t]*/, '')) : '',
+    where: where ? trim(where.replace(/^.*Where we are:[*\s]*/, '')) : '',
+    next: next ? trim(next.replace(/^.*Next step:[*\s]*/, '')) : '',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Agents, the lead, keep-awake
+// ---------------------------------------------------------------------------
+
+// An agents/<id> record: key=value lines; the last line of each key wins (run_start grows).
+export function loadAgent(stateDir, id) {
+  const t = read(path.join(stateDir, 'agents', id));
+  if (t == null) return null;
+  const a = { id, type: '', description: '', model: '', effort: '', name: '', started: 0, since: '', runStart: 0 };
+  for (const line of t.split('\n')) {
+    const i = line.indexOf('=');
+    if (i < 0) continue;
+    const k = line.slice(0, i);
+    const v = line.slice(i + 1);
+    if (k === 'type') a.type = v;
+    else if (k === 'description') a.description = v;
+    else if (k === 'model') a.model = v;
+    else if (k === 'effort') a.effort = v;
+    else if (k === 'name') a.name = v;
+    else if (k === 'started') a.started = num(v);
+    else if (k === 'since') a.since = v;
+    else if (k === 'run_start') a.runStart = num(v);
+  }
+  return a;
+}
+
+function readRuns(stateDir) {
+  const t = read(path.join(stateDir, 'runs.tsv'));
+  if (!t) return [];
+  const out = [];
+  for (const line of t.split('\n')) {
+    if (!line) continue;
+    const f = line.split('\t');
+    out.push({ start: num(f[0]), end: num(f[1]), id: f[2] || '', type: f[3] || '', task: f[4] || '', kind: f[5] || 'first', status: f[6] || '' });
+  }
+  return out;
+}
+
+function readSleeps(stateDir) {
+  const t = read(path.join(stateDir, 'sleep.tsv'));
+  if (!t) return [];
+  const out = [];
+  for (const line of t.split('\n')) {
+    if (!line) continue;
+    const f = line.split('\t');
+    out.push({ from: num(f[0]), to: num(f[1]), secs: num(f[2]) });
+  }
+  return out;
+}
+
+function runningAgents(stateDir, runs) {
+  const ids = new Set(runs.map((r) => r.id));
+  return listDir(path.join(stateDir, 'running')).map((id) => {
+    const a = loadAgent(stateDir, id) || { id, type: 'unknown', description: '', model: '', effort: '', name: '', started: 0, since: '', runStart: 0 };
+    return {
+      ...a,
+      model: a.model || 'default',
+      effort: a.effort || 'default',
+      runStart: a.runStart || a.started,
+      kind: ids.has(id) ? 'resume' : 'first',
+      taskNum: taskNum(a.description),
+    };
+  });
+}
+
+export function leadState(stateDir, nrun) {
+  const t = trim(read(path.join(stateDir, 'lead')) || '');
+  const [st = '', hm = ''] = t.split(/\s+/);
+  if (st === 'stopped') return { state: 'stopped', since: hm || null, agentsFinishing: nrun };
+  if (st === 'working') return { state: 'working', since: hm || null };
+  if (nrun > 0) return { state: 'agents', since: null };
+  return { state: 'waiting', since: hm || null };
+}
+
+function keepAwake(stateDir) {
+  if (!onPath('caffeinate')) return null;
+  let on = false;
+  let watched = '';
+  const t = read(path.join(stateDir, 'keep-awake'));
+  if (t != null) {
+    const [pid, w = ''] = trim(t).split(/\s+/);
+    watched = w;
+    if (isInt(pid) && run('ps', ['-o', 'args=', '-p', pid]).includes('caffeinate')) on = true;
+  }
+  const stopped = /^stopped/.test(trim(read(path.join(stateDir, 'lead')) || ''));
+  let battery = false;
+  if (on) battery = (run('pmset', ['-g', 'batt']).split('\n')[0] || '').includes('Battery Power');
+  return { on, mode: on ? (watched === '12h' ? '12h' : 'claude') : null, battery, stopped };
+}
+
+// ---------------------------------------------------------------------------
+// Git, worktrees, task sets
+// ---------------------------------------------------------------------------
+
+function gitInfo(root) {
+  let branch = git(root, ['symbolic-ref', '--short', '-q', 'HEAD']);
+  let sha = git(root, ['rev-parse', '--short', 'HEAD']);
+  let state = 'branch';
+  if (!branch) { branch = 'detached'; state = 'detached'; }
+  if (!sha) { branch = 'no git history'; sha = ''; state = 'none'; }
+  return { branch, sha, state };
+}
+
+export function listWorktrees(root) {
+  const out = [];
+  let p = '';
+  let b = '';
+  for (const line of git(root, ['worktree', 'list', '--porcelain']).split('\n')) {
+    if (line.startsWith('worktree ')) {
+      if (p) out.push({ path: p, branch: b });
+      p = line.slice(9);
+      b = '';
+    } else if (line.startsWith('branch ')) {
+      b = line.slice(7).replace(/^refs\/heads\//, '');
+    }
+  }
+  if (p) out.push({ path: p, branch: b });
+  return out;
+}
+
+// When the set started: the time of the commit that added its index (cached once found, in the
+// same file bin/crew used); before that commit, the file's birth time; null when unknown.
+export function setStartEpoch(stateDir, file) {
+  const key = path.join(stateDir, 'set-start', safeName(file));
+  const cached = trim(read(key) || '');
+  if (isInt(cached)) return Number(cached);
+  const t = git(path.dirname(file), ['log', '--diff-filter=A', '--format=%ct', '-1', '--', path.basename(file)]);
+  if (isInt(t)) {
+    try { fs.mkdirSync(path.dirname(key), { recursive: true }); fs.writeFileSync(key, t + '\n'); } catch { /* read-only is fine */ }
+    return Number(t);
+  }
+  const s = stat(file);
+  const birth = s ? Math.floor(s.birthtimeMs / 1000) : 0;
+  return birth > 0 ? birth : null;
+}
+
+function collectSets(root, crewDir) {
+  const sets = [];
+  const add = (file, where, rel, wtRoot) => {
+    const text = read(file);
+    if (text == null) return;
+    const idx = parseIndex(text);
+    const counts = { accepted: 0, review: 0, progress: 0, rework: 0, blocked: 0, pending: 0 };
+    for (const r of idx.rows) counts[r.status]++;
+    sets.push({
+      file,
+      rel,
+      where,
+      crewDir: wtRoot ? path.join(wtRoot, '.crew') : crewDir,
+      title: idx.title || rel.replace(/\/index\.md$/, ''),
+      total: idx.rows.length,
+      accepted: counts.accepted,
+      counts,
+      closed: idx.closed,
+      stage: idx.stage,
+      branch: idx.branch,
+      live: !idx.closed,
+      mtime: Math.floor((stat(file)?.mtimeMs ?? 0) / 1000),
+      rows: idx.rows,
+    });
+  };
+  for (const d of listDir(path.join(crewDir, 'tasks'))) {
+    const f = path.join(crewDir, 'tasks', d, 'index.md');
+    if (isFile(f)) add(f, '', `tasks/${d}/index.md`, null);
+  }
+  const worktrees = [];
+  for (const wt of listWorktrees(root)) {
+    const p = realpath(wt.path);
+    if (p === root) continue;
+    worktrees.push({ path: p, branch: wt.branch });
+    const tasks = path.join(p, '.crew', 'tasks');
+    if (!isDir(tasks)) continue;
+    for (const d of listDir(tasks)) {
+      const f = path.join(tasks, d, 'index.md');
+      const rel = `tasks/${d}/index.md`;
+      if (!isFile(f) || isFile(path.join(crewDir, rel))) continue;
+      add(f, wt.branch || path.basename(p), rel, p);
+    }
+  }
+  return { sets, worktrees };
+}
+
+// The current set: a live main-checkout index on the current branch, else the newest live
+// main-checkout index, else the newest live worktree index.
+function pickCurrent(sets, branch) {
+  const first = (s) => s.split(/\s+/)[0];
+  let cur = sets.findIndex((s) => s.live && !s.where && s.branch && first(s.branch) === branch);
+  if (cur >= 0) return cur;
+  const newest = (list) => list.reduce((a, b) => (b.s.mtime > a.s.mtime ? b : a));
+  const main = sets.map((s, i) => ({ s, i })).filter((x) => x.s.live && !x.s.where);
+  if (main.length) return newest(main).i;
+  const wt = sets.map((s, i) => ({ s, i })).filter((x) => x.s.live && x.s.where);
+  if (wt.length) return newest(wt).i;
+  return -1;
+}
+
+function screenshotsFor(crewDir, taskId, limit = 24) {
+  const base = path.join(crewDir, 'task-data');
+  const dirs = [];
+  for (const d of listDir(base)) {
+    if (d === taskId || d.startsWith(taskId + '-')) {
+      const s = path.join(base, d, 'screenshots');
+      if (isDir(s)) dirs.push(s);
+    }
+  }
+  const shots = [];
+  for (const d of dirs) {
+    for (const f of listDir(d)) {
+      if (!IMAGE_RE.test(f)) continue;
+      const p = path.join(d, f);
+      const s = stat(p);
+      if (s?.isFile()) shots.push({ name: f, path: p, mtime: Math.floor(s.mtimeMs / 1000) });
+    }
+  }
+  shots.sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name));
+  return { total: shots.length, items: shots.slice(0, limit) };
+}
+
+// ---------------------------------------------------------------------------
+// Timing (the current set): runs, sleep, phases, the critical path
+// ---------------------------------------------------------------------------
+
+export function phaseOf(type, kind) {
+  if (type === 'builder' || type === 'worker') return kind === 'resume' ? 'rework' : 'build';
+  if (type === 'debugger') return 'rework';
+  if (type === 'reviewer') return 'review';
+  return 'other';
+}
+
+// tasks: [{ id, num, depNums: [n] }] in index order; runs: finished runs (runs.tsv);
+// open: the running agents' current runs (end = now); sleeps: sleep.tsv; start: the set start
+// (epoch or null); done: every task accepted and nothing running (the clock stops at the last
+// run's end). Null when the set has no runs yet.
+export function computeTiming({ tasks, runs, open = [], sleeps, start, now, done = false, agentOf = () => null }) {
+  const byNum = new Map();
+  tasks.forEach((t, k) => byNum.set(t.num, k));
+  const all = [
+    ...runs.map((r) => ({ ...r, open: false })),
+    ...open.map((r) => ({ ...r, end: now, open: true, status: 'running' })),
+  ].filter((r) => !(start != null && r.start < start) && r.start > 0 && r.end >= r.start);
+  if (all.length === 0) return null;
+
+  let t0 = start != null ? start : Math.min(...all.map((r) => r.start));
+  const per = tasks.map(() => ({ build: 0, review: 0, rework: 0, changes: 0, active: 0, slept: 0, runs: 0 }));
+  const ptot = { build: 0, review: 0, rework: 0 };
+  const byType = {};
+  let tot = 0;
+  let chs = 0;
+  let other = 0;
+  let osl = 0;
+  const otypes = [];
+  const outRuns = [];
+  for (const r of all) {
+    let sl = 0;
+    for (const s of sleeps) if (s.from >= r.start && s.to <= r.end) sl += s.secs;
+    const aw = Math.max(0, r.end - r.start - sl);
+    const ph = phaseOf(r.type, r.kind);
+    const tn = r.task === '' || r.task == null ? null : Number(r.task);
+    const k = tn != null && byNum.has(tn) ? byNum.get(tn) : -1;
+    byType[r.type || 'unknown'] = (byType[r.type || 'unknown'] || 0) + aw;
+    if (k >= 0) {
+      const p = per[k];
+      p.runs++;
+      p.active += aw;
+      p.slept += sl;
+      tot += aw;
+      if (ph !== 'other') { p[ph] += aw; ptot[ph] += aw; }
+      if (ph === 'review' && r.status === 'CHANGES') { p.changes++; chs++; }
+    } else {
+      other += aw;
+      osl += sl;
+      if (!otypes.includes(r.type)) otypes.push(r.type);
+    }
+    const a = agentOf(r.id);
+    outRuns.push({
+      start: r.start, end: r.end, open: r.open, agentId: r.id, type: r.type, kind: r.kind, status: r.status,
+      phase: ph, task: k >= 0 ? tasks[k].id : null, slept: sl, active: aw,
+      name: a?.name || '', description: a?.description || '', model: a?.model || '', effort: a?.effort || '',
+    });
+  }
+
+  // Agents at work: the union of all run intervals, less the sleep inside it.
+  const ord = [...all].sort((a, b) => a.start - b.start);
+  let busy = 0;
+  let cs = -1;
+  let ce = 0;
+  const flush = () => {
+    if (cs < 0) return;
+    busy += ce - cs;
+    for (const s of sleeps) if (s.from >= cs && s.to <= ce) busy -= s.secs;
+  };
+  for (const r of ord) {
+    if (cs >= 0 && r.start <= ce) { if (r.end > ce) ce = r.end; continue; }
+    flush();
+    cs = r.start;
+    ce = r.end;
+  }
+  flush();
+  busy = Math.max(0, busy);
+
+  let endt = now;
+  if (done) {
+    let m = 0;
+    for (const r of runs) if (r.start >= (start ?? 0) && r.end > m) m = r.end;
+    if (m > 0) endt = m;
+  }
+  let slept = 0;
+  for (const s of sleeps) if (s.from >= t0 && s.to <= endt) slept += s.secs;
+  const clock = endt - t0;
+  const idle = Math.max(0, clock - slept - busy);
+
+  // Critical path over the dependencies, each task weighted by its agent time so far
+  // (relaxation, one pass per task, in index order: the same order bin/crew used).
+  const nt = tasks.length;
+  const fin = new Array(nt).fill(0);
+  const pred = new Array(nt).fill(-1);
+  for (let pass = 0; pass < nt; pass++) {
+    for (let k = 0; k < nt; k++) {
+      let best = 0;
+      let bp = -1;
+      for (const d of tasks[k].depNums) {
+        if (!byNum.has(d)) continue;
+        const j = byNum.get(d);
+        if (fin[j] > best) { best = fin[j]; bp = j; }
+      }
+      fin[k] = per[k].active + best;
+      pred[k] = bp;
+    }
+  }
+  let cp = 0;
+  let last = -1;
+  for (let k = 0; k < nt; k++) if (fin[k] > cp) { cp = fin[k]; last = k; }
+  const pathIds = [];
+  for (let k = last; k >= 0 && pathIds.length < nt; k = pred[k]) pathIds.unshift(tasks[k].id);
+
+  const sleepsOut = sleeps.filter((s) => s.to >= t0).map((s) => ({ ...s }));
+  return {
+    start, t0, end: endt, done, until: done && endt !== now ? endt : null,
+    clock, slept, busy, idle,
+    taskTime: tot, phases: ptot, changes: chs, byType,
+    criticalPath: { ids: pathIds, seconds: cp, headroom: Math.max(0, tot - cp) },
+    perTask: tasks.map((t, k) => ({ id: t.id, ...per[k] })).filter((p) => p.runs > 0),
+    setLevel: other > 0 || osl > 0 ? { types: otypes, active: other, slept: osl } : null,
+    runs: outRuns.sort((a, b) => a.start - b.start),
+    sleeps: sleepsOut,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Compactions: the log bin/crew keeps, the turns since each one, the economics
+// ---------------------------------------------------------------------------
+
+// Prices in USD per million tokens (bin/crew's price_for; Anthropic list prices, 2026-10-20).
+export function modelAlias(m) {
+  const l = String(m || '').toLowerCase();
+  if (l.includes('fable') || l.includes('mythos')) return 'fable';
+  if (l.includes('opus')) return 'opus';
+  if (l.includes('sonnet')) return 'sonnet';
+  if (l.includes('haiku')) return 'haiku';
+  return '';
+}
+export function readPrice(model, pre) {
+  switch (modelAlias(model)) {
+    case 'fable': return 0.25;
+    case 'opus': return 0.2;
+    case 'sonnet': return 0.1;
+    case 'haiku': return pre > 100000 ? 0.05 : 0.01;
+    default: return 0;
+  }
+}
+
+// Distinct assistant message ids (API requests) after a byte offset of a transcript. Only the
+// bytes added since the last call are read; a partial last line waits for the next call.
+const turnCache = new Map();
+export function turnsSince(file, offset) {
+  const key = `${file}\t${offset}`;
+  let c = turnCache.get(key);
+  const s = stat(file);
+  if (!s) return c ? c.ids.size : 0;
+  if (!c || s.size < c.pos) { c = { pos: offset, ids: new Set(), rest: '' }; turnCache.set(key, c); }
+  if (s.size > c.pos) {
+    let fd;
+    try {
+      fd = fs.openSync(file, 'r');
+      const chunk = 1 << 22;
+      const buf = Buffer.alloc(chunk);
+      let pos = c.pos;
+      let rest = c.rest;
+      while (pos < s.size) {
+        const n = fs.readSync(fd, buf, 0, Math.min(chunk, s.size - pos), pos);
+        if (n <= 0) break;
+        pos += n;
+        const text = rest + buf.toString('latin1', 0, n);
+        const cut = text.lastIndexOf('\n');
+        const whole = cut < 0 ? '' : text.slice(0, cut);
+        rest = cut < 0 ? text : text.slice(cut + 1);
+        for (const line of whole.split('\n')) {
+          if (!line.includes('"type":"assistant"')) continue;
+          for (const m of line.matchAll(/"id":"(msg_[A-Za-z0-9]*)"/g)) c.ids.add(m[1]);
+        }
+      }
+      c.pos = pos;
+      c.rest = rest;
+    } catch { /* unreadable: keep what we have */ } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+  }
+  return c.ids.size;
+}
+
+// compactions.tsv columns: 1 epoch 2 iso 3 kind 4 id 5 label 6 model 7 effort 8 pre 9 post
+// 10 durationMs 11 trigger 12 cost_usd 13 transcript 14 boundary_offset 15 turns_after ("-" = open)
+// 16 agent_started_epoch
+export function compactionsModel(stateDir) {
+  const t = read(path.join(stateDir, 'compactions.tsv'));
+  if (!t) return null;
+  const rows = [];
+  for (const line of t.split('\n')) {
+    if (!line) continue;
+    const f = line.split('\t');
+    if (!f[0]) continue;
+    const pre = num(f[7]);
+    const post = num(f[8]);
+    const open = f[14] === '-';
+    const turns = open ? (isFile(f[12]) ? turnsSince(f[12], num(f[13])) : 0) : num(f[14]);
+    const rp = readPrice(f[5], pre);
+    const cost = f[11] === '' || f[11] == null ? null : num(f[11]);
+    const saved = rp > 0 ? (turns * (pre - post) * rp) / 1e6 : null;
+    rows.push({
+      epoch: num(f[0]), kind: f[2], id: f[3], label: f[4], model: f[5], effort: f[6],
+      pre, post, durationMs: num(f[9]), trigger: f[10] || 'auto', cost, turns, open,
+      saved, net: cost != null && saved != null ? saved - cost : null, started: num(f[15]),
+    });
+  }
+  if (rows.length === 0) return null;
+  const s = {
+    lead: { count: 0, avgPre: 0, interval: null },
+    sub: { count: 0, avgPre: 0, afterStart: null },
+    overhead: null, saved: null, net: null,
+  };
+  let leadPre = 0;
+  let subPre = 0;
+  let gapSum = 0;
+  let gaps = 0;
+  let lastLead = 0;
+  let subGap = 0;
+  let subGaps = 0;
+  let over = 0;
+  let overKnown = false;
+  let save = 0;
+  let saveKnown = false;
+  for (const r of rows) {
+    if (r.kind === 'lead') {
+      s.lead.count++;
+      leadPre += r.pre;
+      if (lastLead > 0) { gapSum += r.epoch - lastLead; gaps++; }
+      lastLead = r.epoch;
+    } else {
+      s.sub.count++;
+      subPre += r.pre;
+      if (r.started > 0 && r.epoch >= r.started) { subGap += r.epoch - r.started; subGaps++; }
+    }
+    if (r.cost != null) { over += r.cost; overKnown = true; }
+    if (r.saved != null) { save += r.saved; saveKnown = true; }
+  }
+  if (s.lead.count) s.lead.avgPre = leadPre / s.lead.count;
+  if (gaps) s.lead.interval = gapSum / gaps;
+  if (s.sub.count) s.sub.avgPre = subPre / s.sub.count;
+  if (subGaps) s.sub.afterStart = subGap / subGaps;
+  if (overKnown) s.overhead = over;
+  if (saveKnown) { s.saved = save; s.net = save - over; }
+  return { summary: s, rows };
+}
+
+// ---------------------------------------------------------------------------
+// The state
+// ---------------------------------------------------------------------------
+
+export function buildState(rootIn, opts = {}) {
+  const now = opts.now ?? Math.floor(Date.now() / 1000);
+  const root = realpath(rootIn);
+  const crewDir = path.join(root, '.crew');
+  const stateDir = path.join(crewDir, 'tmp', 'journal-state');
+  const today = localDay(now);
+
+  const runs = readRuns(stateDir);
+  const sleeps = readSleeps(stateDir);
+  const agents = runningAgents(stateDir, runs);
+  const repo = { name: path.basename(root), root, ...gitInfo(root) };
+  const lead = leadState(stateDir, agents.length);
+  const awake = keepAwake(stateDir);
+
+  const { sets, worktrees } = collectSets(root, crewDir);
+  const cur = pickCurrent(sets, repo.branch);
+
+  // Queue, defects.
+  const qText = read(path.join(crewDir, 'queue.md')) || '';
+  const requests = parseQueue(qText, 'R');
+  const questions = parseQueue(qText, 'F');
+  const defects = parseDefects(read(path.join(crewDir, 'defects.md')) || '');
+
+  let current = null;
+  if (cur >= 0) {
+    const set = sets[cur];
+    const setDir = path.dirname(set.file);
+    const tasks = set.rows.map((r) => {
+      const onIt = agents.filter((a) => a.taskNum != null && a.taskNum === r.num).map((a) => a.id);
+      const shots = screenshotsFor(crewDir, r.id);
+      return {
+        ...r,
+        specPath: r.spec ? path.join(setDir, r.spec) : null,
+        agents: onIt,
+        screenshots: shots.items,
+        screenshotCount: shots.total,
+      };
+    });
+    let ct = tasks.findIndex((t) => ['progress', 'review', 'rework'].includes(t.status));
+    if (ct < 0) ct = tasks.findIndex((t) => t.status === 'pending');
+
+    let timing = null;
+    if (tasks.length) {
+      const agentCache = new Map();
+      const agentOf = (id) => {
+        if (!agentCache.has(id)) agentCache.set(id, loadAgent(stateDir, id));
+        return agentCache.get(id);
+      };
+      timing = computeTiming({
+        tasks: tasks.map((t) => ({ id: t.id, num: t.num, depNums: t.deps.map((d) => Number(d.replace(/[^0-9]/g, ''))) })),
+        runs,
+        open: agents.map((a) => ({ start: a.runStart, id: a.id, type: a.type, task: a.taskNum == null ? '' : String(a.taskNum), kind: a.kind })),
+        sleeps,
+        start: setStartEpoch(stateDir, set.file),
+        now,
+        done: agents.length === 0 && set.accepted === set.total,
+        agentOf,
+      });
+    }
+    current = {
+      file: set.file, rel: set.rel, where: set.where, title: set.title, stage: set.stage, branch: set.branch,
+      total: set.total, accepted: set.accepted, counts: set.counts,
+      tasks, currentTask: ct >= 0 ? tasks[ct].id : null, timing,
+    };
+  }
+
+  const handoffText = read(path.join(crewDir, 'handoff.md'));
+  const journal = parseJournal(read(path.join(crewDir, 'journal.md')) || '', opts.journalLimit ?? 400);
+  const compactions = compactionsModel(stateDir);
+  const ds = defectSummary(defects);
+
+  const state = {
+    version: MODEL_VERSION,
+    generatedAt: now,
+    today,
+    repo,
+    lead,
+    keepAwake: awake,
+    agents: agents.map(({ taskNum: tn, ...a }) => ({ ...a, task: tn == null ? null : (current?.tasks.find((t) => t.num === tn)?.id ?? `T${String(tn).padStart(2, '0')}`) })),
+    current,
+    sets: sets.map(({ rows, crewDir: _c, ...s }, i) => ({ ...s, current: i === cur }))
+      .sort((a, b) => Number(b.current) - Number(a.current) || b.mtime - a.mtime),
+    queue: {
+      requests,
+      questions,
+      counts: {
+        queued: requests.filter((r) => r.state === 'queued').length,
+        scheduled: requests.filter((r) => r.state === 'scheduled').length,
+        done: requests.filter((r) => r.state === 'done').length,
+        dropped: requests.filter((r) => r.state === 'dropped').length,
+        openQuestions: questions.filter((q) => q.state === 'open').length,
+      },
+    },
+    defects: { items: defects, summary: ds },
+    compactions,
+    journal,
+    handoff: handoffText == null ? null : { ...parseHandoff(handoffText), path: path.join(crewDir, 'handoff.md') },
+    worktrees,
+  };
+  // Something on the page changes with time alone: refresh it once a minute.
+  state.live = agents.length > 0 || Boolean(current?.timing && !current.timing.done) || Boolean(awake?.on);
+  return state;
+}
+
+// The directories the server may serve files from: .crew/ of the main checkout and of each
+// linked worktree.
+export function allowedDirs(state) {
+  return [path.join(state.repo.root, '.crew'), ...state.worktrees.map((w) => path.join(w.path, '.crew'))];
+}

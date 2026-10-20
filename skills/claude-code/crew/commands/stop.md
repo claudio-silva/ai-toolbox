@@ -3,7 +3,7 @@
 Reader: the lead. Read on `/crew stop`. The founder wants everything stopped safely, in this session, and told when it is. `/crew resume` continues afterwards.
 
 1. Say "Stopping the crew." Start nothing new from this point: no briefs, no queue draining, no follow-up messages except the ones below.
-2. `.crew/bin/crew session stop` (the dashboard shows "⏹ stopped by you", and the computer may sleep again).
+2. `.crew/bin/crew session stop` (the dashboard shows "Stopped by you", and the computer may sleep again).
 3. **Find running subagents** with `ListAgents`, or `.crew/bin/crew running` when `ListAgents` is not available. None → go to step 6.
 4. **Ask each one to stop safely** with `SendMessage`: "Stop now. Finish only the edit or command in progress so nothing is left half-written, do not start the next step, then report in your usual format with STATUS: PARTIAL, what is done and verified, what is not, and the files you changed." Wait for the reports; completion notifications wake you.
    - An agent that has not reported after about 2 minutes, or that keeps working, is stopped with `TaskStop`; record its task as interrupted at the last step you know of.

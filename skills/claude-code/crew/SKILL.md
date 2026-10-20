@@ -1,6 +1,6 @@
 ---
 name: crew
-description: "Multi-agent operating model for building software with subagents, able to run unattended for long stretches: which role, model and effort handles each kind of work, a standard planning and execution method, how to brief and verify subagents, debugging escalation, quality-over-quantity testing and QC, a request queue and batched founder questions, an advisor for second opinions, a development journal and status dashboard with compaction tracking, git branch and worktree discipline, and how the lead keeps its own context and cost down. Use at the start of any session where you lead or orchestrate a project; when the founder brainstorms an idea, defines requirements (a PRD, a spec), or plans a project, its roadmap, or its next milestone or stage; every time you are about to delegate (to pick role, model and effort and write the brief); when a fix attempt fails; at QC checkpoints; when the founder sends a message while work is in flight; before asking the founder anything; and for `/crew setup`, `/crew handoff`, `/crew resume` and `/crew stop`. Works with any planning method."
+description: "Multi-agent operating model for building software with subagents, able to run unattended for long stretches: which role, model and effort handles each kind of work, a standard planning and execution method, how to brief and verify subagents, debugging escalation, quality-over-quantity testing and QC, a request queue and batched founder questions, an advisor for second opinions, a development journal and live dashboard with compaction tracking, git branch and worktree discipline, and how the lead keeps its own context and cost down. Use at the start of any session where you lead or orchestrate a project; when the founder brainstorms an idea, defines requirements (a PRD, a spec), or plans a project, its roadmap, or its next milestone or stage; every time you are about to delegate (to pick role, model and effort and write the brief); when a fix attempt fails; at QC checkpoints; when the founder sends a message while work is in flight; before asking the founder anything; and for `/crew setup`, `/crew handoff`, `/crew resume` and `/crew stop`. Works with any planning method."
 argument-hint: "[setup | handoff | resume | stop]"
 ---
 
@@ -17,7 +17,7 @@ This skill was invoked with: `$ARGUMENTS`. If that is `setup`, `handoff`, `resum
 ## Session start
 
 1. Read the project's **`CREW.md`** (path from the pointer line in `CLAUDE.md` or `AGENTS.md`; default `docs/CREW.md`). It overrides this skill.
-2. Run `.crew/bin/crew session start ${CLAUDE_SESSION_ID}` from the project root. It registers this session for the hooks, keeps the computer awake while Claude Code runs, and renders the dashboard.
+2. Run `.crew/bin/crew session start ${CLAUDE_SESSION_ID}` from the project root. It registers this session for the hooks, keeps the computer awake while Claude Code runs, and starts the founder's dashboard.
 3. If `.crew/` does not exist, skip step 2, offer `/crew setup`, and work with the defaults until then (no journal, no queue, no dashboard).
 4. If `.crew/handoff.md` exists and the founder did not run `/crew resume`, mention it.
 
@@ -36,7 +36,7 @@ At any time: a founder message while work is in flight → "Founder requests" be
 Apply this to every founder message while work is in flight, unprompted, before anything else:
 
 1. **Classify.** A clarification: answer it. An operational instruction ("stop", "do X first", `/crew stop`): do it now. Anything that changes what gets built (a change, a fix, a feature, feedback, an answer that overrides a default you took), even phrased as a question or buried in a list of remarks: a **request**. Five remarks are five requests.
-2. **Queue every request first:** `.crew/bin/crew request "<the founder's words>" --affects "<tasks, plan sections>" --slot "<after T<NN> | end of set | milestone <N>>"`, with `--urgent` when the founder says so or it is a data-loss or security problem. It writes `.crew/queue.md`, journals and re-renders the dashboard.
+2. **Queue every request first:** `.crew/bin/crew request "<the founder's words>" --affects "<tasks, plan sections>" --slot "<after T<NN> | end of set | milestone <N>>"`, with `--urgent` when the founder says so or it is a data-loss or security problem. It writes `.crew/queue.md` and journals.
 3. **Acknowledge in 3 lines:** what you understood; what it affects and costs; its R number and slot.
 4. **Never add a request to a running agent, and never edit a plan, spec or index entry an agent is working from.** Drain the queue only at task-acceptance boundaries: `.crew/bin/crew request R<n> --status scheduled` when it becomes a task (the spec carries `Requests: R<n>`), `--status done` when that work is accepted, `--status dropped --note "<why>"` otherwise.
 5. **A request that invalidates running work** (its output would be discarded): stop those agents now, queue it `--urgent`, and before reverting accepted work tell the founder what would be lost and get confirmation.
@@ -161,11 +161,11 @@ Your context is the most expensive in the system: every turn re-reads all of it.
 
 - **Delegate reading.** Never paste a file, diff or log you would only skim. Use `tail`, `grep -c` and `head`, or a scout summary.
 - **State lives in files, not in conversation:** `CREW.md`, the state file and its decisions log, plans, indexes, the queue. Write a decision down when you take it.
-- **Keep going until the founder runs `/crew handoff` or `/crew stop`.** There are no context thresholds; compaction windows are the founder's choice, tuned from the dashboard's Compactions section.
+- **Keep going until the founder runs `/crew handoff` or `/crew stop`.** There are no context thresholds; compaction windows are the founder's choice, tuned from the dashboard's Compactions tab.
 - **After a compaction** the hook tells you what to re-read; read only what is no longer in your context. Live agents: `ListAgents`, or `.crew/bin/crew running`. If these rules are gone, invoke the `crew` skill again. Subagents get their own reminder, never yours.
 - **Don't poll background agents.** Completion notifications wake you.
 - **Prefer fewer, well-specified tasks to many tiny ones,** because every spin-up re-reads project context. Judge cost per *accepted* task, not per call.
 
 ## Journal and dashboard
 
-Hooks log every subagent start, resume, finish and compaction in `.crew/journal.md`; `crew request` logs the queue and `crew defect` the deferred defects. Log your other actions with `.crew/bin/crew journal "<one line>"` (this exact relative form, from the project root: it is what the permission rule allows) when you: start or close a task set; ask a founder batch or receive answers; take a decision for the decisions log; merge; re-plan or roll back; hand off, stop or resume. One line, past tense, high level. `.crew/status.md` is the founder's dashboard, rendered from the indexes, the queue and the journal. You never read it or the journal; keep the index statuses and the queue accurate because they feed it.
+Hooks log every subagent start, resume, finish and compaction in `.crew/journal.md`; `crew request` logs the queue and `crew defect` the deferred defects. Log your other actions with `.crew/bin/crew journal "<one line>"` (this exact relative form, from the project root: it is what the permission rule allows) when you: start or close a task set; ask a founder batch or receive answers; take a decision for the decisions log; merge; re-plan or roll back; hand off, stop or resume. One line, past tense, high level. The founder's dashboard is a local web page (`crew status` prints its URL) built from the indexes, the queue, the defect log and the journal. You never read it or the journal; keep the index statuses and the queue accurate because they feed it.

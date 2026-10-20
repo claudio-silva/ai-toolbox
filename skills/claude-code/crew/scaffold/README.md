@@ -7,7 +7,7 @@ State for the `crew` skill: how the main Claude Code session (the **lead**) runs
 | Path | What it is | Git |
 |---|---|---|
 | `README.md` | This file | committed |
-| `bin/crew` | The crew script: writes the journal, renders the dashboard, tracks running agents, compactions, agent time and sleep, keeps the request queue and the defect log, registers crew sessions for the hooks, keeps the computer awake while the crew works, prepares and tears down worktrees | committed |
+| `bin/crew` | The crew script: writes the journal, tracks running agents, compactions, agent time and sleep, keeps the request queue and the defect log, registers crew sessions for the hooks, keeps the computer awake while the crew works, starts the dashboard, prepares and tears down worktrees | committed |
 | `templates/task.md`, `templates/index.md` | Templates for task specs and task-set indexes | committed |
 | `worktree/setup.sh` | The project's development setup for a fresh checkout (install dependencies, create local files, build). Idempotent | committed |
 | `worktree/teardown.sh` | The project's cleanup for a checkout about to be removed. A no-op by default | committed |
@@ -17,9 +17,9 @@ State for the `crew` skill: how the main Claude Code session (the **lead**) runs
 | `plans/<slug>.md` | Plans written by the lead with the founder | committed |
 | `tasks/<slug>/index.md`, `NN-<slug>.md` | One task set: its index (statuses, Facts) and one spec per task | committed |
 | `journal.md` | Informational history of crew activity, newest at the bottom | ignored |
-| `status.md` | The status dashboard | ignored |
+| `dashboard/` | The dashboard: its server (`server.mjs`), the model that reads the crew files (`model.mjs`) and the page (`app/`). Installed and replaced by `/crew setup` | ignored |
 | `task-data/<id>/` | Evidence per task: `screenshots/`, `reports/`, `logs/` | ignored |
-| `tmp/` | Scratch: the lock, hook state, the compaction log (`tmp/journal-state/compactions.tsv`), agent runs (`runs.tsv`) and sleeps (`sleep.tsv`) for the Timing section, `worktree.json` | ignored |
+| `tmp/` | Scratch: the lock, hook state, the compaction log (`tmp/journal-state/compactions.tsv`), agent runs (`runs.tsv`) and sleeps (`sleep.tsv`) for the Timing tab, `worktree.json`, the dashboard's port (`dashboard.json`) and log (`dashboard.log`) | ignored |
 
 ## The journal
 
@@ -40,33 +40,40 @@ A compaction line reads: who compacted (`lead (opus · high)`, or the subagent's
 
 ## The dashboard
 
-`status.md` is rendered by `bin/crew` from the task-set indexes, `queue.md`, `handoff.md`, the hook state, the journal and git. Nobody edits it; it is rewritten on every crew event. Open it in any Markdown preview that renders Mermaid (Paseo, GitHub, VS Code, Cursor, Obsidian). Render it by hand with `.crew/bin/crew status`.
+A local web page that shows what the crew is doing, for a browser tab or a Paseo side panel. `dashboard/server.mjs` (Node.js 20 or later, no dependencies) serves it on `127.0.0.1`, at a port derived from the project's path so the URL stays the same across restarts. The session-start hook starts it in the background, and it runs until you stop it or the computer restarts.
 
-Lead state, in the italic line under the title:
-- `▶ working since HH:MM`: the lead is working on your last message.
-- `▶ agents working, lead idle`: subagents are running; the lead waits for them.
-- `⏸ waiting for you since HH:MM`: nothing is running; the crew needs you.
-- `⏹ stopped by you since HH:MM`: you ran `/crew stop`; `/crew resume` continues.
+- `bin/crew status` prints its URL (and starts it if needed).
+- `bin/crew dashboard start|stop|restart|url` manages it.
+- `CREW_DASHBOARD=0` in the environment keeps it from starting.
+- `node dashboard/server.mjs state` prints the state the page shows, as JSON.
 
-Task glyphs: ☐ pending · ◔ in progress · ◑ in review · ↻ rework · ☑ accepted · ⊘ blocked.
+The server reads the task-set indexes and specs, `queue.md`, `defects.md`, `handoff.md`, the journal, the hook state under `tmp/` and git, and watches them. When one changes, it pushes the new state to every open page over server-sent events; the page updates in place, keeping its scroll position, tab and open panels. Nothing polls: while agents run or the set is open, a one-minute tick keeps the clocks moving, and nothing else happens while the crew is quiet. If the server goes away, the page says so and reconnects when it comes back. Nobody edits anything here: the page only reads.
 
-The "Now" block also shows the deferred defects and **Keep awake**: `on (while Claude Code runs)` once `crew session start` has started `caffeinate` (macOS), tied to the Claude Code process so it ends with it; `off (the crew is stopped)` after `/crew stop`. On battery, closing the lid still sleeps the computer. Set `CREW_KEEP_AWAKE=0` in the environment to turn it off.
+The lead's state sits in the header:
+- **Lead working · since HH:MM**: the lead is working on your last message.
+- **N agents working · lead idle**: subagents are running; the lead waits for them.
+- **Waiting for you · since HH:MM**: nothing is running; the crew needs you.
+- **Stopped by you · since HH:MM**: you ran `/crew stop`; `/crew resume` continues.
+
+Task statuses: pending, in progress, in review, rework, accepted, blocked. A task opens a panel with its spec, its agents and runs, its time by phase and its newest screenshots; a set or the last handoff opens as a document.
+
+The Overview tab also shows **keep awake**: on while Claude Code runs, once `crew session start` has started `caffeinate` (macOS), tied to the Claude Code process so it ends with it; off after `/crew stop`. On battery, closing the lid still sleeps the computer, and the page warns about it. Set `CREW_KEEP_AWAKE=0` in the environment to turn keep-awake off.
 
 ### Defects
 
-Reviews and QA classify each finding as leaf or load-bearing. The lead fixes load-bearing and high-severity findings in the task, and may defer a leaf (low or medium severity, nothing pending builds on it, fails safely) to `defects.md` instead of another review round. Briefs list the known defects on a task's surfaces so agents neither fix nor chase them; a deferred defect that blocks or breaks other work is promoted and fixed at once, and the set's deferred defects are fixed before its final review. The section shows the counts (including how many deferrals were promoted, the measure of whether deferral is paying off) and the open entries.
+Reviews and QA classify each finding as leaf or load-bearing. The lead fixes load-bearing and high-severity findings in the task, and may defer a leaf (low or medium severity, nothing pending builds on it, fails safely) to `defects.md` instead of another review round. Briefs list the known defects on a task's surfaces so agents neither fix nor chase them; a deferred defect that blocks or breaks other work is promoted and fixed at once, and the set's deferred defects are fixed before its final review. The Defects tab shows the counts (including how many deferrals were promoted, the measure of whether deferral is paying off), the open entries and the closed ones.
 
 `bin/crew defect "<symptom>" --where "<surface>" [--from "T04 review"] [--severity low|medium] [--slot "<when>"]` adds the next `D<n>`; `bin/crew defect D<n> --status scheduled|fixed|dropped|deferred [--note "<why>"]` moves it along, and `--promote` marks a deferral that bit.
 
 ### Timing
 
-Where the current set's time went, from the agent runs the hooks record. The first line splits the time since the set started (its index's first commit) into sleep, agents at work (the union of all agent runs) and the rest (the lead, and waiting for you); once every task is accepted it stops at the last agent run. Task time splits into build (a builder's first run), review and rework (a builder resumed, or a debugger), with the CHANGES verdicts that caused the rework. The critical path follows the tasks' `Depends on` lines weighted by agent time; **parallel headroom** (task time minus the critical path) is the most that running independent tasks side by side could have saved. The table gives the same split per task; agents not tied to a task (QA, scouts, the planner) sit in a set-level row.
+Where the current set's time went, from the agent runs the hooks record. The Timing tab splits the time since the set started (its index's first commit) into sleep, agents at work (the union of all agent runs) and the rest (the lead, and waiting for you); once every task is accepted it stops at the last agent run. Task time splits into build (a builder's first run), review and rework (a builder resumed, or a debugger), with the CHANGES verdicts that caused the rework. The critical path follows the tasks' `Depends on` lines weighted by agent time; **parallel headroom** (task time minus the critical path) is the most that running independent tasks side by side could have saved. A Gantt chart shows every agent run on one time axis (drag to pan, ctrl + wheel or pinch to zoom), with the sleeps shaded. The same split is given per task; agents not tied to a task (QA, scouts, the planner) sit in a set-level row.
 
 Sleep is measured on macOS: every crew event compares the wall clock with the awake-time clock (`sysctl kern.monotonicclock_usecs`), and a gap of 2 minutes or more is logged and left out of agent time.
 
 ### Compactions
 
-The "Now" block counts compactions (lead and subagents); the "Compactions" section lists the last 12 and a summary per role: how many, the context size at which they happened, and how often (lead: time between its compactions; subagents: time from start to compaction). Each row carries three estimates at Anthropic list prices (the date is in the legend; the price table is at the top of the compaction block in `bin/crew`), assuming a warm prompt cache:
+The Overview tab counts compactions (lead and subagents); the Compactions tab charts context before and after each one, lists the last 40, and sums them up per role: how many, the context size at which they happened, and how often (lead: time between its compactions; subagents: time from start to compaction). Each row carries three estimates at Anthropic list prices (the price table is at the top of the compaction block in `bin/crew`, with the date it was read), assuming a warm prompt cache:
 
 - **Est. overhead** = context before × cache-read price + context after × output price: the summarization request itself.
 - **Est. saved** = turns since × (before − after) × cache-read price: what the API requests made after the compaction would have paid to keep carrying the dropped context. It grows while the agent keeps working.
@@ -76,7 +83,7 @@ Not measured: the files an agent re-reads after a compaction, and the detail the
 
 ### Requests
 
-`bin/crew request "<text>" [--affects <x>] [--slot <y>] [--urgent]` adds the next `R<n>` entry to `queue.md`; `bin/crew request R<n> --status scheduled|done|dropped` moves it along. Both journal and re-render. While work is in flight, a hook reminds the lead under each of your messages to queue requests before acting on them, and the file-changed hook flags a task row added to an index without a `Requests:` line in its spec.
+`bin/crew request "<text>" [--affects <x>] [--slot <y>] [--urgent]` adds the next `R<n>` entry to `queue.md`; `bin/crew request R<n> --status scheduled|done|dropped` moves it along. Both journal; the dashboard picks the change up. While work is in flight, a hook reminds the lead under each of your messages to queue requests before acting on them, and the file-changed hook flags a task row added to an index without a `Requests:` line in its spec.
 
 ## Task data
 

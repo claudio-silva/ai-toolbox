@@ -1,0 +1,170 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* shadcn theme (zinc), with crew's status and phase colours. */
+:root {
+  --radius: 0.7rem;
+  --background: oklch(0.985 0.002 260);
+  --foreground: oklch(0.2 0.01 265);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.01 265);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.01 265);
+  --primary: oklch(0.51 0.21 277);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.965 0.004 265);
+  --secondary-foreground: oklch(0.25 0.01 265);
+  --muted: oklch(0.965 0.004 265);
+  --muted-foreground: oklch(0.53 0.015 265);
+  --accent: oklch(0.955 0.012 277);
+  --accent-foreground: oklch(0.3 0.08 277);
+  --destructive: oklch(0.58 0.22 27);
+  --border: oklch(0.915 0.006 265);
+  --input: oklch(0.915 0.006 265);
+  --ring: oklch(0.6 0.15 277);
+
+  --st-accepted: oklch(0.63 0.15 155);
+  --st-progress: oklch(0.72 0.16 70);
+  --st-review: oklch(0.6 0.16 245);
+  --st-rework: oklch(0.62 0.2 20);
+  --st-blocked: oklch(0.55 0.02 265);
+  --st-pending: oklch(0.72 0.01 265);
+
+  --ph-build: oklch(0.56 0.2 277);
+  --ph-review: oklch(0.66 0.14 225);
+  --ph-rework: oklch(0.64 0.19 15);
+  --ph-other: oklch(0.68 0.12 175);
+  --sleep: oklch(0.55 0.02 265 / 0.14);
+  --now: oklch(0.72 0.16 70);
+}
+
+.dark {
+  --background: oklch(0.155 0.008 270);
+  --foreground: oklch(0.95 0.005 265);
+  --card: oklch(0.195 0.01 270);
+  --card-foreground: oklch(0.95 0.005 265);
+  --popover: oklch(0.21 0.01 270);
+  --popover-foreground: oklch(0.95 0.005 265);
+  --primary: oklch(0.68 0.17 277);
+  --primary-foreground: oklch(0.16 0.02 277);
+  --secondary: oklch(0.25 0.012 270);
+  --secondary-foreground: oklch(0.95 0.005 265);
+  --muted: oklch(0.24 0.01 270);
+  --muted-foreground: oklch(0.68 0.015 265);
+  --accent: oklch(0.27 0.03 277);
+  --accent-foreground: oklch(0.92 0.04 277);
+  --destructive: oklch(0.68 0.19 22);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 13%);
+  --ring: oklch(0.6 0.15 277);
+
+  --st-accepted: oklch(0.72 0.15 155);
+  --st-progress: oklch(0.8 0.15 75);
+  --st-review: oklch(0.72 0.14 240);
+  --st-rework: oklch(0.7 0.18 18);
+  --st-blocked: oklch(0.62 0.02 265);
+  --st-pending: oklch(0.55 0.015 265);
+
+  --ph-build: oklch(0.66 0.17 277);
+  --ph-review: oklch(0.74 0.12 225);
+  --ph-rework: oklch(0.7 0.17 15);
+  --ph-other: oklch(0.74 0.11 175);
+  --sleep: oklch(0.8 0.02 265 / 0.08);
+  --now: oklch(0.8 0.15 75);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-st-accepted: var(--st-accepted);
+  --color-st-progress: var(--st-progress);
+  --color-st-review: var(--st-review);
+  --color-st-rework: var(--st-rework);
+  --color-st-blocked: var(--st-blocked);
+  --color-st-pending: var(--st-pending);
+  --color-ph-build: var(--ph-build);
+  --color-ph-review: var(--ph-review);
+  --color-ph-rework: var(--ph-rework);
+  --color-ph-other: var(--ph-other);
+  --color-sleep: var(--sleep);
+  --color-now: var(--now);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* A slow pulse for things that are running. */
+@keyframes crew-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.85); }
+}
+.crew-pulse {
+  animation: crew-pulse 1.6s ease-in-out infinite;
+}
+
+/* Markdown (task specs, the handoff). */
+.prose-crew {
+  @apply text-sm leading-relaxed;
+}
+.prose-crew h1 { @apply mt-1 mb-3 text-lg font-semibold tracking-tight; }
+.prose-crew h2 { @apply mt-6 mb-2 text-base font-semibold tracking-tight; }
+.prose-crew h3 { @apply mt-5 mb-2 text-sm font-semibold; }
+.prose-crew p { @apply my-2; }
+.prose-crew ul { @apply my-2 list-disc pl-5; }
+.prose-crew ol { @apply my-2 list-decimal pl-5; }
+.prose-crew li { @apply my-0.5; }
+.prose-crew a { @apply text-primary underline underline-offset-2; }
+.prose-crew code { @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]; }
+.prose-crew pre { @apply my-3 overflow-x-auto rounded-lg bg-muted p-3 text-xs; }
+.prose-crew pre code { @apply bg-transparent p-0; }
+.prose-crew blockquote { @apply my-3 border-l-2 pl-3 text-muted-foreground; }
+.prose-crew table { @apply my-3 block w-full overflow-x-auto text-xs; border-collapse: collapse; }
+.prose-crew th, .prose-crew td { @apply border px-2 py-1 text-left align-top; }
+.prose-crew th { @apply bg-muted font-medium; }
+.prose-crew hr { @apply my-4; }
+.prose-crew img { @apply my-2 max-w-full rounded-md border; }
+
+/* Thin scrollbars inside panels. */
+.thin-scroll { scrollbar-width: thin; }
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }

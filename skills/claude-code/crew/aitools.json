@@ -1,4 +1,4 @@
 {
   "platforms": ["claude-code"],
-  "exclude": ["tests"]
+  "exclude": ["tests", "dashboard"]
 }

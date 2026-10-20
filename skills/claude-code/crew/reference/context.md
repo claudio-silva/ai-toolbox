@@ -41,8 +41,8 @@ A 1M window is therefore a safety margin, not a target. Long memory belongs in *
 | Task statuses, specs and Facts for a task set | `.crew/tasks/<slug>/index.md` and `NN-<slug>.md` (committed) |
 | Where the last session stopped | `.crew/handoff.md` (committed with the next task) |
 | Evidence per task: screenshots, reports over the cap, logs | `.crew/task-data/<id>/` (gitignored, never deleted by crew) |
-| Development history and the founder's dashboard | `.crew/journal.md`, `.crew/status.md` (gitignored; for the founder; never read by the lead) |
-| Scratch: lock, hook state, agent runs and sleep for the dashboard's Timing section | `.crew/tmp/` (gitignored) |
+| Development history and the founder's dashboard | `.crew/journal.md`, and the web page served by `.crew/dashboard/` (gitignored; for the founder; never read by the lead) |
+| Scratch: lock, hook state, agent runs and sleep for the dashboard's Timing tab | `.crew/tmp/` (gitignored) |
 
 Rule: if losing your context right now would lose a decision, write it down now.
 
@@ -62,7 +62,7 @@ Crew relies on five layers, in this order:
 
 ### Measuring compactions
 
-Every compaction is logged (`.crew/journal.md`, "Context compacted · <agent> · 267k → 14k · 57 s · auto · ≈$0.33") and tracked on the dashboard under "Compactions": how many for the lead and for subagents, the context size at which each one happened, how often (the lead: time between its compactions; subagents: time from start to compaction), and three estimates per compaction at Anthropic list prices:
+Every compaction is logged (`.crew/journal.md`, "Context compacted · <agent> · 267k → 14k · 57 s · auto · ≈$0.33") and tracked on the dashboard's Compactions tab: how many for the lead and for subagents, the context size at which each one happened, how often (the lead: time between its compactions; subagents: time from start to compaction), and three estimates per compaction at Anthropic list prices:
 
 - **overhead** ≈ `pre × cache-read price + post × output price` (the summarization request, warm cache; a cold cache after an idle gap longer than the TTL costs up to the full input price, which hooks cannot see);
 - **saved so far** ≈ `turns since × (pre − post) × cache-read price` (what the API requests made after the compaction would have paid to carry the dropped context);

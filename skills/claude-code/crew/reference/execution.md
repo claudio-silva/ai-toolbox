@@ -84,7 +84,7 @@ Run tasks in parallel only when they have no dependency between them, no overlap
 2. **Commit everything** on the set branch first; worktrees see only committed work.
 3. **Dispatch** every builder in the batch with `isolation: worktree`. Add to each brief:
    > You are in a worktree at <path>. Run `.crew/bin/crew worktree setup` first. Keep everything you produce inside the worktree; screenshots and reports go under `.crew/task-data/T<NN>-<slug>/`. When done, commit once as `T<NN> <slug>: <summary>`. Report the worktree path and branch.
-4. No agent edits source files in the main checkout until the batch is integrated. You still update `.crew/` files there, and the hooks write the journal and the dashboard there.
+4. No agent edits source files in the main checkout until the batch is integrated. You still update `.crew/` files there, and the hooks write the journal and their state there.
 5. **Review in the worktree.** Add to the review brief:
    > Run every command in <path>, with `cd <path> && <cmd>` or `git -C <path>`; screenshots are under `<path>/.crew/task-data/`.
 6. **Integrate one task at a time**, after its ACCEPT:

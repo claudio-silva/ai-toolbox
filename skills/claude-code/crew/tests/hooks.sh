@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Fixture tests for .crew/bin/crew: compaction hooks, request queue, in-flight reminder,
+# Fixture tests for .crew/bin/crew and the dashboard model (.crew/dashboard/model.mjs, read
+# through `server.mjs state`): compaction hooks, request queue, in-flight reminder,
 # index-addition check, defect log, timing and sleep, keep-awake, stop state.
 # Run from the skill directory: bash tests/hooks.sh
-# Needs jq and git. Writes only under a temporary directory; caffeinate and sysctl are stubs.
+# Needs jq, git and Node.js 20+. Writes only under a temporary directory; caffeinate and sysctl
+# are stubs; the dashboard server is never started (CREW_DASHBOARD=0).
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd -P)
 T=$(mktemp -d "${TMPDIR:-/tmp}/crew-test.XXXXXX")
@@ -23,6 +25,8 @@ chmod +x "$T/stubs/caffeinate" "$T/stubs/sysctl"
 printf '24000000\n179643921385406 %s\n' $((24000000 * 5000)) > "$T/sysctl.out"   # awake: 5000 s
 export PATH="$T/stubs:$PATH"
 unset CREW_KEEP_AWAKE
+export CREW_DASHBOARD=0
+command -v node >/dev/null 2>&1 || { printf 'tests/hooks.sh needs Node.js 20 or later\n' >&2; exit 1; }
 PASS=0; FAIL=0
 ok() { PASS=$((PASS + 1)); printf 'PASS  %s\n' "$1"; }
 ko() { FAIL=$((FAIL + 1)); printf 'FAIL  %s\n      %s\n' "$1" "${2:-}"; }
@@ -39,6 +43,7 @@ mkdir -p "$P/.crew/bin" "$P/.crew/tasks/autosave" "$P/.claude/agents"
 cp "$HERE/scaffold/bin/crew" "$P/.crew/bin/crew"; chmod +x "$P/.crew/bin/crew"
 cp "$HERE/scaffold/queue.md" "$P/.crew/queue.md"
 cp "$HERE/scaffold/defects.md" "$P/.crew/defects.md"
+cp -R "$HERE/scaffold/dashboard" "$P/.crew/dashboard"
 cp "$HERE/templates/agents/builder.md" "$P/.claude/agents/builder.md" 2>/dev/null || printf -- '---\nname: builder\nmodel: sonnet\neffort: high\n---\n' > "$P/.claude/agents/builder.md"
 git -C "$P" init -q
 cat > "$P/.crew/tasks/autosave/index.md" <<'IDX'
@@ -79,6 +84,12 @@ boundary() {  # boundary PRE POST DUR TRIGGER
 
 hook() {  # hook MODE JSON
   printf '%s' "$2" | "$CREW" hook "$1"
+}
+# model JQ: the dashboard model as JSON, through a jq filter. `span` and `k` format like the page.
+JQ_DEFS='def span: if . == null then "—" else (round) as $s | if $s <= 0 then "—" elif $s < 60 then "\($s) s" elif $s < 3600 then "\(($s / 60) | floor) min" else "\(($s / 3600) | floor) h \((($s % 3600) / 60) | floor) min" end end;
+def k: if . >= 1000 then "\((. / 1000) | round)k" else tostring end;'
+model() {
+  node "$P/.crew/dashboard/server.mjs" state --root "$P" | jq -r "$JQ_DEFS $1"
 }
 J_BASE="\"session_id\":\"$SID\",\"transcript_path\":\"$MAIN\",\"cwd\":\"$P\",\"hook_event_name\":\"x\""
 
@@ -150,13 +161,20 @@ line=$(grep 'Context compacted' "$P/.crew/journal.md" | tail -n 1)
 check "subagent without meta.json: label from the crew record" "s2a-t08-builder (builder · sonnet · medium) · 165k → 9k · 30 s · manual" "$line"
 SAMPLE3=$line
 
-# ---- 5. dashboard ----
-st=$(cat "$P/.crew/status.md")
-check "dashboard: compaction counts" "**Compactions:** lead 1 · subagents 2" "$st"
-check "dashboard: tasks flow top-down" "flowchart TD" "$st"
-check "dashboard: Compactions section" "## Compactions" "$st"
-check "dashboard: lead row with turns since" "| lead (opus · high) | 267k → 14k | 57 s | auto | 3 |" "$st"
-check "dashboard: summary line" "lead: 1 (at ~267k tokens) · subagents: 2 (at ~166k tokens" "$st"
+# ---- 5. dashboard model ----
+[ ! -e "$P/.crew/status.md" ] && ok "dashboard: no status.md is written" || ko "dashboard: no status.md is written" "found .crew/status.md"
+out=$("$CREW" status)
+check "status: CREW_DASHBOARD=0 keeps the server off" "Dashboard: off (CREW_DASHBOARD=0)" "$out"
+out=$("$CREW" dashboard url); rc=$?
+check "dashboard url: not running" "Dashboard: not running" "$out"
+[ "$rc" -eq 1 ] && ok "dashboard url: exit 1 when not running" || ko "dashboard url: exit 1 when not running" "rc=$rc"
+check "model: tasks and dependencies" "T06:accepted: T07:progress:T06 T08:pending:T07" \
+  "$(model '.current.tasks | map("\(.id):\(.status):\(.deps | join(","))") | join(" ")')"
+check "model: running agent on its task" "builder T07" "$(model '.agents[] | select(.id == "'"$SUBID"'") | "\(.type) \(.task)"')"
+check "model: compaction counts" "lead 1 (at ~267k) · subagents 2 (at ~166k)" \
+  "$(model '.compactions.summary | "lead \(.lead.count) (at ~\(.lead.avgPre | k)) · subagents \(.sub.count) (at ~\(.sub.avgPre | k))"')"
+check "model: lead row with turns since" "lead (opus · high) | 267k → 14k | 57 s | auto | 3" \
+  "$(model '.compactions.rows[] | select(.kind == "lead") | "\(.label) | \(.pre | k) → \(.post | k) | \(.durationMs / 1000 | span) | \(.trigger) | \(.turns)"')"
 
 # ---- 6. requests ----
 rm -f "$P/.crew/tmp/journal-state/running/"*
@@ -181,12 +199,12 @@ check "queue keeps the questions section" "## Questions for the founder" "$(cat 
 rq=$(grep -c -E '^- \[R[0-9]+\]' "$P/.crew/queue.md")
 check "queue has three entries" "3" "$rq"
 "$CREW" request "Dark mode" --slot "milestone 3" >/dev/null
-check "dashboard: column entries chained" "R3 ~~~ R4" "$(cat "$P/.crew/status.md")"
-"$CREW" status >/dev/null
-check "dashboard: request queues side by side" "flowchart LR
-  subgraph Queued
-    direction TB" "$(cat "$P/.crew/status.md")"
-check "dashboard: queues in order" "  Queued ~~~ Scheduled ~~~ Done" "$(cat "$P/.crew/status.md")"
+check "model: requests and their states" "R2 done · R1 scheduled · R3 queued · R4 queued" \
+  "$(model '.queue.requests | map("\(.id) \(.state)") | join(" · ")')"
+check "model: request columns" "R1 | Autosave every 10 s, not only on blur | T07, T08 | after T07 | scheduled" \
+  "$(model '.queue.requests[] | select(.id == "R1") | "\(.id) | \(.text) | \(.affects) | \(.slot) | \(.state)"')"
+check "model: request counts" "queued 2 · scheduled 1 · done 1 · dropped 0" \
+  "$(model '.queue.counts | "queued \(.queued) · scheduled \(.scheduled) · done \(.done) · dropped \(.dropped)"')"
 
 # ---- 7. in-flight reminder ----
 out=$(hook lead-busy "{$J_BASE,\"prompt\":\"hi\"}")
@@ -221,7 +239,7 @@ check "defect: high severity refused" "never deferred" "$out"
 out=$("$CREW" defect "No where" 2>&1)
 check "defect: --where required" "--where is required" "$out"
 "$CREW" defect "Offline save shows a raw error code" --where "save state (app/src/save-state.tsx)" --severity medium --from "T08 review" >/dev/null
-check "dashboard: deferred defects counted" "**Deferred defects:** 2 (medium 1)" "$(cat "$P/.crew/status.md")"
+check "model: deferred defects counted" "deferred 2 (medium 1)" "$(model '.defects.summary | "deferred \(.deferred) (medium \(.deferredMedium))"')"
 out=$("$CREW" defect D1 --status fixed --promote 2>&1)
 check "defect: --promote only with scheduled" "goes with --status scheduled" "$out"
 out=$("$CREW" defect D1 --promote --note "it broke T09's ribbon screenshot check")
@@ -229,10 +247,11 @@ check "defect: promoted" "status: scheduled · promoted" "$out"
 check "defect: promotion journaled" "Promoted D1 (Ribbon icon sits 2 px low): it broke T09's ribbon screenshot check" "$(tail -n 1 "$P/.crew/journal.md")"
 "$CREW" defect D2 --status fixed --note "in T10" >/dev/null
 check "defect: fixed journaled" "Fixed D2 (Offline save shows a raw error code): in T10" "$(tail -n 1 "$P/.crew/journal.md")"
-st=$(cat "$P/.crew/status.md")
-check "dashboard: defects summary" "Deferred 0 · scheduled 1 · fixed 1 · dropped 0 · promoted 1 of 2 (deferrals that bit other work)" "$st"
-check "dashboard: open defects table" "| D1 | Ribbon icon sits 2 px low | ribbon (app/src/ribbon.tsx) | T07 review | low | end of set | scheduled (promoted) |" "$st"
-check_not "dashboard: fixed defects not listed" "| D2 |" "$st"
+check "model: defects summary" "deferred 0 · scheduled 1 · fixed 1 · dropped 0 · promoted 1 of 2" \
+  "$(model '.defects.summary | "deferred \(.deferred) · scheduled \(.scheduled) · fixed \(.fixed) · dropped \(.dropped) · promoted \(.promoted) of \(.total)"')"
+check "model: open defect, promoted" "D1 | Ribbon icon sits 2 px low | ribbon (app/src/ribbon.tsx) | T07 review | low | end of set | scheduled (promoted)" \
+  "$(model '.defects.items[] | select(.id == "D1") | "\(.id) | \(.text) | \(.where) | \(.from) | \(.severity) | \(.slot) | \(.state)\(if .promoted then " (promoted)" else "" end)"')"
+check "model: fixed defect" "D2 fixed" "$(model '.defects.items[] | select(.id == "D2") | "\(.id) \(.state)"')"
 
 # ---- 10. runs, sleep and the Timing section ----
 S="$P/.crew/tmp/journal-state"
@@ -270,36 +289,44 @@ b=$((now - 7000))
 } > "$S/runs.tsv"
 printf '%s\t%s\t400\n' $((b + 1500)) $((b + 2000)) > "$S/sleep.tsv"
 "$CREW" status >/dev/null
-st=$(cat "$P/.crew/status.md")
-check "timing: section" "## Timing" "$st"
-check "timing: clock line" "on the clock · slept 6 min · agents at work 44 min · lead and waiting 1 h 9 min" "$st"
-check "timing: phase split" "Task time 43 min: build 26 min (61%) · review 12 min (27%) · rework 5 min (11%) · CHANGES verdicts 1" "$st"
-check "timing: critical path and headroom" "Critical path so far: T06 → T07 · 40 min · parallel headroom 3 min" "$st"
-check "timing: a sleep pauses every run it falls in" "| T09 | 3 min | — | — | — | 3 min | 6 min |" "$st"
-check "timing: T06 row" "| T06 | 10 min | 7 min | 5 min | 1 | 22 min | — |" "$st"
-check "timing: T07 row, sleep left out" "| T07 | 13 min | 5 min | — | — | 18 min | 6 min |" "$st"
-check "timing: set-level row" "| Set level (qa) | — | — | — | — | 4 min | — |" "$st"
+tm() { model ".current.timing | $1"; }
+check "timing: set start from the commit that added the index" "$((now - 7200))" "$(tm '.start')"
+check "timing: clock line" "slept 6 min · agents at work 44 min · lead and waiting 1 h 9 min" \
+  "$(tm '"slept \(.slept | span) · agents at work \(.busy | span) · lead and waiting \(.idle | span)"')"
+check "timing: phase split" "Task time 43 min: build 26 min · review 12 min · rework 5 min · CHANGES verdicts 1" \
+  "$(tm '"Task time \(.taskTime | span): build \(.phases.build | span) · review \(.phases.review | span) · rework \(.phases.rework | span) · CHANGES verdicts \(.changes)"')"
+check "timing: critical path and headroom" "T06 → T07 · 40 min · parallel headroom 3 min" \
+  "$(tm '"\(.criticalPath.ids | join(" → ")) · \(.criticalPath.seconds | span) · parallel headroom \(.criticalPath.headroom | span)"')"
+rows=$(tm '.perTask[] | "\(.id) | \(.build | span) | \(.review | span) | \(.rework | span) | \(if .changes > 0 then .changes else "—" end) | \(.active | span) | \(.slept | span)"')
+check "timing: a sleep pauses every run it falls in" "T09 | 3 min | — | — | — | 3 min | 6 min" "$rows"
+check "timing: T06 row" "T06 | 10 min | 7 min | 5 min | 1 | 22 min | —" "$rows"
+check "timing: T07 row, sleep left out" "T07 | 13 min | 5 min | — | — | 18 min | 6 min" "$rows"
+check "timing: set-level row" "Set level (qa) | 4 min | —" "$(tm '.setLevel | "Set level (\(.types | join(", "))) | \(.active | span) | \(.slept | span)"')"
+check "timing: open set, clock runs" "done=false until=null" "$(tm '"done=\(.done) until=\(.until)"')"
 # A finished set: every task accepted and nothing running stops the clock at the last run's end.
 cp "$P/.crew/tasks/autosave/index.md" "$T/index.keep"
 sed -i.bak -E 's/^\| (T[0-9]+) \| [a-z ]+ \|/| \1 | accepted |/' "$P/.crew/tasks/autosave/index.md"
-"$CREW" status >/dev/null
-check "timing: a finished set stops the clock" "to the last agent run ($(date -r $((b + 3240)) '+%H:%M' 2>/dev/null || date -d "@$((b + 3240))" '+%H:%M')): 57 min on the clock · slept 6 min · agents at work 44 min · lead and waiting 6 min" "$(cat "$P/.crew/status.md")"
+check "timing: a finished set stops the clock" "until $((b + 3240)): 57 min on the clock · slept 6 min · agents at work 44 min · lead and waiting 6 min" \
+  "$(tm '"until \(.until): \(.clock | span) on the clock · slept \(.slept | span) · agents at work \(.busy | span) · lead and waiting \(.idle | span)"')"
 cp "$T/index.keep" "$P/.crew/tasks/autosave/index.md"
 
 # ---- 11. keep awake, stop ----
-check "keep awake: on after session start" "**Keep awake:** on (" "$(cat "$P/.crew/status.md")"
+check "keep awake: on after session start" "on=true" "$(model '.keepAwake | "on=\(.on)"')"
 read -r kpid _ < "$S/keep-awake"
 "$CREW" session stop >/dev/null
 sleep 0.2
 kill -0 "$kpid" 2>/dev/null && ko "keep awake: stopped with the crew" "pid $kpid still running" || ok "keep awake: stopped with the crew"
-check "keep awake: off when stopped" "**Keep awake:** off (the crew is stopped)" "$(cat "$P/.crew/status.md")"
-check "session stop: dashboard state" "⏹ stopped by you since" "$(cat "$P/.crew/status.md")"
+check "keep awake: off when stopped" "on=false stopped=true" "$(model '.keepAwake | "on=\(.on) stopped=\(.stopped)"')"
+check "session stop: lead state" "stopped since " "$(model '.lead | "\(.state) since \(.since)"')"
 hook lead-idle "{$J_BASE}" >/dev/null
-check "session stop: survives the lead's Stop event" "⏹ stopped by you since" "$(cat "$P/.crew/status.md")"
+check "session stop: survives the lead's Stop event" "stopped" "$(model '.lead.state')"
 hook lead-busy "{$J_BASE,\"prompt\":\"unrelated question\"}" >/dev/null
-check "session stop: survives an unrelated founder prompt" "⏹ stopped by you since" "$(cat "$P/.crew/status.md")"
+check "session stop: survives an unrelated founder prompt" "stopped" "$(model '.lead.state')"
 "$CREW" session start "$SID" >/dev/null
-check "session stop: cleared by session start (/crew resume)" "⏸ waiting for you" "$(cat "$P/.crew/status.md")"
+check "session stop: cleared by session start (/crew resume)" "waiting" "$(model '.lead.state')"
+hook lead-busy "{$J_BASE,\"prompt\":\"go on\"}" >/dev/null
+check "lead state: working after a prompt" "working since" "$(model '.lead | "\(.state) since \(.since)"')"
+[ ! -e "$P/.crew/status.md" ] && ok "dashboard: still no status.md" || ko "dashboard: still no status.md" "found .crew/status.md"
 
 # ---- 12. hooks never fail ----
 printf 'not json' | "$CREW" hook compact >/dev/null 2>&1; rc=$?

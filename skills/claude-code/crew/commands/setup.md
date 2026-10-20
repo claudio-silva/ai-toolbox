@@ -20,12 +20,13 @@ List every project change setup is about to make (files created, files merged, s
 
   A `sudo` that needs a password fails in a non-interactive shell; treat that as a failure. **On any failure, abort setup** with: "crew needs jq. Install it, then run /crew setup again." No partial setup.
 - **Claude Code.** `claude --version`. Below 2.1.292 → warn that per-call effort overrides are unavailable and recommend updating; continue.
+- **Node.js 20 or later** (for the dashboard only). `node --version`. Missing or older → warn that the dashboard is skipped until Node.js 20 or later is on `PATH`, and continue: nothing else needs it.
 
 ## 2. Scaffold `.crew/`
 
-1. Copy `<skill>/scaffold/` to `<project>/.crew/`: create missing files; for existing files, diff and merge. `.crew/bin/crew` and `.crew/templates/*` are crew-owned: take the skill's version and show the diff.
+1. Copy `<skill>/scaffold/` to `<project>/.crew/`: create missing files; for existing files, diff and merge. `.crew/bin/crew` and `.crew/templates/*` are crew-owned: take the skill's version and show the diff. `.crew/dashboard/` is crew-owned and gitignored: replace it whole, without a diff (`rm -rf .crew/dashboard && cp -R <skill>/scaffold/dashboard .crew/dashboard`); a running dashboard restarts itself on the new version.
 2. `chmod +x .crew/bin/crew .crew/worktree/*.sh`.
-3. `mkdir -p .crew/tmp .crew/task-data`.
+3. `mkdir -p .crew/tmp .crew/task-data`. Delete `.crew/status.md` if it exists: the Markdown dashboard of earlier versions, replaced by `.crew/dashboard/`.
 4. **Fill `.crew/worktree/setup.sh`** when creating it. Fill only the section between `# --- project setup (edit freely) ---` and `# --- end ---`, from the repo:
    - the install command from the lockfile: `pnpm-lock.yaml` → `pnpm install --frozen-lockfile`; `package-lock.json` → `npm ci`; `yarn.lock` → `yarn install --frozen-lockfile`; `bun.lockb` → `bun install --frozen-lockfile`; `uv.lock` → `uv sync`; `poetry.lock` → `poetry install`; `Cargo.lock` → `cargo fetch`; `go.sum` → `go mod download`;
    - a copy rule for each `*.example` env file (`cp -n .env.example .env`);
@@ -43,11 +44,11 @@ Add these lines if absent:
 .crew/tmp/
 .crew/task-data/
 .crew/journal.md
-.crew/status.md
+.crew/dashboard/
 .claude/worktrees/
 ```
 
-If an older blanket `.crew/` line exists, replace it with these lines and say so. Everything else in `.crew/` is committed.
+If an older blanket `.crew/` line exists, replace it with these lines and say so. Remove an older `.crew/status.md` line. Everything else in `.crew/` is committed.
 
 ## 4. Settings
 
@@ -106,7 +107,7 @@ On re-runs, replace everything between the markers. If the file has the older si
 
 - Read the question timeout: `jq -r '.askUserQuestionTimeout // empty' ~/.claude/settings.json`.
 - If it is absent or shorter than `10m` (`60s`, `5m`), ask the founder in one `AskUserQuestion` whether to set it to `10m` ("Set to 10m (Recommended)" first). A founder who is present but busy needs time to notice and think; a founder who is away loses nothing, because the lead takes recorded defaults. Never offer a shorter value. When accepted, write it with `jq` to a temp file, move it into place, and validate with `jq .`. When declined, leave it as it is: unset means questions stay open until answered; a shorter value stays the founder's choice.
-- Recommend, without changing anything: the main session on `opus` at effort `high`; auto memory on (needed by `memory:` agents). Compaction windows are the founder's choice; the dashboard's Compactions section gives the data to tune them (`/autocompact <size>` per model, or `autoCompactWindow` in an agent definition).
+- Recommend, without changing anything: the main session on `opus` at effort `high`; auto memory on (needed by `memory:` agents). Compaction windows are the founder's choice; the dashboard's Compactions tab gives the data to tune them (`/autocompact <size>` per model, or `autoCompactWindow` in an agent definition).
 
 ## 10. Journal
 
@@ -115,7 +116,7 @@ On re-runs, replace everything between the markers. If the file has the older si
 .crew/bin/crew journal "Set up the crew"
 ```
 
-Use the session id `SKILL.md` gave you.
+Use the session id `SKILL.md` gave you. `session start` also starts the dashboard and prints its URL.
 
 ## 11. Verify now
 
@@ -123,7 +124,7 @@ Run each check and report pass or fail:
 
 1. The session is registered: `ls .crew/tmp/journal-state/sessions/`.
 2. The journal line exists: `tail -n 3 .crew/journal.md`.
-3. `.crew/status.md` exists and its first line is `# Crew status — <repository name>`: `head -n 1 .crew/status.md`.
+3. The dashboard runs: `.crew/bin/crew status` prints `Dashboard: http://127.0.0.1:<port>/`, and `node .crew/dashboard/server.mjs state | jq -r .repo.name` prints the repository name. Without Node.js 20 or later both are skipped (step 1 warned); `CREW_DASHBOARD=0` prints `Dashboard: off`.
 4. The hook guard works: pipe a sample payload into the hook and count journal lines before and after:
    ```
    printf '%s' '{"session_id":"<this session id>","hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"subagent_type":"scout","description":"setup check","prompt":"x"}}' | .crew/bin/crew hook agent-start
@@ -131,7 +132,7 @@ Run each check and report pass or fail:
    adds one line; the same payload with `"session_id":"unknown"` adds nothing.
 5. `.crew/bin/crew worktree setup --dry-run` prints the steps it would run.
 6. `jq . .claude/settings.json` succeeds, and `jq '.hooks | keys' .claude/settings.json` lists `PreCompact`, `SessionStart`, `SubagentStart`, `SubagentStop`, `UserPromptSubmit`, `Stop`, `PreToolUse` and `PostToolUse`.
-7. `git check-ignore .crew/journal.md .crew/status.md .crew/task-data/x .crew/tmp/x` prints all 4 paths (`-q` accepts only one path).
+7. `git check-ignore .crew/journal.md .crew/dashboard/x .crew/task-data/x .crew/tmp/x` prints all 4 paths (`-q` accepts only one path).
 8. `git check-ignore -q .crew/queue.md` and `git check-ignore -q .crew/defects.md` both fail (the queue and the defect log are committed).
 9. The compaction reminder is addressed to the lead when nothing runs:
    ```
@@ -146,6 +147,7 @@ Any failure → fix it before continuing.
 ## 12. Next session
 
 - Agent definitions hot-reload, except when `.claude/agents/` did not exist when the session started. Hook changes are treated as needing a restart; `settings.json` hooks are read at session start.
+- Give the founder the dashboard URL: it opens in any browser, and as a Paseo side panel it sits beside the conversation. The URL stays the same for this project.
 - After a first setup, tell the founder to restart the session. After a re-run, only when hooks changed (a re-run that adds the `PreCompact` or `SessionStart` entries does).
 - A project that patched `.crew/bin/crew` by hand (for example a stopgap for the compaction reminder) gets the skill's version in step 2; show the diff and say what the stopgap did is now handled by the script.
 - In the setup session itself, when a role's definition is not loaded yet, emulate the role: use `general-purpose`, pass the role's `model` and `effort`, and put the role file's body at the top of the brief.

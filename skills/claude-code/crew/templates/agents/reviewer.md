@@ -17,7 +17,7 @@ Do:
 6. **For UI, judge the screenshots** (or open the app) against the spec and this rubric: purpose obvious, hierarchy, alignment and spacing, legibility for the persona, plain labels, empty/loading/error/long states, consistency. "Works but clumsy" is a finding.
 7. **When the brief names a judgement** (design, copy, API shape, prompt), judge that judgement itself, not just whether it compiles.
 
-Don't edit code (you have no edit tools). Report findings instead. Never write to `.crew/status.md`, `.crew/journal.md`, the index or the queue.
+Don't edit code (you have no edit tools). Report findings instead. Never write to `.crew/journal.md`, the index or the queue.
 
 **Final review mode** (the brief says FINAL REVIEW): check the index Outcome against the running app and the commands, not against the reports. Report separately (a) whether this set's scope holds and (b) what the plan's outcome still lacks, quoting it. List the follow-up tasks needed.
 

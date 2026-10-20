@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# crew: journal, dashboard, hook handler and worktree helper for the crew skill.
+# crew: journal, hook handler, dashboard launcher and worktree helper for the crew skill.
 #
 # Installed by `/crew setup` as <project>/.crew/bin/crew. Compatible with bash 3.2
 # (macOS /bin/bash): no associative arrays, no ${var,,}, no mapfile.
@@ -8,12 +8,12 @@
 #   crew journal <text...>              Log a lead action: "- HH:MM · lead · <text>".
 #   crew request "<text>" [--affects <x>] [--slot <y>] [--urgent] [--dry-run]
 #                                       Queue a founder request as the next R<n> in
-#                                       .crew/queue.md, journal it, refresh the dashboard.
+#                                       .crew/queue.md and journal it.
 #   crew request R<n> --status queued|scheduled|done|dropped [--slot <y>] [--affects <x>] [--note <t>]
 #                                       Move a request along; journals the transition.
 #   crew defect "<symptom>" --where <surface> [--from <x>] [--severity low|medium] [--slot <y>] [--dry-run]
 #                                       Defer a leaf defect as the next D<n> in .crew/defects.md,
-#                                       journal it, refresh the dashboard.
+#                                       and journal it.
 #   crew defect D<n> --status deferred|scheduled|fixed|dropped [--promote] [--slot <y>] [--note <t>]
 #                                       Move a defect along; --promote marks one that bit other
 #                                       work (status scheduled). Journals the transition.
@@ -23,7 +23,14 @@
 #   crew session stop                   Mark the crew as stopped by the founder (/crew stop) and
 #                                       let the computer sleep again.
 #   crew running                        List running subagents (kept by the hooks).
-#   crew status                         Render the dashboard .crew/status.md now.
+#   crew status                         Settle pending compaction records, sample the clock,
+#                                       make sure the dashboard runs and print its URL.
+#   crew dashboard [start|stop|restart|url]
+#                                       The dashboard: a local web page served by
+#                                       .crew/dashboard/server.mjs (Node.js 20+), live over
+#                                       Server-Sent Events. `start` (the default) prints its URL.
+#                                       CREW_DASHBOARD=0 keeps session start, status and the
+#                                       SessionStart hook from starting it.
 #   crew worktree setup [<path>] [--dry-run]
 #                                       Prepare a worktree: .worktreeinclude copies,
 #                                       .crew/tmp/, .crew/task-data/, worktree.json,
@@ -47,7 +54,7 @@
 #     A hook that fails a guard prints nothing and changes no file.
 #   - Hook modes need jq. Everything else works without it.
 #   - All files live in the main checkout of the repository (root resolution below), so
-#     hooks running in worktrees write one journal and one dashboard per repository.
+#     hooks running in worktrees write one journal and one state per repository.
 #   - Hooks never read a whole transcript: tail, grep and jq on bounded ranges only.
 #   - Set CREW_DEBUG=1 to see stderr from hook modes.
 #
@@ -64,7 +71,7 @@
 #     compaction log are written by the next crew event ("settling"), with the compaction's
 #     own local time.
 #
-# Timing and sleep (the dashboard's Timing section)
+# Timing and sleep (read by the dashboard's Timing tab)
 #   - Every subagent run (a start or a resume, to its stop) is one line in
 #     tmp/journal-state/runs.tsv: start, end, agent id, type, task number (from the
 #     description's leading T<NN>), first|resume, status keyword.
@@ -73,6 +80,12 @@
 #     between two samples is time asleep; 2 min or more is journaled and kept in
 #     tmp/journal-state/sleep.tsv. Runs start and end at crew events, so each sleep interval
 #     lies wholly inside or wholly outside any run. Elsewhere sleep is not measured.
+#
+# The dashboard
+#   - This script records state (journal, runs, sleeps, agents, the lead, compactions);
+#     .crew/dashboard/model.mjs reads it and computes everything the page shows. Nothing here
+#     renders. The server watches .crew/ and git, so no hook needs to tell it anything; it waits
+#     while journal.lock is held, so it never reads a half-written state.
 
 # Make sure git acts on the directories we name, not on an inherited repository.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
@@ -117,7 +130,6 @@ set_paths() {
   TMP_DIR="$CREW_DIR/tmp"
   STATE="$TMP_DIR/journal-state"
   JOURNAL="$CREW_DIR/journal.md"
-  STATUS="$CREW_DIR/status.md"
   DEFECTS="$CREW_DIR/defects.md"
   LOCK="$TMP_DIR/journal.lock"
   RUNS="$STATE/runs.tsv"
@@ -263,7 +275,7 @@ journal_open_today() {
   if [ "$last" != "## $NOW_DAY" ]; then printf '\n## %s\n' "$NOW_DAY" >> "$JOURNAL"; fi
 }
 
-# journal_append HEAD TEXT: append "- HH:MM · HEAD[ [branch]] · TEXT", then render.
+# journal_append HEAD TEXT: append "- HH:MM · HEAD[ [branch]] · TEXT".
 # JOURNAL_AT=<epoch> in the environment dates the line at that moment instead of now (used
 # for compactions, which are logged when their record becomes readable). An earlier day is
 # written as "YYYY-MM-DD HH:MM".
@@ -287,7 +299,6 @@ journal_append() {
   else
     printf '%s\n' "- $when · $head$SUFFIX" >> "$JOURNAL"
   fi
-  render_locked
 }
 
 # ---------------------------------------------------------------------------
@@ -371,28 +382,6 @@ keep_awake_start() {
     nohup caffeinate -i -s -t 43200 >/dev/null 2>&1 &
   fi
   printf '%s %s\n' "$!" "${target:-12h}" > "$STATE/keep-awake"
-}
-
-# keep_awake_line -> REPLY: the dashboard's keep-awake line ("" where caffeinate is absent).
-keep_awake_line() {
-  local pid watched="" on=0
-  REPLY=""
-  command -v caffeinate >/dev/null 2>&1 || return 0
-  if [ -f "$STATE/keep-awake" ]; then
-    read -r pid watched < "$STATE/keep-awake" 2>/dev/null
-    case "$pid" in ''|*[!0-9]*) ;; *) case $(ps -o args= -p "$pid" 2>/dev/null) in *caffeinate*) on=1 ;; esac ;; esac
-  fi
-  if [ "$on" = 1 ]; then
-    if [ "$watched" = 12h ]; then REPLY="on (for 12 h from the session start)"; else REPLY="on (while Claude Code runs)"; fi
-    case $(pmset -g batt 2>/dev/null | head -n 1) in
-      *"Battery Power"*) REPLY="$REPLY · ⚠ on battery: closing the lid still puts the computer to sleep" ;;
-    esac
-  else
-    case $(cat "$STATE/lead" 2>/dev/null) in
-      stopped*) REPLY="off (the crew is stopped)" ;;
-      *) REPLY="off: the computer may sleep and pause the crew" ;;
-    esac
-  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -768,7 +757,7 @@ EOF
 }
 
 # freeze_open_rows: close the "turns after" count of compactions whose agent has stopped, or
-# whose session is no longer registered, so renders only count turns for live transcripts.
+# whose session is no longer registered, so the dashboard only counts turns for live transcripts.
 freeze_open_rows() {
   local rows nr path boff kind id tmp="$COMPACTIONS.new"
   [ -s "$COMPACTIONS" ] || return 0
@@ -856,7 +845,7 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# Dashboard rendering (D-J2 to D-J5)
+# Task indexes (D-J2 to D-J5)
 # ---------------------------------------------------------------------------
 
 # status_look KEY: sets GLYPH and WORD for a canonical status key.
@@ -870,25 +859,6 @@ status_look() {
     *) GLYPH='☐'; WORD='pending' ;;
   esac
 }
-
-# Mermaid-safe label text: no double quotes, no newlines, no angle brackets, 40 chars.
-mm_text() {
-  oneline "$1"
-  REPLY=${REPLY//\"/\'}
-  REPLY=${REPLY//</‹}
-  REPLY=${REPLY//>/›}
-  trunc "$REPLY" 40
-}
-
-# Markdown table cell: one line, pipes escaped, "—" when empty.
-md_cell() {
-  oneline "$1"
-  REPLY=${REPLY//|/\\|}
-  [ -n "$REPLY" ] || REPLY='—'
-}
-
-# Mermaid node id from a task or request id.
-mm_id() { REPLY=$(printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9_' '_'); }
 
 # Parse an index file. mode=summary prints one record:
 #   title US total US accepted US closed US stage US branch
@@ -947,771 +917,12 @@ parse_index() {
     }' "$2"
 }
 
-# Parse queue entries of one kind (R or F). Prints per entry:
-#   R: id US date US request US affects US slot US status
-#   F: id US date US question US default US status
-parse_queue() {
-  awk -v kind="$1" '
-    function trim(s) { gsub(/^[ \t]+|[ \t\r]+$/, "", s); return s }
-    BEGIN { OFS = "\037" }
-    $0 ~ ("^[ \t]*- \\[" kind "[0-9]+\\]") {
-      line = $0; sub(/^[ \t]*- \[/, "", line)
-      id = substr(line, 1, index(line, "]") - 1); line = substr(line, index(line, "]") + 1)
-      n = split(line, p, " · ")
-      date = trim(p[1]); text = ""; aff = ""; slot = ""; status = ""; def = ""
-      for (i = 2; i <= n; i++) {
-        v = trim(p[i])
-        if (v ~ /^affects:/) { sub(/^affects:[ \t]*/, "", v); aff = v }
-        else if (v ~ /^slot:/) { sub(/^slot:[ \t]*/, "", v); slot = v }
-        else if (v ~ /^status:/) { sub(/^status:[ \t]*/, "", v); status = tolower(v) }
-        else if (v ~ /^default taken:/) { sub(/^default taken:[ \t]*/, "", v); def = v }
-        else text = text (text == "" ? "" : " · ") v
-      }
-      if (kind == "R") print id, date, text, aff, slot, status
-      else print id, date, text, def, status
-    }' "$2"
-}
-
-# Parse defect entries. Prints per entry:
-#   id US date US symptom US where US from US severity US slot US status US promoted (1 or 0)
-parse_defects() {
-  awk '
-    function trim(s) { gsub(/^[ \t]+|[ \t\r]+$/, "", s); return s }
-    BEGIN { OFS = "\037" }
-    /^[ \t]*- \[D[0-9]+\]/ {
-      line = $0; sub(/^[ \t]*- \[/, "", line)
-      id = substr(line, 1, index(line, "]") - 1); line = substr(line, index(line, "]") + 1)
-      n = split(line, p, " · ")
-      date = trim(p[1]); text = ""; wh = ""; fr = ""; sev = ""; slot = ""; status = ""; prom = 0
-      for (i = 2; i <= n; i++) {
-        v = trim(p[i])
-        if (v ~ /^where:/) { sub(/^where:[ \t]*/, "", v); wh = v }
-        else if (v ~ /^from:/) { sub(/^from:[ \t]*/, "", v); fr = v }
-        else if (v ~ /^severity:/) { sub(/^severity:[ \t]*/, "", v); sev = tolower(v) }
-        else if (v ~ /^slot:/) { sub(/^slot:[ \t]*/, "", v); slot = v }
-        else if (v ~ /^status:/) { sub(/^status:[ \t]*/, "", v); status = tolower(v) }
-        else if (v == "promoted") prom = 1
-        else text = text (text == "" ? "" : " · ") v
-      }
-      print id, date, text, wh, fr, sev, slot, status, prom
-    }' "$1"
-}
-
-# defect_counts -> REPLY "3 (medium 1)" for the deferred defects; "" when none.
-defect_counts() {
-  REPLY=""
-  [ -f "$DEFECTS" ] || return 0
-  REPLY=$(parse_defects "$DEFECTS" 2>/dev/null | awk -F'\037' '
-    $8 ~ /^deferred/ { n++; if ($6 == "medium") m++ }
-    END { if (n > 0) printf "%d%s", n, (m > 0 ? " (medium " m ")" : "") }')
-}
-
-# render_defects: the "## Defects" section (nothing when the log has no entries).
-render_defects() {
-  local recs
-  [ -f "$DEFECTS" ] || return 0
-  recs=$(parse_defects "$DEFECTS" 2>/dev/null)
-  [ -n "$recs" ] || return 0
-  printf '## Defects\n\n'
-  printf '%s\n' "$recs" | awk -F'\037' '
-    function cell(t) { gsub(/\|/, "\\|", t); gsub(/^[ \t]+|[ \t]+$/, "", t); return (t == "") ? "—" : t }
-    {
-      n++; s = $8; sub(/[ \t].*$/, "", s); cnt[s]++
-      if ($9 == 1) prom++
-      if (s == "deferred" && $6 == "medium") med++
-      if (s == "deferred" || s == "scheduled") {
-        o++; row[o] = sprintf("| %s | %s | %s | %s | %s | %s | %s%s |", $1, cell($3), cell($4), cell($5), cell($6), cell($7), s, ($9 == 1 ? " (promoted)" : ""))
-      }
-    }
-    END {
-      line = "Deferred " (cnt["deferred"] + 0) (med > 0 ? " (medium " med ")" : "") " · scheduled " (cnt["scheduled"] + 0) \
-        " · fixed " (cnt["fixed"] + 0) " · dropped " (cnt["dropped"] + 0) " · promoted " (prom + 0) " of " n
-      print line (prom > 0 ? " (deferrals that bit other work)" : "") "\n"
-      if (o == 0) { print "No open defects.\n"; exit }
-      print "| ID | Defect | Where | From | Severity | Slot | Status |"
-      print "|---|---|---|---|---|---|---|"
-      for (i = 1; i <= o; i++) print row[i]
-      print ""
-    }'
-}
-
-# set_start_epoch INDEX -> REPLY: when the task set started: the time of the commit that added
-# its index (the baseline commit), cached once found; before that commit, the file's birth
-# time; "" when unknown.
-set_start_epoch() {
-  local f=$1 key t
-  safe_name "$f"; key="$STATE/set-start/$REPLY"
-  REPLY=$(cat "$key" 2>/dev/null)
-  case $REPLY in ''|*[!0-9]*) ;; *) return 0 ;; esac
-  t=$(git -C "$(dirname "$f")" log --diff-filter=A --format=%ct -1 -- "$(basename "$f")" 2>/dev/null)
-  case $t in
-    ''|*[!0-9]*) ;;
-    *) printf '%s\n' "$t" > "$key" 2>/dev/null; REPLY=$t; return 0 ;;
-  esac
-  t=$(stat -f %B "$f" 2>/dev/null) || t=""
-  case $t in ''|*[!0-9]*|0) REPLY="" ;; *) REPLY=$t ;; esac
-}
-
-# render_timing INDEX ROWS [DONE]: the "## Timing" section for the current set. DONE=1 (every task
-# accepted, nothing running) stops the clock at the last run's end. ROWS: one line per
-# task, "id TAB number TAB dependency numbers (space-separated)". Reads runs.tsv, the running
-# agents (open runs, up to now) and sleep.tsv. Nothing when the set has no runs yet.
-render_timing() {
-  local start since f id kind endt="" until=""
-  set_start_epoch "$1"; start=$REPLY
-  now_parts
-  if [ "${3:-0}" = 1 ] && [ -f "$RUNS" ]; then
-    endt=$(awk -F'\t' -v s="${start:-0}" '$1 + 0 >= s + 0 && $2 + 0 > m { m = $2 + 0 } END { if (m > 0) print m }' "$RUNS")
-    if [ -n "$endt" ]; then epoch_to_hm "$endt"; until=$REPLY; fi
-  fi
-  since=""
-  if [ -n "$start" ]; then
-    epoch_to_hm "$start"; since=$REPLY
-    epoch_to_day "$start"
-    [ "$REPLY" = "$NOW_DAY" ] || since="$REPLY $since"
-  fi
-  {
-    [ -z "$2" ] || printf '%s\n' "$2" | sed "s/^/T$TAB/"
-    [ ! -f "$RUNS" ] || sed "s/^/R$TAB/" "$RUNS"
-    for f in "$STATE/running"/*; do
-      [ -e "$f" ] || continue
-      id=${f##*/}
-      load_agent "$id" || continue
-      kind=first
-      if [ -f "$RUNS" ] && awk -F'\t' -v id="$id" '$3 == id { f = 1 } END { exit !f }' "$RUNS"; then kind=resume; fi
-      task_num "$A_DESC"
-      printf 'R\t%s\t%s\t%s\t%s\t%s\t%s\trunning\n' "${A_RUN_START:-$A_STARTED}" "$NOW_EPOCH" "$id" "$A_TYPE" "$REPLY" "$kind"
-    done
-    [ ! -f "$SLEEPS" ] || sed "s/^/S$TAB/" "$SLEEPS"
-  } | awk -F'\t' -v start="$start" -v now="$NOW_EPOCH" -v since="$since" -v endt="$endt" -v until="$until" '
-    function span(s,  h, m) {
-      s = int(s + 0.5)
-      if (s <= 0) return "—"
-      if (s < 60) return s " s"
-      if (s < 3600) return int(s / 60) " min"
-      h = int(s / 3600); m = int((s % 3600) / 60)
-      return h " h " m " min"
-    }
-    function pct(a, b) { return (b > 0) ? int(a * 100 / b + 0.5) "%" : "—" }
-    $1 == "T" { nt++; tid[nt] = $2; tn[nt] = $3; tdep[nt] = $4; byn[$3] = nt; next }
-    $1 == "S" { ns++; sf[ns] = $2 + 0; st[ns] = $3 + 0; sa[ns] = $4 + 0; next }
-    $1 == "R" {
-      if (start != "" && $2 + 0 < start + 0) next
-      if ($2 + 0 <= 0 || $3 + 0 < $2 + 0) next
-      nr++; rs[nr] = $2 + 0; re[nr] = $3 + 0; ty[nr] = $5; rt[nr] = $6; rk[nr] = $7; rst[nr] = $8
-      next
-    }
-    END {
-      if (nr == 0) exit
-      t0 = (start != "") ? start + 0 : rs[1]
-      for (i = 1; i <= nr; i++) if (start == "" && rs[i] < t0) t0 = rs[i]
-      for (i = 1; i <= nr; i++) {
-        sl = 0
-        for (j = 1; j <= ns; j++) if (sf[j] >= rs[i] && st[j] <= re[i]) sl += sa[j]
-        aw = re[i] - rs[i] - sl; if (aw < 0) aw = 0
-        if (ty[i] == "builder" || ty[i] == "worker") ph = (rk[i] == "resume") ? "rework" : "build"
-        else if (ty[i] == "debugger") ph = "rework"
-        else if (ty[i] == "reviewer") ph = "review"
-        else ph = "other"
-        k = (rt[i] != "" && (rt[i] in byn)) ? byn[rt[i]] : 0
-        if (k > 0) {
-          has[k] = 1; act[k] += aw; tsl[k] += sl; tot += aw
-          if (ph != "other") { v[k, ph] += aw; ptot[ph] += aw }
-          if (ph == "review" && rst[i] == "CHANGES") { ch[k]++; chs++ }
-        } else {
-          other += aw; osl += sl
-          if (!(ty[i] in seen)) { seen[ty[i]] = 1; otypes = otypes (otypes == "" ? "" : ", ") ty[i] }
-        }
-      }
-      # Agents at work: the union of all run intervals, less the sleep inside it.
-      for (i = 1; i <= nr; i++) ord[i] = i
-      for (i = 2; i <= nr; i++) { x = ord[i]; j = i - 1; while (j > 0 && rs[ord[j]] > rs[x]) { ord[j + 1] = ord[j]; j-- } ord[j + 1] = x }
-      busy = 0; cs = -1
-      for (i = 1; i <= nr + 1; i++) {
-        if (i <= nr && cs >= 0 && rs[ord[i]] <= ce) { if (re[ord[i]] > ce) ce = re[ord[i]]; continue }
-        if (cs >= 0) {
-          busy += ce - cs
-          for (j = 1; j <= ns; j++) if (sf[j] >= cs && st[j] <= ce) busy -= sa[j]
-        }
-        if (i <= nr) { cs = rs[ord[i]]; ce = re[ord[i]] }
-      }
-      if (busy < 0) busy = 0
-      if (endt == "") endt = now
-      slept = 0
-      for (j = 1; j <= ns; j++) if (sf[j] >= t0 && st[j] <= endt) slept += sa[j]
-      clock = endt - t0; idle = clock - slept - busy; if (idle < 0) idle = 0
-      # Critical path over the dependencies, with each task weighted by its agent time so far.
-      for (pass = 1; pass <= nt; pass++) {
-        for (k = 1; k <= nt; k++) {
-          best = 0; bp = 0; nd = split(tdep[k], dd, " ")
-          for (j = 1; j <= nd; j++) if ((dd[j] in byn) && fin[byn[dd[j]]] > best) { best = fin[byn[dd[j]]]; bp = byn[dd[j]] }
-          fin[k] = act[k] + best; pred[k] = bp
-        }
-      }
-      cp = 0; last = 0
-      for (k = 1; k <= nt; k++) if (fin[k] > cp) { cp = fin[k]; last = k }
-      np = 0
-      for (k = last; k > 0 && np < nt; k = pred[k]) path[++np] = tid[k]
-      ptxt = ""
-      for (i = np; i >= 1; i--) {
-        if (np > 14 && i < np - 5 && i > 6) { if (i == np - 6) ptxt = ptxt " → …"; continue }
-        ptxt = ptxt (ptxt == "" ? "" : " → ") path[i]
-      }
-      print "## Timing\n"
-      head = (since != "" ? "Since the set started (" since ")" : "Since the first agent run")
-      if (until != "") head = head " to the last agent run (" until ")"
-      print head ": " span(clock) " on the clock · slept " span(slept) \
-        " · agents at work " span(busy) " · lead and waiting " span(idle) "\n"
-      if (tot > 0) {
-        print "Task time " span(tot) ": build " span(ptot["build"]) " (" pct(ptot["build"], tot) ") · review " span(ptot["review"]) \
-          " (" pct(ptot["review"], tot) ") · rework " span(ptot["rework"]) " (" pct(ptot["rework"], tot) ") · CHANGES verdicts " (chs + 0) "\n"
-        if (np > 0) print "Critical path so far: " ptxt " · " span(cp) " · parallel headroom " (tot - cp >= 1 ? span(tot - cp) : "none") "\n"
-      }
-      print "| Task | Build | Review | Rework | CHANGES | Active | Slept |"
-      print "|---|---|---|---|---|---|---|"
-      for (k = 1; k <= nt; k++) {
-        if (!has[k]) continue
-        printf "| %s | %s | %s | %s | %s | %s | %s |\n", tid[k], span(v[k, "build"]), span(v[k, "review"]), span(v[k, "rework"]), \
-          (ch[k] > 0 ? ch[k] : "—"), span(act[k]), span(tsl[k])
-      }
-      if (other > 0 || osl > 0) printf "| Set level (%s) | — | — | — | — | %s | %s |\n", otypes, span(other), span(osl)
-      print ""
-      print "*Agent time while awake. Sleep is measured from the awake-time clock at each crew event (macOS) and left out. Active: all agent time on the task. Parallel headroom: task time minus the critical path, the most that running independent tasks side by side could have saved so far.*\n"
-    }'
-}
-
 # List worktrees: "path US branch" per line, main checkout first.
 list_worktrees() {
   git -C "$ROOT" worktree list --porcelain 2>/dev/null | awk '
     /^worktree / { if (p != "") print p "\037" b; p = substr($0, 10); b = ""; next }
     /^branch / { b = substr($0, 8); sub(/^refs\/heads\//, "", b) }
     END { if (p != "") print p "\037" b }'
-}
-
-# Percent-encode the characters that break a Markdown link destination.
-md_url() {
-  REPLY=${1// /%20}
-  REPLY=${REPLY//(/%28}
-  REPLY=${REPLY//)/%29}
-}
-
-# compaction_counts -> REPLY "lead 1 · subagents 8" ("" when none).
-compaction_counts() {
-  local l=0 s=0
-  REPLY=""
-  set_compactions_path
-  [ -s "$COMPACTIONS" ] || return 0
-  l=$(awk -F'\t' '$3 == "lead"' "$COMPACTIONS" | wc -l | tr -d ' ')
-  s=$(awk -F'\t' '$3 == "sub"' "$COMPACTIONS" | wc -l | tr -d ' ')
-  [ "$((l + s))" -gt 0 ] || return 0
-  REPLY="lead $l · subagents $s"
-}
-
-# render_compactions: the "## Compactions" section: a summary line, the last 12 compactions
-# with the estimated overhead and savings of each, and the model behind the numbers.
-# Overhead ≈ pre × cache-read price + post × output price (the summarization request).
-# Savings so far ≈ turns since × (pre − post) × cache-read price: what the API requests made
-# after the compaction would have paid to carry the dropped context.
-render_compactions() {
-  local n epoch iso kind id label model effort pre post dur trig cost path boff turns started
-  local aug="" when read_price day
-  set_compactions_path
-  [ -s "$COMPACTIONS" ] || return 0
-  now_parts
-  n=0
-  while IFS=$TAB read -r epoch iso kind id label model effort pre post dur trig cost path boff turns started; do
-    [ -n "$epoch" ] || continue
-    n=$((n + 1))
-    if [ "$turns" = "-" ]; then
-      if [ -f "$path" ]; then turns_in "$path" "$boff"; turns=$REPLY; else turns=0; fi
-    fi
-    price_for "$model" "$pre"; read_price=${P_READ:-0}
-    epoch_to_hm "$epoch"; when=$REPLY
-    epoch_to_day "$epoch"; day=$REPLY
-    [ "$day" = "$NOW_DAY" ] || when="$day $when"
-    aug="$aug$epoch$TAB$kind$TAB$label$TAB$pre$TAB$post$TAB$dur$TAB$trig$TAB${cost:-}$TAB$turns$TAB$read_price$TAB${started:-0}$TAB$when$NL"
-  done < "$COMPACTIONS"
-  [ "$n" -gt 0 ] || return 0
-  printf '## Compactions\n\n'
-  printf '%s' "$aug" | awk -F'\t' -v rows=12 '
-    function span(s,  h, m) {
-      s = int(s + 0.5)
-      if (s < 100) return s " s"
-      if (s < 3600) return int(s / 60) " min"
-      h = int(s / 3600); m = int((s % 3600) / 60)
-      return h " h " m " min"
-    }
-    function k(n) { return (n >= 1000) ? int(n / 1000 + 0.5) "k" : n }
-    function usd(c) { if (c == "") return "—"; c += 0; if (c < -0.005) return sprintf("≈−$%.2f", -c); return (c < 0.005) ? "<$0.01" : sprintf("≈$%.2f", c) }
-    function cell(t) { gsub(/\|/, "\\|", t); return t }
-    {
-      n++
-      epoch[n] = $1; kind[n] = $2; label[n] = $3; pre[n] = $4 + 0; post[n] = $5 + 0; dur[n] = $6 + 0
-      trig[n] = $7; cost[n] = $8; turns[n] = $9 + 0; rp[n] = $10 + 0; started[n] = $11 + 0; when[n] = $12
-      saved[n] = turns[n] * (pre[n] - post[n]) * rp[n] / 1000000
-      cnt[kind[n]]++; presum[kind[n]] += pre[n]
-      if (cost[n] != "") { over += cost[n]; overknown = 1 }
-      if (rp[n] > 0) { savesum += saved[n]; saveknown = 1 }
-      if (kind[n] == "lead") { if (lastlead > 0) { gapsum += epoch[n] - lastlead; gaps++ } lastlead = epoch[n] }
-      else if (started[n] > 0 && epoch[n] >= started[n]) { subgap += epoch[n] - started[n]; subgaps++ }
-    }
-    END {
-      line = ""
-      if (cnt["lead"] > 0) {
-        line = "lead: " cnt["lead"] " (at ~" k(presum["lead"] / cnt["lead"]) " tokens"
-        if (gaps > 0) line = line ", every ~" span(gapsum / gaps)
-        line = line ")"
-      }
-      if (cnt["sub"] > 0) {
-        line = line (line == "" ? "" : " · ") "subagents: " cnt["sub"] " (at ~" k(presum["sub"] / cnt["sub"]) " tokens"
-        if (subgaps > 0) line = line ", ~" span(subgap / subgaps) " after start"
-        line = line ")"
-      }
-      if (overknown) line = line " · est. overhead " usd(over)
-      if (saveknown) line = line " · est. saved so far " usd(savesum) " · net " usd(savesum - over)
-      print line "\n"
-      print "| When | Agent | Before → after | Took | Trigger | Turns since | Est. overhead | Est. saved | Net |"
-      print "|---|---|---|---|---|---|---|---|---|"
-      s = n - rows + 1; if (s < 1) s = 1
-      for (i = s; i <= n; i++) {
-        netc = (cost[i] == "" || rp[i] <= 0) ? "" : saved[i] - cost[i]
-        sv = (rp[i] > 0) ? usd(saved[i]) : "—"
-        printf "| %s | %s | %s → %s | %s | %s | %s | %s | %s | %s |\n", when[i], cell(label[i]), k(pre[i]), k(post[i]),
-          (dur[i] > 0 ? span(dur[i] / 1000) : "—"), trig[i], turns[i], usd(cost[i]), sv, (netc == "" ? "—" : usd(netc))
-      }
-      print ""
-      print "*Estimates at Anthropic list prices (2026-10-20), warm cache. Overhead: the summarization request; saved: what later requests would have paid to carry the dropped context. Not measured: re-reads after a compaction and lost detail. Tune windows with `/autocompact <size>`, `modelSettings`, or `autoCompactWindow` in an agent definition (see `.crew/README.md`).*\n"
-    }'
-}
-
-# Write the dashboard to stdout. Run in a subshell by render_locked.
-render_body() {
-  local repo branch sha lead_state lead_hm lead_line nrun f id
-  local -a RUN_TYPE RUN_DESC RUN_ME RUN_NAME RUN_SINCE
-  now_parts
-  repo=$(basename "$ROOT")
-  branch=$(git -C "$ROOT" symbolic-ref --short -q HEAD 2>/dev/null) || branch=""
-  sha=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null) || sha=""
-  [ -n "$branch" ] || branch="detached"
-  [ -n "$sha" ] || { branch="no git history"; sha="—"; }
-
-  # Running agents.
-  nrun=0
-  for f in "$STATE/running"/*; do
-    [ -e "$f" ] || continue
-    id=${f##*/}
-    load_agent "$id" || A_TYPE="unknown"
-    RUN_TYPE[nrun]=$A_TYPE; RUN_DESC[nrun]=$A_DESC
-    RUN_ME[nrun]="${A_MODEL:-default} · ${A_EFFORT:-default}"
-    RUN_NAME[nrun]=$A_NAME; RUN_SINCE[nrun]=$A_SINCE
-    nrun=$((nrun + 1))
-  done
-
-  # Lead state.
-  lead_state=""; lead_hm=""
-  if [ -f "$STATE/lead" ]; then
-    read -r lead_state lead_hm < "$STATE/lead"
-  fi
-  if [ "$lead_state" = stopped ]; then
-    lead_line="⏹ stopped by you since $lead_hm"
-    [ "$nrun" -eq 0 ] || lead_line="$lead_line · $nrun agent(s) still finishing"
-  elif [ "$lead_state" = working ]; then
-    lead_line="▶ working since $lead_hm"
-  elif [ "$nrun" -gt 0 ]; then
-    lead_line="▶ agents working, lead idle"
-  elif [ -n "$lead_hm" ]; then
-    lead_line="⏸ waiting for you since $lead_hm"
-  else
-    lead_line="⏸ waiting for you"
-  fi
-
-  printf '# Crew status — %s\n\n' "$repo"
-  printf '*Updated %s %s · %s @ %s · %s*\n\n' "$NOW_DAY" "$NOW_HM" "$branch" "$sha" "$lead_line"
-
-  # Collect indexes: main checkout first, then linked worktrees. A worktree index whose
-  # path also exists in the main checkout is a committed copy of it and is skipped.
-  local -a IDX_FILE IDX_WHERE IDX_REL IDX_TITLE IDX_TOTAL IDX_ACC IDX_CLOSED IDX_STAGE IDX_BRANCH
-  local nidx=0 wt wtb rel rec t_title t_total t_acc t_closed t_stage t_branch
-  add_index() {  # file where rel
-    rec=$(parse_index summary "$1" 2>/dev/null)
-    IFS=$US read -r t_title t_total t_acc t_closed t_stage t_branch <<< "$rec"
-    IDX_FILE[nidx]=$1; IDX_WHERE[nidx]=$2; IDX_REL[nidx]=$3
-    IDX_TITLE[nidx]=${t_title:-${3%/index.md}}; IDX_TOTAL[nidx]=${t_total:-0}; IDX_ACC[nidx]=${t_acc:-0}
-    IDX_CLOSED[nidx]=$t_closed; IDX_STAGE[nidx]=$t_stage; IDX_BRANCH[nidx]=$t_branch
-    nidx=$((nidx + 1))
-  }
-  for f in "$CREW_DIR"/tasks/*/index.md; do
-    [ -f "$f" ] || continue
-    add_index "$f" "" "${f#"$CREW_DIR"/}"
-  done
-  while IFS=$US read -r wt wtb; do
-    [ -n "$wt" ] || continue
-    wt=$(cd "$wt" 2>/dev/null && pwd -P) || continue
-    [ "$wt" != "$ROOT" ] || continue
-    [ -d "$wt/.crew/tasks" ] || continue
-    for f in "$wt"/.crew/tasks/*/index.md; do
-      [ -f "$f" ] || continue
-      rel=${f#"$wt"/.crew/}
-      [ -f "$CREW_DIR/$rel" ] && continue
-      add_index "$f" "${wtb:-$(basename "$wt")}" "$rel"
-    done
-  done <<EOF
-$(list_worktrees)
-EOF
-
-  # Pick the current set: a live main-checkout index on the current branch, else the
-  # newest live main-checkout index, else the newest live worktree index.
-  local cur=-1 i newest_main="" newest_wt=""
-  local -a live_main live_wt
-  for ((i = 0; i < nidx; i++)); do
-    [ -z "${IDX_CLOSED[i]}" ] || continue
-    if [ -z "${IDX_WHERE[i]}" ]; then
-      live_main[${#live_main[@]}]=${IDX_FILE[i]}
-      if [ "$cur" -lt 0 ] && [ -n "${IDX_BRANCH[i]}" ] && [ "${IDX_BRANCH[i]}" = "$branch" ]; then cur=$i; fi
-    else
-      live_wt[${#live_wt[@]}]=${IDX_FILE[i]}
-    fi
-  done
-  if [ "$cur" -lt 0 ]; then
-    # ls -t is the portable way to sort by mtime; these paths come from our own glob.
-    # shellcheck disable=SC2012
-    if [ ${#live_main[@]} -gt 0 ]; then
-      newest_main=$(ls -t "${live_main[@]}" 2>/dev/null | head -n 1)
-    elif [ ${#live_wt[@]} -gt 0 ]; then
-      newest_wt=$(ls -t "${live_wt[@]}" 2>/dev/null | head -n 1)
-    fi
-    for ((i = 0; i < nidx; i++)); do
-      if [ -n "$newest_main$newest_wt" ] && [ "${IDX_FILE[i]}" = "$newest_main$newest_wt" ]; then cur=$i; break; fi
-    done
-  fi
-
-  # Queue.
-  local queue="$CREW_DIR/queue.md" qopen=0 rqueued=0 s
-  local -a REQ_ID REQ_TEXT REQ_AFF REQ_SLOT REQ_STATUS Q_ID Q_TEXT Q_DEF Q_STATUS
-  local nreq=0 nq=0 r_id r_text r_aff r_slot r_status q_def
-  if [ -f "$queue" ]; then
-    while IFS=$US read -r r_id _ r_text r_aff r_slot r_status; do
-      [ -n "$r_id" ] || continue
-      REQ_ID[nreq]=$r_id; REQ_TEXT[nreq]=$r_text; REQ_AFF[nreq]=$r_aff
-      REQ_SLOT[nreq]=$r_slot; REQ_STATUS[nreq]=$r_status
-      case $r_status in queued*) rqueued=$((rqueued + 1)) ;; esac
-      nreq=$((nreq + 1))
-    done <<EOF
-$(parse_queue R "$queue" 2>/dev/null)
-EOF
-    while IFS=$US read -r r_id _ r_text q_def r_status; do
-      [ -n "$r_id" ] || continue
-      Q_ID[nq]=$r_id; Q_TEXT[nq]=$r_text; Q_DEF[nq]=$q_def; Q_STATUS[nq]=$r_status
-      case $r_status in open*) qopen=$((qopen + 1)) ;; esac
-      nq=$((nq + 1))
-    done <<EOF
-$(parse_queue F "$queue" 2>/dev/null)
-EOF
-  fi
-
-  # ---- Now and Tasks ----
-  local -a T_ID T_KEY T_TITLE T_FLAGS T_DEPS T_AGENT
-  local nt=0 t_id t_key t_ti t_fl t_dp cur_task=-1 j re='^[Tt]0*([0-9]+)([^0-9]|$)' tnum
-  if [ "$cur" -ge 0 ]; then
-    while IFS=$US read -r t_id t_key t_ti t_fl t_dp _; do
-      [ -n "$t_id" ] || continue
-      T_ID[nt]=$t_id; T_KEY[nt]=$t_key; T_TITLE[nt]=$t_ti; T_FLAGS[nt]=$t_fl; T_DEPS[nt]=$t_dp
-      # The agent on a task: a running agent whose description starts with the task id.
-      T_AGENT[nt]=""
-      tnum=$(printf '%s' "$t_id" | tr -cd '0-9' | sed 's/^0*//')
-      for ((j = 0; j < nrun; j++)); do
-        if [[ ${RUN_DESC[j]} =~ $re ]] && [ "${BASH_REMATCH[1]}" = "$tnum" ]; then
-          s="${RUN_TYPE[j]} (${RUN_ME[j]})"
-          [ -z "${RUN_NAME[j]}" ] || s="$s [${RUN_NAME[j]}]"
-          T_AGENT[nt]="${T_AGENT[nt]:+${T_AGENT[nt]}, }$s"
-        fi
-      done
-      nt=$((nt + 1))
-    done <<EOF
-$(parse_index rows "${IDX_FILE[cur]}" 2>/dev/null)
-EOF
-    # Current task: the first one in progress, in review or in rework; else the first pending.
-    for ((i = 0; i < nt; i++)); do
-      case ${T_KEY[i]} in progress|review|rework) cur_task=$i; break ;; esac
-    done
-    if [ "$cur_task" -lt 0 ]; then
-      for ((i = 0; i < nt; i++)); do
-        if [ "${T_KEY[i]}" = pending ]; then cur_task=$i; break; fi
-      done
-    fi
-  fi
-
-  printf '## Now\n\n'
-  if [ "$cur" -lt 0 ]; then
-    printf 'No task set in progress.\n\n'
-  else
-    local where_note="" bar="" filled acc=${IDX_ACC[cur]} total=${IDX_TOTAL[cur]}
-    [ -z "${IDX_WHERE[cur]}" ] || where_note=" (worktree \`${IDX_WHERE[cur]}\`)"
-    # The backticks are Markdown code spans, not command substitution.
-    # shellcheck disable=SC2016
-    printf '**%s** · `%s`%s\n\n' "${IDX_TITLE[cur]}" "${IDX_REL[cur]}" "$where_note"
-    filled=0
-    [ "$total" -gt 0 ] && filled=$(((acc * 12 + total / 2) / total))
-    for ((i = 0; i < 12; i++)); do
-      if [ "$i" -lt "$filled" ]; then bar="${bar}█"; else bar="${bar}░"; fi
-    done
-    printf '%s %s/%s accepted\n\n' "$bar" "$acc" "$total"
-    if [ "$cur_task" -ge 0 ]; then
-      status_look "${T_KEY[cur_task]}"
-      printf -- '- **Current task:** %s %s %s — %s — %s\n' "$GLYPH" "${T_ID[cur_task]}" \
-        "${T_TITLE[cur_task]}" "$WORD" "${T_AGENT[cur_task]:-no agent on it}"
-    else
-      printf -- '- **Current task:** none open\n'
-    fi
-  fi
-  defect_counts
-  printf -- '- **Open founder questions:** %s · **Queued requests:** %s · **Deferred defects:** %s\n' "$qopen" "$rqueued" "${REPLY:-0}"
-  compaction_counts
-  [ -z "$REPLY" ] || printf -- '- **Compactions:** %s\n' "$REPLY"
-  keep_awake_line
-  [ -z "$REPLY" ] || printf -- '- **Keep awake:** %s\n' "$REPLY"
-  printf '\n'
-
-  if [ "$cur" -ge 0 ]; then
-    printf '## Tasks\n\n'
-    if [ "$nt" -eq 0 ]; then
-      printf 'The index has no task rows yet.\n\n'
-    elif [ "$nt" -gt 60 ]; then
-      printf '*Diagram omitted: more than 60 tasks.*\n\n'
-    else
-      local dep nid did label
-      # Top-down: horizontal space is scarce in previews; long chains read better as a column.
-      printf '```mermaid\nflowchart TD\n'
-      for ((i = 0; i < nt; i++)); do
-        status_look "${T_KEY[i]}"
-        mm_text "${T_TITLE[i]}"; label=$REPLY
-        mm_id "${T_ID[i]}"; nid=$REPLY
-        printf '  %s["%s %s %s"]:::%s\n' "$nid" "$GLYPH" "$nid" "$label" "${T_KEY[i]}"
-      done
-      for ((i = 0; i < nt; i++)); do
-        mm_id "${T_ID[i]}"; nid=$REPLY
-        for dep in ${T_DEPS[i]}; do
-          mm_id "$dep"; did=$REPLY
-          printf '  %s --> %s\n' "$did" "$nid"
-        done
-      done
-      printf '  classDef accepted fill:#dcfce7,stroke:#16a34a,color:#14532d\n'
-      printf '  classDef progress fill:#fef3c7,stroke:#d97706,color:#78350f\n'
-      printf '  classDef review fill:#dbeafe,stroke:#2563eb,color:#1e3a8a\n'
-      printf '  classDef rework fill:#fee2e2,stroke:#dc2626,color:#7f1d1d\n'
-      printf '  classDef blocked fill:#f3f4f6,stroke:#6b7280,color:#374151,stroke-dasharray:5 5\n'
-      printf '  classDef pending fill:#ffffff,stroke:#9ca3af,color:#111827\n'
-      printf '```\n\n'
-    fi
-    if [ "$nt" -gt 0 ]; then
-      local c_ti c_fl c_dp c_ag
-      printf '| # | Status | Task | Flags | Depends on | Agent now |\n'
-      printf '|---|---|---|---|---|---|\n'
-      for ((i = 0; i < nt; i++)); do
-        status_look "${T_KEY[i]}"
-        md_cell "${T_TITLE[i]}"; c_ti=$REPLY
-        md_cell "${T_FLAGS[i]}"; c_fl=$REPLY
-        md_cell "${T_DEPS[i]// /, }"; c_dp=$REPLY
-        md_cell "${T_AGENT[i]}"; c_ag=$REPLY
-        printf '| %s | %s %s | %s | %s | %s | %s |\n' "${T_ID[i]}" "$GLYPH" "$WORD" "$c_ti" "$c_fl" "$c_dp" "$c_ag"
-      done
-      printf '\n'
-    fi
-
-    # Newest 3 screenshots of the current task, linked relative to .crew/.
-    if [ "$cur_task" -ge 0 ]; then
-      local -a shots
-      local d img n=0
-      for d in "$CREW_DIR/task-data/${T_ID[cur_task]}"-*/screenshots "$CREW_DIR/task-data/${T_ID[cur_task]}"/screenshots; do
-        [ -d "$d" ] || continue
-        for img in "$d"/*; do
-          case $(printf '%s' "$img" | tr '[:upper:]' '[:lower:]') in
-            *.png|*.jpg|*.jpeg|*.gif|*.webp|*.svg) shots[${#shots[@]}]=$img ;;
-          esac
-        done
-      done
-      if [ ${#shots[@]} -gt 0 ]; then
-        printf '**Newest screenshots of %s:**\n\n' "${T_ID[cur_task]}"
-        while IFS= read -r img; do
-          [ -n "$img" ] || continue
-          n=$((n + 1)); [ "$n" -le 3 ] || break
-          md_url "${img#"$CREW_DIR"/}"
-          printf -- '- ![%s](%s)\n' "${img##*/}" "$REPLY"
-        done <<EOF
-$(ls -t "${shots[@]}" 2>/dev/null)
-EOF
-        printf '\n'
-      fi
-    fi
-  fi
-
-  # ---- Requests and questions ----
-  printf '## Requests and questions\n\n'
-  local nnodes=0 group gname
-  for ((i = 0; i < nreq; i++)); do
-    case ${REQ_STATUS[i]} in queued*|scheduled*|done*) nnodes=$((nnodes + 1)) ;; esac
-  done
-  if [ "$nnodes" -gt 0 ] && [ "$nnodes" -le 60 ]; then
-    local rt rs prev
-    # Three columns side by side, in queue order: a left-to-right graph of three subgraphs
-    # linked by invisible edges (~~~), each laid out top-down with its entries chained by
-    # invisible edges too (nodes without edges share one rank and would spread sideways).
-    printf '```mermaid\nflowchart LR\n'
-    for group in queued scheduled 'done'; do
-      case $group in queued) gname=Queued ;; scheduled) gname=Scheduled ;; *) gname=Done ;; esac
-      printf '  subgraph %s\n    direction TB\n' "$gname"
-      prev=""
-      for ((i = 0; i < nreq; i++)); do
-        case ${REQ_STATUS[i]} in "$group"*) ;; *) continue ;; esac
-        mm_text "${REQ_TEXT[i]}"; rt=$REPLY
-        mm_text "${REQ_SLOT[i]:-no slot}"; rs=$REPLY
-        mm_id "${REQ_ID[i]}"
-        printf '    %s["%s · %s · %s"]\n' "$REPLY" "${REQ_ID[i]}" "$rt" "$rs"
-        [ -z "$prev" ] || printf '    %s ~~~ %s\n' "$prev" "$REPLY"
-        prev=$REPLY
-      done
-      [ -n "$prev" ] || printf '    %s_none["none"]\n' "$gname"
-      printf '  end\n'
-    done
-    printf '  Queued ~~~ Scheduled ~~~ Done\n'
-    printf '```\n\n'
-  elif [ "$nnodes" -gt 60 ]; then
-    printf '*Diagram omitted: more than 60 requests.*\n\n'
-  fi
-  if [ "$nreq" -gt 0 ]; then
-    local c1 c2 c3 c4
-    printf '| ID | Request | Affects | Slot | Status |\n|---|---|---|---|---|\n'
-    for ((i = 0; i < nreq; i++)); do
-      md_cell "${REQ_TEXT[i]}"; c1=$REPLY
-      md_cell "${REQ_AFF[i]}"; c2=$REPLY
-      md_cell "${REQ_SLOT[i]}"; c3=$REPLY
-      md_cell "${REQ_STATUS[i]}"; c4=$REPLY
-      printf '| %s | %s | %s | %s | %s |\n' "${REQ_ID[i]}" "$c1" "$c2" "$c3" "$c4"
-    done
-    printf '\n'
-  else
-    printf 'No requests from the founder.\n\n'
-  fi
-  if [ "$nq" -gt 0 ]; then
-    local c1 c2 c3
-    printf '| ID | Question for the founder | Default taken | Status |\n|---|---|---|---|\n'
-    for ((i = 0; i < nq; i++)); do
-      md_cell "${Q_TEXT[i]}"; c1=$REPLY
-      md_cell "${Q_DEF[i]}"; c2=$REPLY
-      md_cell "${Q_STATUS[i]}"; c3=$REPLY
-      printf '| %s | %s | %s | %s |\n' "${Q_ID[i]}" "$c1" "$c2" "$c3"
-    done
-    printf '\n'
-  else
-    printf 'No questions for the founder.\n\n'
-  fi
-
-  # ---- Defects and timing ----
-  render_defects
-  if [ "$cur" -ge 0 ] && [ "$nt" -gt 0 ]; then
-    local trows="" tn dn dnums dep
-    for ((i = 0; i < nt; i++)); do
-      tn=${T_ID[i]//[!0-9]/}
-      [ -n "$tn" ] || continue
-      dnums=""
-      for dep in ${T_DEPS[i]}; do
-        dn=${dep//[!0-9]/}
-        [ -z "$dn" ] || dnums="${dnums:+$dnums }$((10#$dn))"
-      done
-      trows="$trows${T_ID[i]}$TAB$((10#$tn))$TAB$dnums$NL"
-    done
-    local tdone=0
-    [ "$nrun" -gt 0 ] || [ "${IDX_ACC[cur]}" != "${IDX_TOTAL[cur]}" ] || tdone=1
-    render_timing "${IDX_FILE[cur]}" "${trows%"$NL"}" "$tdone"
-  fi
-
-  # ---- Live agents ----
-  printf '## Live agents\n\n'
-  if [ "$nrun" -eq 0 ]; then
-    printf 'No subagent running.\n\n'
-  else
-    local c1 c2
-    printf '| Agent | Model · effort | Name | Doing | Since |\n|---|---|---|---|---|\n'
-    for ((i = 0; i < nrun; i++)); do
-      md_cell "${RUN_NAME[i]}"; c1=$REPLY
-      md_cell "${RUN_DESC[i]}"; c2=$REPLY
-      printf '| %s | %s | %s | %s | %s |\n' "${RUN_TYPE[i]}" "${RUN_ME[i]}" "$c1" "$c2" "${RUN_SINCE[i]:-—}"
-    done
-    printf '\n'
-  fi
-
-  # ---- Compactions ----
-  render_compactions
-
-  # ---- Recent activity: last 12 journal events, dated when not from today ----
-  printf '## Recent activity\n\n'
-  if [ -f "$JOURNAL" ] && grep -q '^- ' "$JOURNAL" 2>/dev/null; then
-    awk -v today="$NOW_DAY" '
-      /^## [0-9][0-9][0-9][0-9]-/ { d = substr($0, 4); next }
-      /^- / { n++; l[n % 12] = (d == today || d == "") ? $0 : ("- " d " " substr($0, 3)) }
-      END { s = n - 11; if (s < 1) s = 1; for (i = s; i <= n; i++) print l[i % 12] }' "$JOURNAL"
-    printf '\n'
-  else
-    printf 'No activity logged yet.\n\n'
-  fi
-
-  # ---- Task sets: live first ----
-  printf '## Task sets\n\n'
-  if [ "$nidx" -eq 0 ]; then
-    printf 'No task sets yet.\n\n'
-  else
-    local pass loc c1
-    printf '| Set | Stage | Tasks | Accepted | Status | Closed |\n|---|---|---|---|---|---|\n'
-    for pass in live closed; do
-      for ((i = 0; i < nidx; i++)); do
-        if [ "$pass" = live ] && [ -n "${IDX_CLOSED[i]}" ]; then continue; fi
-        if [ "$pass" = closed ] && [ -z "${IDX_CLOSED[i]}" ]; then continue; fi
-        loc="\`${IDX_REL[i]}\`"
-        [ -z "${IDX_WHERE[i]}" ] || loc="$loc in worktree \`${IDX_WHERE[i]}\`"
-        md_cell "${IDX_TITLE[i]}"; c1=$REPLY
-        md_cell "${IDX_STAGE[i]}"
-        printf '| %s · %s | %s | %s | %s | %s | %s |\n' "$c1" "$loc" "$REPLY" "${IDX_TOTAL[i]}" \
-          "${IDX_ACC[i]}" "$([ "$pass" = live ] && printf 'live' || printf 'closed')" "${IDX_CLOSED[i]:-—}"
-      done
-    done
-    printf '\n'
-  fi
-
-  # ---- Handoff ----
-  if [ -f "$CREW_DIR/handoff.md" ]; then
-    local h_date h_where h_next
-    h_date=$(sed -n 's/^# Crew handoff[[:space:]]*—[[:space:]]*//p' "$CREW_DIR/handoff.md" | head -n 1)
-    h_where=$(grep -m 1 'Where we are:' "$CREW_DIR/handoff.md" | sed 's/^.*Where we are:[*[:space:]]*//')
-    h_next=$(grep -m 1 'Next step:' "$CREW_DIR/handoff.md" | sed 's/^.*Next step:[*[:space:]]*//')
-    printf '## Handoff\n\n'
-    printf -- '- **Written:** %s\n' "${h_date:-unknown}"
-    printf -- '- **Where we are:** %s\n' "${h_where:-—}"
-    printf -- '- **Next step:** %s\n' "${h_next:-—}"
-  fi
-  return 0
-}
-
-# Render the dashboard: temp file, then mv into place. Never fails the caller.
-# Call with the lock held (or after failing to get it).
-render_locked() {
-  local tmp="$TMP_DIR/status.md.tmp" err="$TMP_DIR/status.err" reason
-  mkdir -p "$TMP_DIR" 2>/dev/null || return 0
-  if (render_body) > "$tmp" 2> "$err" && [ -s "$tmp" ]; then
-    :
-  else
-    reason=$(grep -v '^[[:space:]]*$' "$err" 2>/dev/null | tail -n 1)
-    printf '# Crew status\n\nDashboard rendering failed: %s\n' "${reason:-unknown error}" > "$tmp" 2>/dev/null
-  fi
-  mv -f "$tmp" "$STATUS" 2>/dev/null || true
-  rm -f "$err" 2>/dev/null
-  return 0
-}
-
-render_with_lock() {
-  ensure_dirs
-  lock_take
-  render_locked
-  lock_release
 }
 
 # ---------------------------------------------------------------------------
@@ -1838,7 +1049,6 @@ hook_agent_id() {
     now_parts
     printf 'run_start=%s\n' "$NOW_EPOCH" >> "$STATE/agents/$id"
     : > "$STATE/running/$id"
-    render_locked
     return 0
   fi
   now_parts
@@ -1869,7 +1079,6 @@ hook_agent_id() {
     printf 'run_start=%s\n' "$NOW_EPOCH"
   } > "$STATE/agents/$id"
   : > "$STATE/running/$id"
-  render_locked
 }
 
 hook_agent_stop() {
@@ -1897,17 +1106,14 @@ hook_file_changed() {
   [ -n "$path" ] || return 0
   case $path in /*) ;; *) path="$WRITER_CWD/$path" ;; esac
   base=${path##*/}
-  case $base in index.md|queue.md|handoff.md) ;; *) return 0 ;; esac
+  [ "$base" = index.md ] || return 0
   dir=$(dirname "$path")
   pdir=$(cd "$dir" 2>/dev/null && pwd -P) || return 0
   case "$pdir/" in "$ROOT/.crew/"*) ;; *) return 0 ;; esac
   ensure_dirs
   lock_take
-  if [ "$base" = index.md ]; then
-    check_index_additions "$pdir/$base"
-    note=$REPLY
-  fi
-  render_locked
+  check_index_additions "$pdir/$base"
+  note=$REPLY
   # PostToolUse: the note reaches the lead as additional context.
   [ -z "$note" ] || jq -nc --arg c "Crew: $note" '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $c}}'
 }
@@ -1922,7 +1128,6 @@ hook_lead() {  # $1 = working | idle
     stopped*) ;;
     *) printf '%s %s\n' "$1" "$NOW_HM" > "$STATE/lead" ;;
   esac
-  render_locked
   [ "$1" = working ] || return 0
   # UserPromptSubmit: while work is in flight, one line keeps founder requests out of running agents.
   in_flight_rows
@@ -1941,6 +1146,7 @@ hook_session_start() {
   safe_name "$J_SESSION"
   printf '%s %s\n' "$J_HOOK_MODEL" "$J_EFFORT_LVL" > "$STATE/lead-model/$REPLY" 2>/dev/null
   remember_transcript "$J_SESSION" "$J_TRANSCRIPT"
+  dashboard_autostart
 }
 
 # PreCompact: guess who is compacting, leave a note for the SessionStart(compact) hook that
@@ -2257,17 +1463,17 @@ cmd_session() {
       # Prune registrations (and per-session notes) older than 30 days.
       find "$STATE/sessions" "$STATE/lead-model" "$STATE/transcripts" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
       rm -f "$STATE/lead" 2>/dev/null
-      render_locked
       lock_release
       settle_compactions
-      printf 'Crew session registered: %s\n' "$sid" ;;
+      lock_release
+      printf 'Crew session registered: %s\n' "$sid"
+      dashboard_ensure ;;
     stop)
       lock_take
       now_parts
       # Sticky until the next `crew session start`; the hooks leave it alone.
       printf 'stopped %s\n' "$NOW_HM" > "$STATE/lead"
       keep_awake_stop
-      render_locked
       lock_release
       printf 'Crew marked as stopped at %s\n' "$NOW_HM" ;;
     *) printf 'usage: crew session start [<session-id>] | crew session stop\n' >&2; return 1 ;;
@@ -2290,8 +1496,67 @@ cmd_running() {
 cmd_status() {
   settle_compactions
   clock_sample
-  render_with_lock
-  printf 'Rendered %s\n' "$STATUS"
+  lock_release
+  dashboard_ensure
+}
+
+# ---------------------------------------------------------------------------
+# The dashboard (.crew/dashboard/, Node.js 20+)
+# ---------------------------------------------------------------------------
+
+DASHBOARD_SERVER=""
+
+# dashboard_node: 0 when .crew/dashboard is installed and Node.js 20+ is on PATH; otherwise
+# says why on stderr (unless $1 = quiet) and returns 1.
+dashboard_node() {
+  local v
+  DASHBOARD_SERVER="$CREW_DIR/dashboard/server.mjs"
+  if [ ! -f "$DASHBOARD_SERVER" ]; then
+    [ "${1:-}" = quiet ] || printf 'crew dashboard: %s is missing; run /crew setup\n' "${DASHBOARD_SERVER#"$ROOT/"}" >&2
+    return 1
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    [ "${1:-}" = quiet ] || printf 'crew dashboard: needs Node.js 20 or later (https://nodejs.org); none on PATH\n' >&2
+    return 1
+  fi
+  v=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null)
+  case $v in ''|*[!0-9]*) v=0 ;; esac
+  if [ "$v" -lt 20 ]; then
+    [ "${1:-}" = quiet ] || printf 'crew dashboard: needs Node.js 20 or later (found %s)\n' "$(node -v 2>/dev/null)" >&2
+    return 1
+  fi
+}
+
+# dashboard_ensure: start the dashboard unless it runs (or CREW_DASHBOARD=0); print its URL.
+# Never fails the caller: a missing Node.js is a warning.
+dashboard_ensure() {
+  if [ "${CREW_DASHBOARD:-1}" = 0 ]; then
+    printf 'Dashboard: off (CREW_DASHBOARD=0)\n'
+    return 0
+  fi
+  dashboard_node || return 0
+  node "$DASHBOARD_SERVER" start --root "$ROOT" || true
+}
+
+# dashboard_autostart: for the SessionStart hook. Starts the server in the background when it is
+# not running (after a reboot, say); prints nothing and never waits.
+dashboard_autostart() {
+  local pid
+  [ "${CREW_DASHBOARD:-1}" != 0 ] || return 0
+  [ -f "$CREW_DIR/dashboard/server.mjs" ] && command -v node >/dev/null 2>&1 || return 0
+  pid=$(jq -r '.pid // empty' "$TMP_DIR/dashboard.json" 2>/dev/null)
+  case $pid in ''|*[!0-9]*) ;; *) kill -0 "$pid" 2>/dev/null && return 0 ;; esac
+  (node "$CREW_DIR/dashboard/server.mjs" start --root "$ROOT" </dev/null >/dev/null 2>&1 &)
+}
+
+cmd_dashboard() {
+  local sub=${1:-start}
+  case $sub in
+    start|stop|restart|url) ;;
+    *) printf 'usage: crew dashboard [start|stop|restart|url]\n' >&2; return 1 ;;
+  esac
+  dashboard_node || return 1
+  node "$DASHBOARD_SERVER" "$sub" --root "$ROOT"
 }
 
 # ---------------------------------------------------------------------------
@@ -2509,7 +1774,6 @@ EOF
   if [ -n "$branch" ]; then
     step "git branch -D $branch" git -C "$ROOT" branch -D "$branch" || rc=1
   fi
-  [ "$DRY" = 1 ] || render_with_lock
   if [ "$rc" = 0 ]; then
     printf 'crew worktree teardown: %s\n' "$([ "$DRY" = 1 ] && printf 'dry run, nothing changed' || printf 'done')"
   fi
@@ -2559,6 +1823,7 @@ case ${1:-} in
   session) shift; cmd_session "$@"; rc=$? ;;
   running) cmd_running; rc=$? ;;
   status) cmd_status; rc=$? ;;
+  dashboard) shift; cmd_dashboard "$@"; rc=$? ;;
   worktree) shift; cmd_worktree "$@"; rc=$? ;;
   help|-h|--help) usage; rc=0 ;;
   *) usage >&2; rc=1 ;;

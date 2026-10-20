@@ -46,7 +46,7 @@ Queued as R3, slot: after T05. Note: the decisions log has "save on blur only" (
 .crew/bin/crew request R4 --status dropped --note "superseded by R5"
 ```
 
-`queued`: waiting for its slot. `scheduled`: turned into tasks or a plan change; the task spec carries `Requests: R<n>` and the entry's slot names the task. `done`: the work is accepted. `dropped`: withdrawn or superseded (say by what in `--note`). Each command journals the transition and re-renders the dashboard; no separate `crew journal` line is needed.
+`queued`: waiting for its slot. `scheduled`: turned into tasks or a plan change; the task spec carries `Requests: R<n>` and the entry's slot names the task. `done`: the work is accepted. `dropped`: withdrawn or superseded (say by what in `--note`). Each command journals the transition, and the dashboard shows it; no separate `crew journal` line is needed.
 
 ## Draining
 

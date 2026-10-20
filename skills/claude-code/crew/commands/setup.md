@@ -94,7 +94,7 @@ Add this block to `CLAUDE.md` (or to `AGENTS.md` if the project uses only that f
 
 ```
 <!-- crew:begin -->
-Multi-agent rules: docs/CREW.md (crew skill). Crew state: .crew/ (queue.md, tasks/, plans/, handoff.md).
+Multi-agent rules: docs/CREW.md (crew skill). Crew state: .crew/ (queue.md, defects.md, tasks/, plans/, handoff.md).
 Crew lead (the main session): every founder request is queued first (`.crew/bin/crew request "<text>"`) and never added to a running agent; drain the queue only at task-acceptance boundaries. If the crew skill's rules are not in your context, invoke the `crew` skill.
 Crew subagents: work only from your brief and your task spec; report in the format the brief asked for.
 <!-- crew:end -->
@@ -132,7 +132,7 @@ Run each check and report pass or fail:
 5. `.crew/bin/crew worktree setup --dry-run` prints the steps it would run.
 6. `jq . .claude/settings.json` succeeds, and `jq '.hooks | keys' .claude/settings.json` lists `PreCompact`, `SessionStart`, `SubagentStart`, `SubagentStop`, `UserPromptSubmit`, `Stop`, `PreToolUse` and `PostToolUse`.
 7. `git check-ignore .crew/journal.md .crew/status.md .crew/task-data/x .crew/tmp/x` prints all 4 paths (`-q` accepts only one path).
-8. `git check-ignore -q .crew/queue.md` fails (the queue is committed).
+8. `git check-ignore -q .crew/queue.md` and `git check-ignore -q .crew/defects.md` both fail (the queue and the defect log are committed).
 9. The compaction reminder is addressed to the lead when nothing runs:
    ```
    printf '%s' '{"session_id":"<this session id>","hook_event_name":"SessionStart","source":"compact","transcript_path":"/none"}' | .crew/bin/crew hook compact

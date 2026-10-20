@@ -13,6 +13,9 @@ TASK T<NN> <slug>. Spec: .crew/tasks/<plan-slug>/<NN>-<slug>.md — read it firs
 FLAGS: <none | judgement | cross-cutting | discovery>
 FACTS (from the index, the ones this task needs):
 - <fact>
+KNOWN DEFECTS (open entries in .crew/defects.md on this task's surfaces, or "none"): known and scheduled;
+don't fix them, don't chase them; if one blocks your work or causes a failure you see, report it under OPEN.
+- D<n> <symptom> · where: <surface>
 PROJECT RULES: AGENTS.md / CLAUDE.md, docs/CREW.md.
 
 VERIFY BY
@@ -40,13 +43,20 @@ SPEC: <spec path>; FLAGS: <flags>
 WORKTREE: <none | path — run every command in it with `cd <path> && <cmd>` or `git -C <path>`; screenshots are under <path>/.crew/task-data/>
 CHANGES: <commit or diff command>; builder report: <path or pasted ≤300 words>
 SCREENSHOTS: <paths>; UI spec: <path §>
-PREVIOUS FINDINGS: <for a re-review: the last verdict's findings, or "none">
+KNOWN DEFECTS: <open entries in .crew/defects.md on these surfaces, or "none"> — already logged; not findings.
+PREVIOUS FINDINGS: <for a re-review: the findings sent back, or "none">
+RE-REVIEW SCOPE: <first review: "complete — list every finding now; later rounds check only the fixes" |
+       re-review: "only PREVIOUS FINDINGS and the fix diff <command>; a new finding outside it only if high
+       severity, otherwise list it under DEFERRABLE">
 CHECK: re-run every Acceptance command yourself; check every `Detects:` clause is actually exercised;
        check demonstrated failures for new checks; correctness & edge cases; security & data integrity;
        scope creep; conventions; test value (reject tests that catch nothing real); UX vs spec + rubric.
        cross-cutting: verify every Design invariant across the codebase, not only the diff.
-VERDICT (≤ 400 words; the first line is ACCEPT or CHANGES): findings ranked by severity, each with evidence,
-       a concrete fix, and whether the work is wrong (fix it) or the premise is false (stop and re-plan).
+VERDICT (≤ 400 words; the first line is ACCEPT or CHANGES): findings ranked by severity (high / medium / low),
+       each with evidence, a concrete fix, LEAF or LOAD-BEARING (leaf: nothing pending builds on it and it fails
+       safely — no data loss, security, crash on a main path, contract change or bad test), and whether the work
+       is wrong (fix it) or the premise is false (stop and re-plan). CHANGES when a load-bearing or high finding
+       exists; leaf findings alone give ACCEPT with them listed under DEFERRABLE.
 ```
 
 ## Final review brief (reviewer, at set close)
@@ -83,7 +93,8 @@ MODE: critical-journeys | exploratory | scripted (<checklist path>)
 PERSONA: <target user, e.g. "a 70-year-old novelist who knows Word, not tech">
 SCOPE: <journeys/areas>; spec: <path §>; build/commit under test: <ref>
 SETUP: (from your MEMORY.md) + <anything new>
-OUTPUT: defects (severity · repro · expected/actual · screenshot) and UX friction (separately);
+KNOWN DEFECTS: <open entries in .crew/defects.md for this scope, or "none"> — already logged; report one only if it got worse.
+OUTPUT: defects (severity · leaf or load-bearing · repro · expected/actual · screenshot) and UX friction (separately);
         screenshots of key states in .crew/task-data/qa-<YYYY-MM-DD>-<mode>/screenshots/;
         update MEMORY.md only with durable how-to facts.
 REPORT ≤ 400 words + the files; the first line is the status keyword.
@@ -122,7 +133,7 @@ REPORT ≤ 400 words; the first line is RECOMMENDATION: <option>.
 What works now: <bullets> + <2–4 screenshots>
 Decisions I took: <bullets with one-line why>
 Defaults I took (override?): <"Decided X because Y; override?" per item, or "none">
-Risks / known gaps: <bullets>
+Risks / known gaps: <bullets, including the low defects moved to the next set>
 Next: <next milestone/stage, its size in tasks>
 Questions for you: <the batch, asked next with AskUserQuestion, or "none">
 ```

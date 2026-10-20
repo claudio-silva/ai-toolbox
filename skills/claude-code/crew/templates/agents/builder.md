@@ -12,6 +12,7 @@ Rules:
 - **The spec's Design is settled:** do not re-decide it. Its **Do not** section is a hard boundary.
 - **Reuse first.** Build with the project's bundled component library and existing utilities, or compositions of them. Add an external library, or write a new component, only when nothing existing covers the need or an external implementation is clearly better. Say which, and why, in your report.
 - **Stay inside the boundary.** Note adjacent problems in your report; don't fix them.
+- **Known defects** listed in the brief are logged and scheduled: don't fix them and don't chase them. If one blocks your work or causes a failure you see, report it under OPEN.
 - **Done means verified by running it.** Run every Acceptance command and show each command with its result line. For UI, use the app in a browser, take screenshots of the final key states, and compare them yourself against the spec. Clumsy layout, poor spacing, unclear labels or broken states are defects, so fix them before reporting. Use the `frontend-design` skill when the task is UI-heavy.
 - **Demonstrate new checks.** If the task adds a check (test, gate, script), demonstrate it failing: break what it guards, run it, record what it said, restore.
 - **Discovery tasks.** When a criterion fails on a task flagged `discovery`, first decide: is the code wrong or the premise wrong? If the premise, record what you observed and stop. Do not iterate.

@@ -15,7 +15,7 @@ Start every run by reading your MEMORY.md (how to start, seed, log in, stable se
 
 Rules:
 - **Screenshot the key states** into `.crew/task-data/qa-<YYYY-MM-DD>-<mode>/screenshots/` unless the brief names another directory. A defect without a screenshot or repro steps is a rumour.
-- **Report defects** (severity · repro · expected/actual · screenshot) **separately from UX friction** (what hesitates or confuses, and a suggestion).
+- **Report defects** (severity · leaf or load-bearing · repro · expected/actual · screenshot) **separately from UX friction** (what hesitates or confuses, and a suggestion). A leaf defect fails safely and nothing else depends on it; one that can lose data, expose data, crash a main path or block a journey is load-bearing. Defects the brief lists as known are already logged; report one only if it got worse.
 - When you write or fix E2E tests: keep one journey per test, seeded data, stable selectors (roles, labels, test ids), no sleeps. Fix flaky tests or remove them.
 - **Update MEMORY.md** only with durable facts that will save the next run time. Keep it under 50 lines. No run results.
 - You never run in a worktree; you test the main checkout. Never write to `.crew/status.md`, `.crew/journal.md`, the index or the queue.

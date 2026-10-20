@@ -7,18 +7,19 @@ State for the `crew` skill: how the main Claude Code session (the **lead**) runs
 | Path | What it is | Git |
 |---|---|---|
 | `README.md` | This file | committed |
-| `bin/crew` | The crew script: writes the journal, renders the dashboard, tracks running agents and compactions, keeps the request queue, registers crew sessions for the hooks, prepares and tears down worktrees | committed |
+| `bin/crew` | The crew script: writes the journal, renders the dashboard, tracks running agents, compactions, agent time and sleep, keeps the request queue and the defect log, registers crew sessions for the hooks, keeps the computer awake while the crew works, prepares and tears down worktrees | committed |
 | `templates/task.md`, `templates/index.md` | Templates for task specs and task-set indexes | committed |
 | `worktree/setup.sh` | The project's development setup for a fresh checkout (install dependencies, create local files, build). Idempotent | committed |
 | `worktree/teardown.sh` | The project's cleanup for a checkout about to be removed. A no-op by default | committed |
 | `queue.md` | Founder requests and founder questions, with their status | committed |
+| `defects.md` | Defects found by reviews and QA and deferred by the lead, with their status | committed |
 | `handoff.md` | Where the last session stopped, written by `/crew handoff` | committed (with the next task) |
 | `plans/<slug>.md` | Plans written by the lead with the founder | committed |
 | `tasks/<slug>/index.md`, `NN-<slug>.md` | One task set: its index (statuses, Facts) and one spec per task | committed |
 | `journal.md` | Informational history of crew activity, newest at the bottom | ignored |
 | `status.md` | The status dashboard | ignored |
 | `task-data/<id>/` | Evidence per task: `screenshots/`, `reports/`, `logs/` | ignored |
-| `tmp/` | Scratch: the lock, hook state, the compaction log (`tmp/journal-state/compactions.tsv`), `worktree.json` | ignored |
+| `tmp/` | Scratch: the lock, hook state, the compaction log (`tmp/journal-state/compactions.tsv`), agent runs (`runs.tsv`) and sleeps (`sleep.tsv`) for the Timing section, `worktree.json` | ignored |
 
 ## The journal
 
@@ -29,11 +30,13 @@ State for the `crew` skill: how the main Claude Code session (the **lead**) runs
 - 14:30 · system · Context compacted · s2a-t03-builder (builder · sonnet · high) · 167k → 10k · 41 s · auto · ≈$0.11
 - 14:41 · ← builder · DONE · T03 autosave conflict banner
 - 14:42 · lead · Queued R2: Autosave every 10 s, not only on blur, slot: after T03
+- 14:50 · lead · Deferred D3 (low): Tooltip clipped at the right edge, where: toolbar
+- 10:34 · system · The computer slept 3 h 26 min between 07:08 and 10:34 (crew events stop while it sleeps)
 ```
 
 Actors: `lead` (the main session), `→ <type>` and `← <type>` (a subagent started and finished, logged by hooks), `↺ <name>` (a subagent resumed), `<type> →` (a subagent started another), and `system` (lines written by the hooks themselves). A ` [<branch>]` suffix on the actor means the line came from a linked worktree.
 
-A compaction line reads: who compacted (`lead (opus · high)`, or the subagent's name, type, model and effort), context before → after, how long the summarization took, the trigger (`auto` or `manual`), and the estimated cost of the summarization request. It is written at the compaction's own time by the next crew event, because Claude Code records the compaction after its hooks have run. Request lines (`Queued`, `Scheduled`, `Done`, `Dropped`) are written by `bin/crew request`.
+A compaction line reads: who compacted (`lead (opus · high)`, or the subagent's name, type, model and effort), context before → after, how long the summarization took, the trigger (`auto` or `manual`), and the estimated cost of the summarization request. It is written at the compaction's own time by the next crew event, because Claude Code records the compaction after its hooks have run. Request lines (`Queued`, `Scheduled`, `Done`, `Dropped`) are written by `bin/crew request`; defect lines (`Deferred`, `Promoted`, `Scheduled`, `Fixed`, `Dropped`) by `bin/crew defect`. A sleep line is written by the first crew event after the computer wakes.
 
 ## The dashboard
 
@@ -46,6 +49,20 @@ Lead state, in the italic line under the title:
 - `⏹ stopped by you since HH:MM`: you ran `/crew stop`; `/crew resume` continues.
 
 Task glyphs: ☐ pending · ◔ in progress · ◑ in review · ↻ rework · ☑ accepted · ⊘ blocked.
+
+The "Now" block also shows the deferred defects and **Keep awake**: `on (while Claude Code runs)` once `crew session start` has started `caffeinate` (macOS), tied to the Claude Code process so it ends with it; `off (the crew is stopped)` after `/crew stop`. On battery, closing the lid still sleeps the computer. Set `CREW_KEEP_AWAKE=0` in the environment to turn it off.
+
+### Defects
+
+Reviews and QA classify each finding as leaf or load-bearing. The lead fixes load-bearing and high-severity findings in the task, and may defer a leaf (low or medium severity, nothing pending builds on it, fails safely) to `defects.md` instead of another review round. Briefs list the known defects on a task's surfaces so agents neither fix nor chase them; a deferred defect that blocks or breaks other work is promoted and fixed at once, and the set's deferred defects are fixed before its final review. The section shows the counts (including how many deferrals were promoted, the measure of whether deferral is paying off) and the open entries.
+
+`bin/crew defect "<symptom>" --where "<surface>" [--from "T04 review"] [--severity low|medium] [--slot "<when>"]` adds the next `D<n>`; `bin/crew defect D<n> --status scheduled|fixed|dropped|deferred [--note "<why>"]` moves it along, and `--promote` marks a deferral that bit.
+
+### Timing
+
+Where the current set's time went, from the agent runs the hooks record. The first line splits the time since the set started (its index's first commit) into sleep, agents at work (the union of all agent runs) and the rest (the lead, and waiting for you); once every task is accepted it stops at the last agent run. Task time splits into build (a builder's first run), review and rework (a builder resumed, or a debugger), with the CHANGES verdicts that caused the rework. The critical path follows the tasks' `Depends on` lines weighted by agent time; **parallel headroom** (task time minus the critical path) is the most that running independent tasks side by side could have saved. The table gives the same split per task; agents not tied to a task (QA, scouts, the planner) sit in a set-level row.
+
+Sleep is measured on macOS: every crew event compares the wall clock with the awake-time clock (`sysctl kern.monotonicclock_usecs`), and a gap of 2 minutes or more is logged and left out of agent time.
 
 ### Compactions
 

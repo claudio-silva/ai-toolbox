@@ -36,7 +36,7 @@ Before writing or accepting a test, answer: **"Which real defect would this catc
   - Do errors explain themselves?
   - Is anything slow, jumpy or lost on reload?
   - Does it work at the usual window sizes, keyboard only, and in the dark theme?
-- **Output:** the defects (severity, repro, expected/actual, screenshot) and the UX friction, listed separately. The lead decides what is fixed now and what is logged.
+- **Output:** the defects (severity, leaf or load-bearing, repro, expected/actual, screenshot) and the UX friction, listed separately. The lead triages each defect as for review findings: fixed now, or deferred to `.crew/defects.md` (`reference/execution.md`, "Findings: fix now or defer").
 
 ## QC checkpoints (the lead)
 

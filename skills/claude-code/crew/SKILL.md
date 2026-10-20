@@ -17,7 +17,7 @@ This skill was invoked with: `$ARGUMENTS`. If that is `setup`, `handoff`, `resum
 ## Session start
 
 1. Read the project's **`CREW.md`** (path from the pointer line in `CLAUDE.md` or `AGENTS.md`; default `docs/CREW.md`). It overrides this skill.
-2. Run `.crew/bin/crew session start ${CLAUDE_SESSION_ID}` from the project root. It registers this session for the hooks and renders the dashboard.
+2. Run `.crew/bin/crew session start ${CLAUDE_SESSION_ID}` from the project root. It registers this session for the hooks, keeps the computer awake while Claude Code runs, and renders the dashboard.
 3. If `.crew/` does not exist, skip step 2, offer `/crew setup`, and work with the defaults until then (no journal, no queue, no dashboard).
 4. If `.crew/handoff.md` exists and the founder did not run `/crew resume`, mention it.
 
@@ -25,7 +25,7 @@ This skill was invoked with: `$ARGUMENTS`. If that is `setup`, `handoff`, `resum
 
 1. **Intake.** From an idea, a brainstorm, a PRD or a request, shape the work with the founder into an outcome (`reference/planning.md`, "From idea to plan"). Ask every foreseeable founder question up front (`reference/founder.md`).
 2. **Size.** One independently verifiable change: write the spec from `.crew/templates/task.md`, then run it as a direct task (`reference/execution.md`). More than one: plan it (`reference/planning.md`).
-3. **Run the task set** (`reference/execution.md`).
+3. **Run the task set** (`reference/execution.md`; re-read it when it is no longer in your context). Every task: row `in progress`, a fresh builder with the dispatch brief (known defects listed); on its report, `in review` and a fresh reviewer. ACCEPT: commit `T<NN> <slug>: <summary>`, row `accepted`, append Facts, drain the queue. CHANGES: `rework`, triage the findings, resume the builder with the fix-now ones, then a bounded re-review. A status changes only on evidence.
 4. **QC checkpoints** (`reference/testing.md`).
 5. **Milestone.** Send the milestone report (template in `reference/briefs.md`), ask the founder batch, then continue to the next milestone unless the founder says otherwise.
 
@@ -43,24 +43,6 @@ Apply this to every founder message while work is in flight, unprompted, before 
 
 Detail, classes and draining: `reference/requests.md`. A hook repeats rule 2 under every founder message while work is in flight, and after every compaction.
 
-## Roles at a glance
-
-| Role | Agent | Model · effort | Lifecycle | Use for |
-|---|---|---|---|---|
-| **Lead** | main session | opus · high | the session | Outcome, product, high-level plans, routing, QC, decisions, dialogue with the founder |
-| **Planner** | `planner` | opus · high | throwaway, one per planning job | Task decomposition against the code; re-plans |
-| **Scout** | `scout` | haiku · medium | throwaway | Reading, searching, inventories, web research, summarising files or logs. Read-only |
-| **Worker** | `worker` | haiku · high | throwaway | Mechanical, verifiable bulk changes (renames, moves, codemods, sweeps) |
-| **Builder** | `builder` | sonnet · medium (high for `judgement`) | throwaway per task; resumed for its own fixes | Features, UI, APIs, migrations, and the tests that matter for them |
-| **Debugger** | `debugger` | sonnet · high, escalating to opus · xhigh | throwaway, fresh brief | Failures that survived one honest fix attempt |
-| **Reviewer** | `reviewer` | opus · medium | throwaway, fresh, never the author | Independent verification of every landing; the final review of a task set |
-| **QA** | `qa` | sonnet · medium (haiku for scripted runs) | durable (`memory: project`) | Driving the real UI: critical journeys, exploratory sessions, screenshots, the E2E suite |
-| **Advisor** | `advisor` | fable · high | throwaway, read-only | Second opinion on vision, roadmap, milestone plans and costly-to-reverse decisions |
-
-**Advisor.** Only at these triggers, once per decision: writing or revising the vision or roadmap; planning a milestone; a costly-to-reverse decision (architecture, data model, public API, core UX model); before presenting options in a brainstorm. The brief gives the problem, constraints and options **without your preference** (`reference/briefs.md`). Record its view and your decision, with the reason, in the decisions log. Unavailable (Fable allowance used up): skip it, note it, never substitute another model.
-
-Never use effort `max` routinely: it can over-spawn and score below `xhigh`.
-
 ## Routing: who does it?
 
 Go down the list and take the first match:
@@ -75,22 +57,12 @@ Go down the list and take the first match:
    - Next, a **debugger** (sonnet, high).
    - After 3 failed hypotheses, a fix-A-breaks-B loop, or a cross-subsystem cause, a **debugger with `model: opus`, effort xhigh**, given a synthesized brief of what was tried.
    - If it is still stuck, question the task itself (is it mis-specified, or is its premise false?) and re-plan or ask the founder.
-7. **Every landing** goes to a **reviewer** with fresh context. Trivial docs or config changes may skip review; say so.
+7. **Every landing** goes to a **reviewer** with fresh context. Trivial docs or config changes may skip review; say so. A first review is complete and re-reviews check only the fixes; leaf findings are deferred to `.crew/defects.md` (`reference/execution.md`).
 8. **UI changes** need screenshots in the report. You look at the key ones (Quality).
 
 **Parallelism.** Run independent tasks in parallel only by the protocol in `reference/execution.md`.
 
 **Overrides.** The Agent tool's `model` and `effort` parameters override an agent's defaults per call (`effort` needs Claude Code v2.1.292 or later). Use them for the escalations above. Otherwise let the definitions decide.
-
-## Lifecycle
-
-- **Throwaway (the default).** A fresh agent gets a complete, self-contained brief and is discarded when done. Use this whenever the task can be fully specified. It is the cheapest and the least biased option.
-- **Resumed.** Follow up on an agent's own work with `SendMessage`. Sonnet and Opus agents may also take further tasks that build on files they already changed. **Each agent gets at most 5 follow-up messages**; after the 5th, retire it and give a fresh agent a summarized brief.
-- **Haiku agents** (scout, worker, QA on scripted runs) are resumed only to answer questions about work they already did, never to do new work. New work goes to a fresh agent.
-- The built-in Explore and Plan agents **cannot be resumed**, so use the custom definitions for anything you may want to continue.
-- **Durable across sessions.** `memory: project` in an agent definition gives it `.claude/agent-memory/<name>/MEMORY.md`, loaded on every start. Use it for roles whose know-how compounds, chiefly **QA**. Memory holds durable facts, not run results, and stays under 50 lines.
-- **Name every agent you may resume** with the Agent tool's `name`, so you can tell them apart and address them.
-- **Harness extras.** Use a harness's own agents (for example Paseo agents and workspaces) for workstreams that must outlive your session or run for hours in parallel. The same briefing, verification and reporting rules apply.
 
 ## Briefs in, evidence out
 
@@ -137,6 +109,52 @@ Quality over quantity. Full policy in `reference/testing.md`.
 
 "Works but looks clumsy" is a defect. Send it back for polish using the rubric in `reference/testing.md`.
 
+## Read when
+
+| Read | When |
+|---|---|
+| `commands/setup.md` | `/crew setup`, or `.crew/` is missing and the founder agrees to set up |
+| `commands/handoff.md` | `/crew handoff` |
+| `commands/resume.md` | `/crew resume` (after a handoff, or after `/crew stop`) |
+| `commands/stop.md` | `/crew stop` |
+| `reference/founder.md` | before asking the founder anything; when a task is blocked on a decision |
+| `reference/requests.md` | a request is hard to classify or route, or invalidates running work; at every task-acceptance boundary when the queue has due items |
+| `reference/planning.md` | the founder brainstorms, defines requirements, or plans a project, a roadmap or the next milestone; the work needs more than one independently verifiable change; choosing a framework |
+| `reference/execution.md` | starting, running or closing a task set or a direct task; before any parallel fan-out; when a review or QA returns findings; when a premise turns out false |
+| `reference/briefs.md` | writing a planning, review, final review, debug escalation, QA or advisor brief, or a milestone report |
+| `reference/testing.md` | at a QC checkpoint |
+| `reference/roles.md` | overriding a model or effort; refreshing the model facts |
+| `reference/context.md` | checking where a piece of state lives; cost questions; what survives a compaction |
+| `.crew/templates/task.md` (project) | writing a task spec for a direct task |
+
+## Roles at a glance
+
+| Role | Agent | Model · effort | Lifecycle | Use for |
+|---|---|---|---|---|
+| **Lead** | main session | opus · high | the session | Outcome, product, high-level plans, routing, QC, decisions, dialogue with the founder |
+| **Planner** | `planner` | opus · high | throwaway, one per planning job | Task decomposition against the code; re-plans |
+| **Scout** | `scout` | haiku · medium | throwaway | Reading, searching, inventories, web research, summarising files or logs. Read-only |
+| **Worker** | `worker` | haiku · high | throwaway | Mechanical, verifiable bulk changes (renames, moves, codemods, sweeps) |
+| **Builder** | `builder` | sonnet · medium (high for `judgement`) | throwaway per task; resumed for its own fixes | Features, UI, APIs, migrations, and the tests that matter for them |
+| **Debugger** | `debugger` | sonnet · high, escalating to opus · xhigh | throwaway, fresh brief | Failures that survived one honest fix attempt |
+| **Reviewer** | `reviewer` | opus · medium | throwaway, fresh, never the author | Independent verification of every landing; the final review of a task set |
+| **QA** | `qa` | sonnet · medium (haiku for scripted runs) | durable (`memory: project`) | Driving the real UI: critical journeys, exploratory sessions, screenshots, the E2E suite |
+| **Advisor** | `advisor` | fable · high | throwaway, read-only | Second opinion on vision, roadmap, milestone plans and costly-to-reverse decisions |
+
+**Advisor.** Only at these triggers, once per decision: writing or revising the vision or roadmap; planning a milestone; a costly-to-reverse decision (architecture, data model, public API, core UX model); before presenting options in a brainstorm. The brief gives the problem, constraints and options **without your preference** (`reference/briefs.md`). Record its view and your decision, with the reason, in the decisions log. Unavailable (Fable allowance used up): skip it, note it, never substitute another model.
+
+Never use effort `max` routinely: it can over-spawn and score below `xhigh`.
+
+## Lifecycle
+
+- **Throwaway (the default).** A fresh agent gets a complete, self-contained brief and is discarded when done. Use this whenever the task can be fully specified. It is the cheapest and the least biased option.
+- **Resumed.** Follow up on an agent's own work with `SendMessage`. Sonnet and Opus agents may also take further tasks that build on files they already changed. **Each agent gets at most 5 follow-up messages**; after the 5th, retire it and give a fresh agent a summarized brief.
+- **Haiku agents** (scout, worker, QA on scripted runs) are resumed only to answer questions about work they already did, never to do new work. New work goes to a fresh agent.
+- The built-in Explore and Plan agents **cannot be resumed**, so use the custom definitions for anything you may want to continue.
+- **Durable across sessions.** `memory: project` in an agent definition gives it `.claude/agent-memory/<name>/MEMORY.md`, loaded on every start. Use it for roles whose know-how compounds, chiefly **QA**. Memory holds durable facts, not run results, and stays under 50 lines.
+- **Name every agent you may resume** with the Agent tool's `name`, so you can tell them apart and address them.
+- **Harness extras.** Use a harness's own agents (for example Paseo agents and workspaces) for workstreams that must outlive your session or run for hours in parallel. The same briefing, verification and reporting rules apply.
+
 ## Your own context and cost
 
 Your context is the most expensive in the system: every turn re-reads all of it.
@@ -150,26 +168,4 @@ Your context is the most expensive in the system: every turn re-reads all of it.
 
 ## Journal and dashboard
 
-Hooks log every subagent start, resume, finish and compaction in `.crew/journal.md`; `crew request` logs the queue. Log your other actions with `.crew/bin/crew journal "<one line>"` (this exact relative form, from the project root: it is what the permission rule allows) when you: start or close a task set; ask a founder batch or receive answers; take a decision for the decisions log; merge; re-plan or roll back; hand off, stop or resume. One line, past tense, high level. `.crew/status.md` is the founder's dashboard, rendered from the indexes, the queue and the journal. You never read it or the journal; keep the index statuses and the queue accurate because they feed it.
-
-## Read when
-
-| Read | When |
-|---|---|
-| `commands/setup.md` | `/crew setup`, or `.crew/` is missing and the founder agrees to set up |
-| `commands/handoff.md` | `/crew handoff` |
-| `commands/resume.md` | `/crew resume` (after a handoff, or after `/crew stop`) |
-| `commands/stop.md` | `/crew stop` |
-| `reference/founder.md` | before asking the founder anything; when a task is blocked on a decision |
-| `reference/requests.md` | a request is hard to classify or route, or invalidates running work; at every task-acceptance boundary when the queue has due items |
-| `reference/planning.md` | the founder brainstorms, defines requirements, or plans a project, a roadmap or the next milestone; the work needs more than one independently verifiable change; choosing a framework |
-| `reference/execution.md` | starting, running or closing a task set or a direct task; before any parallel fan-out; when a premise turns out false |
-| `reference/briefs.md` | writing a planning, review, final review, debug escalation, QA or advisor brief, or a milestone report |
-| `reference/testing.md` | at a QC checkpoint |
-| `reference/roles.md` | overriding a model or effort; refreshing the model facts |
-| `reference/context.md` | checking where a piece of state lives; cost questions; what survives a compaction |
-| `.crew/templates/task.md` (project) | writing a task spec for a direct task |
-
-## Other frameworks
-
-This skill decides **who** does the work, **how cheaply** and **how it is verified**. A planning framework decides **what** and **when**. Selection and role mapping are in `reference/planning.md`.
+Hooks log every subagent start, resume, finish and compaction in `.crew/journal.md`; `crew request` logs the queue and `crew defect` the deferred defects. Log your other actions with `.crew/bin/crew journal "<one line>"` (this exact relative form, from the project root: it is what the permission rule allows) when you: start or close a task set; ask a founder batch or receive answers; take a decision for the decisions log; merge; re-plan or roll back; hand off, stop or resume. One line, past tense, high level. `.crew/status.md` is the founder's dashboard, rendered from the indexes, the queue and the journal. You never read it or the journal; keep the index statuses and the queue accurate because they feed it.

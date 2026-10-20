@@ -1,11 +1,28 @@
 #!/usr/bin/env bash
 # Fixture tests for .crew/bin/crew: compaction hooks, request queue, in-flight reminder,
-# index-addition check, stop state. Run from the skill directory: bash tests/hooks.sh
-# Needs jq and git. Writes only under a temporary directory.
+# index-addition check, defect log, timing and sleep, keep-awake, stop state.
+# Run from the skill directory: bash tests/hooks.sh
+# Needs jq and git. Writes only under a temporary directory; caffeinate and sysctl are stubs.
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd -P)
 T=$(mktemp -d "${TMPDIR:-/tmp}/crew-test.XXXXXX")
-trap 'rm -rf "$T"' EXIT
+cleanup() {
+  local pid
+  if [ -f "$T/project/.crew/tmp/journal-state/keep-awake" ]; then
+    read -r pid _ < "$T/project/.crew/tmp/journal-state/keep-awake"; kill "$pid" 2>/dev/null
+  fi
+  rm -rf "$T"
+}
+trap cleanup EXIT
+
+# ---- stubs: caffeinate sleeps; sysctl reports a fixed awake-time clock from a file ----
+mkdir -p "$T/stubs"
+printf '#!/bin/bash\n# caffeinate stub\nsleep 120\n' > "$T/stubs/caffeinate"
+printf '#!/bin/sh\ncat "%s" 2>/dev/null\n' "$T/sysctl.out" > "$T/stubs/sysctl"
+chmod +x "$T/stubs/caffeinate" "$T/stubs/sysctl"
+printf '24000000\n179643921385406 %s\n' $((24000000 * 5000)) > "$T/sysctl.out"   # awake: 5000 s
+export PATH="$T/stubs:$PATH"
+unset CREW_KEEP_AWAKE
 PASS=0; FAIL=0
 ok() { PASS=$((PASS + 1)); printf 'PASS  %s\n' "$1"; }
 ko() { FAIL=$((FAIL + 1)); printf 'FAIL  %s\n      %s\n' "$1" "${2:-}"; }
@@ -21,6 +38,7 @@ P="$T/project"
 mkdir -p "$P/.crew/bin" "$P/.crew/tasks/autosave" "$P/.claude/agents"
 cp "$HERE/scaffold/bin/crew" "$P/.crew/bin/crew"; chmod +x "$P/.crew/bin/crew"
 cp "$HERE/scaffold/queue.md" "$P/.crew/queue.md"
+cp "$HERE/scaffold/defects.md" "$P/.crew/defects.md"
 cp "$HERE/templates/agents/builder.md" "$P/.claude/agents/builder.md" 2>/dev/null || printf -- '---\nname: builder\nmodel: sonnet\neffort: high\n---\n' > "$P/.claude/agents/builder.md"
 git -C "$P" init -q
 cat > "$P/.crew/tasks/autosave/index.md" <<'IDX'
@@ -190,8 +208,91 @@ check "index addition: journaled" "system · T09 added to" "$(tail -n 1 "$P/.cre
 out=$(hook file-changed "{$J_BASE,\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$P/.crew/tasks/autosave/index.md\"}}")
 check_not "index addition: flagged once" "T09 added" "$out"
 
-# ---- 9. stop ----
+# ---- 9. defects ----
+out=$("$CREW" defect "Ribbon icon sits 2 px low" --where "ribbon (app/src/ribbon.tsx)" --from "T07 review")
+check "defect: entry printed" "- [D1] $(date '+%Y-%m-%d') · Ribbon icon sits 2 px low · where: ribbon (app/src/ribbon.tsx) · from: T07 review · severity: low · slot: end of set · status: deferred" "$out"
+check "defect: after the format comment" "-->
+
+- [D1]" "$(cat "$P/.crew/defects.md")"
+check "defect: journaled" "lead · Deferred D1 (low): Ribbon icon sits 2 px low, where: ribbon (app/src/ribbon.tsx)" "$(tail -n 1 "$P/.crew/journal.md")"
+out=$("$CREW" defect "Text lost on reload" --where editor --severity high 2>&1); rc=$?
+check "defect: high severity refused" "never deferred" "$out"
+[ "$rc" -ne 0 ] && ok "defect: high severity exits non-zero" || ko "defect: high severity exits 0"
+out=$("$CREW" defect "No where" 2>&1)
+check "defect: --where required" "--where is required" "$out"
+"$CREW" defect "Offline save shows a raw error code" --where "save state (app/src/save-state.tsx)" --severity medium --from "T08 review" >/dev/null
+check "dashboard: deferred defects counted" "**Deferred defects:** 2 (medium 1)" "$(cat "$P/.crew/status.md")"
+out=$("$CREW" defect D1 --status fixed --promote 2>&1)
+check "defect: --promote only with scheduled" "goes with --status scheduled" "$out"
+out=$("$CREW" defect D1 --promote --note "it broke T09's ribbon screenshot check")
+check "defect: promoted" "status: scheduled · promoted" "$out"
+check "defect: promotion journaled" "Promoted D1 (Ribbon icon sits 2 px low): it broke T09's ribbon screenshot check" "$(tail -n 1 "$P/.crew/journal.md")"
+"$CREW" defect D2 --status fixed --note "in T10" >/dev/null
+check "defect: fixed journaled" "Fixed D2 (Offline save shows a raw error code): in T10" "$(tail -n 1 "$P/.crew/journal.md")"
+st=$(cat "$P/.crew/status.md")
+check "dashboard: defects summary" "Deferred 0 · scheduled 1 · fixed 1 · dropped 0 · promoted 1 of 2 (deferrals that bit other work)" "$st"
+check "dashboard: open defects table" "| D1 | Ribbon icon sits 2 px low | ribbon (app/src/ribbon.tsx) | T07 review | low | end of set | scheduled (promoted) |" "$st"
+check_not "dashboard: fixed defects not listed" "| D2 |" "$st"
+
+# ---- 10. runs, sleep and the Timing section ----
+S="$P/.crew/tmp/journal-state"
+RUNID=c0ffee000001
+hook agent-start "{$J_BASE,\"tool_name\":\"Agent\",\"tool_input\":{\"subagent_type\":\"builder\",\"description\":\"T09 Guardar button\",\"name\":\"t09-builder\"}}" >/dev/null
+hook agent-id "{$J_BASE,\"agent_id\":\"$RUNID\",\"agent_type\":\"builder\"}" >/dev/null
+hook agent-stop "{$J_BASE,\"agent_id\":\"$RUNID\",\"agent_type\":\"builder\",\"last_assistant_message\":\"DONE\\nall green\"}" >/dev/null
+check "run: first run recorded" "	$RUNID	builder	9	first	DONE" "$(cat "$S/runs.tsv")"
+hook agent-id "{$J_BASE,\"agent_id\":\"$RUNID\",\"agent_type\":\"builder\"}" >/dev/null
+hook agent-stop "{$J_BASE,\"agent_id\":\"$RUNID\",\"agent_type\":\"builder\",\"last_assistant_message\":\"DONE\"}" >/dev/null
+check "run: a resume is its own run" "$RUNID	builder	9	resume	DONE" "$(cat "$S/runs.tsv")"
+# Sleep: the wall clock moved 3700 s further than the awake clock since the last sample.
+now=$(date +%s)
+printf '%s 5000\n' $((now - 3700)) > "$S/clock"
+"$CREW" status >/dev/null
+check "sleep: journaled" "system · The computer slept 1 h 1 min between" "$(cat "$P/.crew/journal.md")"
+check "sleep: logged" "$((now - 3700))	" "$(cat "$S/sleep.tsv")"
+"$CREW" status >/dev/null
+check "sleep: logged once" "1" "$(wc -l < "$S/sleep.tsv" | tr -d ' ')"
+# A known set: the index committed two hours ago; T09 runs beside T07, and one sleep falls
+# inside both of their builds.
+git -C "$P" add .crew/tasks/autosave/index.md >/dev/null
+GIT_COMMITTER_DATE="$(date -r $((now - 7200)) '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -d "@$((now - 7200))" '+%Y-%m-%dT%H:%M:%S')" \
+  git -C "$P" -c user.name=t -c user.email=t@t commit -q -m "Plan autosave"
+b=$((now - 7000))
+{
+  printf '%s\t%s\tb6\tbuilder\t6\tfirst\tDONE\n' $b $((b + 600))
+  printf '%s\t%s\tr6\treviewer\t6\tfirst\tCHANGES\n' $((b + 600)) $((b + 900))
+  printf '%s\t%s\tb6\tbuilder\t6\tresume\tDONE\n' $((b + 900)) $((b + 1200))
+  printf '%s\t%s\tr6\treviewer\t6\tresume\tACCEPT\n' $((b + 1200)) $((b + 1320))
+  printf '%s\t%s\tb7\tbuilder\t7\tfirst\tDONE\n' $((b + 1400)) $((b + 2600))
+  printf '%s\t%s\tr7\treviewer\t7\tfirst\tACCEPT\n' $((b + 2600)) $((b + 2900))
+  printf '%s\t%s\tb9\tbuilder\t9\tfirst\tDONE\n' $((b + 1400)) $((b + 2000))
+  printf '%s\t%s\tq1\tqa\t\tfirst\tDONE\n' $((b + 3000)) $((b + 3240))
+} > "$S/runs.tsv"
+printf '%s\t%s\t400\n' $((b + 1500)) $((b + 2000)) > "$S/sleep.tsv"
+"$CREW" status >/dev/null
+st=$(cat "$P/.crew/status.md")
+check "timing: section" "## Timing" "$st"
+check "timing: clock line" "on the clock · slept 6 min · agents at work 44 min · lead and waiting 1 h 9 min" "$st"
+check "timing: phase split" "Task time 43 min: build 26 min (61%) · review 12 min (27%) · rework 5 min (11%) · CHANGES verdicts 1" "$st"
+check "timing: critical path and headroom" "Critical path so far: T06 → T07 · 40 min · parallel headroom 3 min" "$st"
+check "timing: a sleep pauses every run it falls in" "| T09 | 3 min | — | — | — | 3 min | 6 min |" "$st"
+check "timing: T06 row" "| T06 | 10 min | 7 min | 5 min | 1 | 22 min | — |" "$st"
+check "timing: T07 row, sleep left out" "| T07 | 13 min | 5 min | — | — | 18 min | 6 min |" "$st"
+check "timing: set-level row" "| Set level (qa) | — | — | — | — | 4 min | — |" "$st"
+# A finished set: every task accepted and nothing running stops the clock at the last run's end.
+cp "$P/.crew/tasks/autosave/index.md" "$T/index.keep"
+sed -i.bak -E 's/^\| (T[0-9]+) \| [a-z ]+ \|/| \1 | accepted |/' "$P/.crew/tasks/autosave/index.md"
+"$CREW" status >/dev/null
+check "timing: a finished set stops the clock" "to the last agent run ($(date -r $((b + 3240)) '+%H:%M' 2>/dev/null || date -d "@$((b + 3240))" '+%H:%M')): 57 min on the clock · slept 6 min · agents at work 44 min · lead and waiting 6 min" "$(cat "$P/.crew/status.md")"
+cp "$T/index.keep" "$P/.crew/tasks/autosave/index.md"
+
+# ---- 11. keep awake, stop ----
+check "keep awake: on after session start" "**Keep awake:** on (" "$(cat "$P/.crew/status.md")"
+read -r kpid _ < "$S/keep-awake"
 "$CREW" session stop >/dev/null
+sleep 0.2
+kill -0 "$kpid" 2>/dev/null && ko "keep awake: stopped with the crew" "pid $kpid still running" || ok "keep awake: stopped with the crew"
+check "keep awake: off when stopped" "**Keep awake:** off (the crew is stopped)" "$(cat "$P/.crew/status.md")"
 check "session stop: dashboard state" "⏹ stopped by you since" "$(cat "$P/.crew/status.md")"
 hook lead-idle "{$J_BASE}" >/dev/null
 check "session stop: survives the lead's Stop event" "⏹ stopped by you since" "$(cat "$P/.crew/status.md")"
@@ -200,7 +301,7 @@ check "session stop: survives an unrelated founder prompt" "⏹ stopped by you s
 "$CREW" session start "$SID" >/dev/null
 check "session stop: cleared by session start (/crew resume)" "⏸ waiting for you" "$(cat "$P/.crew/status.md")"
 
-# ---- 10. hooks never fail ----
+# ---- 12. hooks never fail ----
 printf 'not json' | "$CREW" hook compact >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 0 ] && ok "garbage input: exit 0" || ko "garbage input: exit $rc"
 printf '{}' | "$CREW" hook pre-compact >/dev/null 2>&1; rc=$?

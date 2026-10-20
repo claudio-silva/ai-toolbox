@@ -1,6 +1,6 @@
 # Execution: running a task set
 
-Reader: the lead. Read when starting, running or closing a task set or a direct task; before any parallel fan-out; when a premise turns out false.
+Reader: the lead. Read when starting, running or closing a task set or a direct task; when a review returns findings; before any parallel fan-out; when a premise turns out false.
 
 A direct task is a task set of one: write `.crew/tasks/<task-slug>/index.md` with one row (from `.crew/templates/index.md`) and the spec beside it as `01-<slug>.md`. Every rule below applies to it unchanged.
 
@@ -29,17 +29,44 @@ You own `.crew/tasks/<plan-slug>/index.md`; builders never edit it.
    - `cross-cutting`: have a scout re-check the surfaces named in Read first and Design against the current tree; patch the spec where it no longer matches the tree, and record the correction in Facts.
    - `judgement`: the builder runs at effort high and the brief names the judgement.
    - `discovery`: the brief repeats the rule "on a failing criterion, first decide: code wrong or premise wrong? On a false premise, stop and report."
-3. **Dispatch** a fresh builder (a worker for mechanical work) with the dispatch format in `reference/briefs.md`. Set the row to `in progress`.
+3. **Dispatch** a fresh builder (a worker for mechanical work) with the dispatch format in `reference/briefs.md`, listing the known defects on the task's surfaces (`grep` `.crew/defects.md` for them). Set the row to `in progress`.
 4. **On the report:** set `in review`, brief a fresh reviewer. For UI, look at 1–3 key screenshots.
 5. **ACCEPT:**
    - Run `git status --short` and check nothing is unexplained.
-   - Stage by path the files the builder listed under CHANGED, plus the `.crew/` state files (index, queue, handoff, plan).
+   - Minor findings that came with the ACCEPT: triage them (Findings, below). Quick fixes go to the builder (resume it), and you check them by command or screenshot, with no re-review.
+   - Stage by path the files the builder listed under CHANGED, plus the `.crew/` state files (index, queue, defects, handoff, plan).
    - Commit: `T<NN> <slug>: <summary>`.
    - Set the row to `accepted`, append Facts.
    - Drain the queue (`reference/requests.md`): `.crew/bin/crew request R<n> --status scheduled` for each entry that becomes a task, `--status done` for one this task delivered.
    - Journal the acceptance when it closes a milestone or the set; the hooks already log each agent.
-6. **CHANGES:** set `rework`; resume the builder with the findings (counts toward its 5 follow-ups); then a fresh reviewer gets the previous findings with the new report.
+6. **CHANGES:** set `rework`; triage the findings (below). Resume the builder with the ones to fix now (counts toward its 5 follow-ups); defer the rest. Then the re-review (the reviewer resumed, or a fresh one given the previous findings) checks only those findings and the fix diff.
 7. **Failure:** routing rule 6 in `SKILL.md`.
+
+## Findings: fix now or defer
+
+The first review is the complete one; later rounds are bounded. Each finding carries a severity (high, medium, low) and the reviewer's call on whether it is a **leaf**: nothing pending builds on it, and it fails safely.
+
+**Triage every finding into one of three:**
+1. **Fix now, re-reviewed:** high severity, or not a leaf.
+2. **Fix now, no re-review:** a leaf the builder fixes in a few minutes and you can check by command or screenshot.
+3. **Defer:** any other leaf, typically one that would need investigation, another review round or another agent.
+
+**A finding is a leaf only when all of these hold:**
+- Severity low or medium.
+- No pending or running task's spec reads or changes its surface (its Read first and Design), and no critical journey runs through it.
+- It fails safely: no data loss or corruption, no security or privacy exposure, no crash or dead end on a main path, no change to a contract (API, schema, data format, an exported type), and nothing wrong in a test or its harness (a flaky or false check pollutes every later task's evidence).
+
+Typical leaves: misaligned or cropped elements, spacing, copy polish, a rare error path that shows a poor message but keeps the data. The same rare error path is not a leaf when it loses data.
+
+**Defer** with `.crew/bin/crew defect "<symptom>" --where "<surface or files>" --from "T<NN> review" --severity low|medium`. The task is accepted with its deferred defects; the defect log is their record. High severity cannot be deferred.
+
+**Re-review scope.** A re-review checks the findings sent back and the fix diff, nothing else. A new finding outside that diff is triaged like any other: high → fix now (it escaped the first review); otherwise defer it. Review rounds then converge instead of finding something new each time.
+
+**Known defects in briefs.** Before every dispatch, review and QA brief, `grep` `.crew/defects.md` for the surfaces the work touches and list the open matches under KNOWN DEFECTS: known and scheduled, so agents neither fix nor chase them, and a reviewer or QA does not report them again.
+
+**Promotion.** A deferred defect that blocks another task's check, or causes a failure in other work, is fixed now: fold it into the current task when small, otherwise run it as an urgent task, and mark it `crew defect D<n> --promote --note "<what it broke>"`. A failure whose cause is unclear goes to the debugger with the defect log in its brief. Promotions on the dashboard show how often deferral backfired; many of them mean the leaf test is being read too loosely.
+
+**Draining.** At set close, before the final review, one task fixes the set's deferred defects (`--status scheduled --note "as T<NN>"`, then `--status fixed` when accepted). No medium defect outlives its set. Low ones may move on (`--slot "<next set>"`) and are listed in the milestone report.
 
 ## Discovery failure
 
@@ -72,12 +99,13 @@ Only two things leave a worktree: the builder's commit and `.crew/task-data/`. E
 ## Closing a set
 
 1. All tasks `accepted`.
-2. **Final review** by a fresh reviewer (template in `reference/briefs.md`). CHANGES → add the follow-up tasks to the index and run them.
-3. **QC checkpoint** (`reference/testing.md`).
-4. **Merge locally:** `git merge --no-ff crew/<slug>` into the base branch, then delete the set branch. Never push; pushing is the founder's call unless `CREW.md` says otherwise.
-5. Add a line `Closed: <YYYY-MM-DD>` under the index title.
-6. Update the state file (status, milestone, decisions).
-7. `.crew/bin/crew journal "Closed task set <slug>; merged into <base>"`.
+2. **Deferred defects** of the set: fixed by one task, or (low ones only) moved on (Findings, above).
+3. **Final review** by a fresh reviewer (template in `reference/briefs.md`). CHANGES → add the follow-up tasks to the index and run them.
+4. **QC checkpoint** (`reference/testing.md`).
+5. **Merge locally:** `git merge --no-ff crew/<slug>` into the base branch, then delete the set branch. Never push; pushing is the founder's call unless `CREW.md` says otherwise.
+6. Add a line `Closed: <YYYY-MM-DD>` under the index title.
+7. Update the state file (status, milestone, decisions).
+8. `.crew/bin/crew journal "Closed task set <slug>; merged into <base>"`.
 
 ## Reorient
 

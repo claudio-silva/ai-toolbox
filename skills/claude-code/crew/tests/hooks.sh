@@ -135,6 +135,7 @@ SAMPLE3=$line
 # ---- 5. dashboard ----
 st=$(cat "$P/.crew/status.md")
 check "dashboard: compaction counts" "**Compactions:** lead 1 · subagents 2" "$st"
+check "dashboard: tasks flow top-down" "flowchart TD" "$st"
 check "dashboard: Compactions section" "## Compactions" "$st"
 check "dashboard: lead row with turns since" "| lead (opus · high) | 267k → 14k | 57 s | auto | 3 |" "$st"
 check "dashboard: summary line" "lead: 1 (at ~267k tokens) · subagents: 2 (at ~166k tokens" "$st"
@@ -145,10 +146,11 @@ out=$("$CREW" request "Autosave every 10 s, not only on blur" --affects "T07, T0
 check "request: entry printed" "- [R1] $(date '+%Y-%m-%d') · Autosave every 10 s, not only on blur · affects: T07, T08 · slot: after T07 · status: queued" "$out"
 check "request: journaled" "lead · Queued R1: Autosave every 10 s, not only on blur, slot: after T07" "$(tail -n 1 "$P/.crew/journal.md")"
 "$CREW" request "Rename Save to Guardar" --urgent >/dev/null
+"$CREW" request "Export to EPUB" --slot "milestone 3" >/dev/null
 check "request: urgent goes first" "- [R2] " "$(grep -m 1 -E '^- \[R' "$P/.crew/queue.md")"
 check "request: urgent slot" "slot: now (urgent) · status: queued" "$(grep -E '^- \[R2\]' "$P/.crew/queue.md")"
 out=$("$CREW" request "Dry run only" --dry-run)
-check "request: dry run prints R3" "- [R3] " "$out"
+check "request: dry run prints R4" "- [R4] " "$out"
 check_not "request: dry run writes nothing" "Dry run only" "$(cat "$P/.crew/queue.md")"
 out=$("$CREW" request R1 --status scheduled --note "as T09")
 check "request: transition rewrites the line" "status: scheduled" "$out"
@@ -159,7 +161,14 @@ out=$("$CREW" request R9 --status done 2>&1); rc=$?
 check "request: unknown id fails" "no entry R9" "$out"
 check "queue keeps the questions section" "## Questions for the founder" "$(cat "$P/.crew/queue.md")"
 rq=$(grep -c -E '^- \[R[0-9]+\]' "$P/.crew/queue.md")
-check "queue has two entries" "2" "$rq"
+check "queue has three entries" "3" "$rq"
+"$CREW" request "Dark mode" --slot "milestone 3" >/dev/null
+check "dashboard: column entries chained" "R3 ~~~ R4" "$(cat "$P/.crew/status.md")"
+"$CREW" status >/dev/null
+check "dashboard: request queues side by side" "flowchart LR
+  subgraph Queued
+    direction TB" "$(cat "$P/.crew/status.md")"
+check "dashboard: queues in order" "  Queued ~~~ Scheduled ~~~ Done" "$(cat "$P/.crew/status.md")"
 
 # ---- 7. in-flight reminder ----
 out=$(hook lead-busy "{$J_BASE,\"prompt\":\"hi\"}")

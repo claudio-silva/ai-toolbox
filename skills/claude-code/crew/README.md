@@ -132,7 +132,7 @@ The lead has no context-size threshold: it rolls over only when you run `/crew h
 ## Tasks
 
 ```mermaid
-flowchart LR
+flowchart TD
   T01["☑ T01 Draft schema and save endpoint"]:::accepted
   T02["◔ T02 Conflict banner when 'another tab' save…"]:::progress
   T03["⊘ T03 Offline queue for failed saves"]:::blocked

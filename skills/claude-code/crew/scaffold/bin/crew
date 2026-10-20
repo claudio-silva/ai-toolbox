@@ -1140,7 +1140,8 @@ EOF
       printf '*Diagram omitted: more than 60 tasks.*\n\n'
     else
       local dep nid did label
-      printf '```mermaid\nflowchart LR\n'
+      # Top-down: horizontal space is scarce in previews; long chains read better as a column.
+      printf '```mermaid\nflowchart TD\n'
       for ((i = 0; i < nt; i++)); do
         status_look "${T_KEY[i]}"
         mm_text "${T_TITLE[i]}"; label=$REPLY
@@ -1211,23 +1212,28 @@ EOF
     case ${REQ_STATUS[i]} in queued*|scheduled*|done*) nnodes=$((nnodes + 1)) ;; esac
   done
   if [ "$nnodes" -gt 0 ] && [ "$nnodes" -le 60 ]; then
-    local rt rs empty
+    local rt rs prev
+    # Three columns side by side, in queue order: a left-to-right graph of three subgraphs
+    # linked by invisible edges (~~~), each laid out top-down with its entries chained by
+    # invisible edges too (nodes without edges share one rank and would spread sideways).
     printf '```mermaid\nflowchart LR\n'
     for group in queued scheduled 'done'; do
       case $group in queued) gname=Queued ;; scheduled) gname=Scheduled ;; *) gname=Done ;; esac
-      printf '  subgraph %s\n' "$gname"
-      empty=1
+      printf '  subgraph %s\n    direction TB\n' "$gname"
+      prev=""
       for ((i = 0; i < nreq; i++)); do
         case ${REQ_STATUS[i]} in "$group"*) ;; *) continue ;; esac
-        empty=0
         mm_text "${REQ_TEXT[i]}"; rt=$REPLY
         mm_text "${REQ_SLOT[i]:-no slot}"; rs=$REPLY
         mm_id "${REQ_ID[i]}"
         printf '    %s["%s · %s · %s"]\n' "$REPLY" "${REQ_ID[i]}" "$rt" "$rs"
+        [ -z "$prev" ] || printf '    %s ~~~ %s\n' "$prev" "$REPLY"
+        prev=$REPLY
       done
-      [ "$empty" = 0 ] || printf '    %s_none["none"]\n' "$gname"
+      [ -n "$prev" ] || printf '    %s_none["none"]\n' "$gname"
       printf '  end\n'
     done
+    printf '  Queued ~~~ Scheduled ~~~ Done\n'
     printf '```\n\n'
   elif [ "$nnodes" -gt 60 ]; then
     printf '*Diagram omitted: more than 60 requests.*\n\n'

@@ -1,7 +1,7 @@
 ---
 name: crew
 description: "Multi-agent operating model for building software with subagents, able to run unattended for long stretches: which role, model and effort handles each kind of work, a standard planning and execution method, how to brief and verify subagents, debugging escalation, quality-over-quantity testing and QC, a request queue and batched founder questions, an advisor for second opinions, a development journal and live dashboard with compaction tracking, git branch and worktree discipline, and how the lead keeps its own context and cost down. Use at the start of any session where you lead or orchestrate a project; when the founder brainstorms an idea, defines requirements (a PRD, a spec), or plans a project, its roadmap, or its next milestone or stage; every time you are about to delegate (to pick role, model and effort and write the brief); when a fix attempt fails; at QC checkpoints; when the founder sends a message while work is in flight; before asking the founder anything; and for `/crew setup`, `/crew handoff`, `/crew resume` and `/crew stop`. Works with any planning method."
-argument-hint: "[setup | handoff | resume | stop]"
+argument-hint: "[setup | handoff | resume | stop | <a request>]"
 ---
 
 # crew
@@ -12,7 +12,7 @@ You are the **lead** of a small crew of agents. The goal is always the same: **e
 
 ## Commands
 
-This skill was invoked with: `$ARGUMENTS`. If that is `setup`, `handoff`, `resume` or `stop`, read `${CLAUDE_SKILL_DIR}/commands/<that name>.md` now and follow it. Skill files live in `${CLAUDE_SKILL_DIR}`; every `reference/…` path below is relative to it.
+This skill was invoked with: `$ARGUMENTS`. If that is `setup`, `handoff`, `resume` or `stop`, read `${CLAUDE_SKILL_DIR}/commands/<that name>.md` now and follow it. Anything else is the founder's message: do the session start below, then act on it as their request. Skill files live in `${CLAUDE_SKILL_DIR}`; every `reference/…` path below is relative to it.
 
 ## Session start
 

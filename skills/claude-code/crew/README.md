@@ -93,6 +93,7 @@ This page is the overview. Crew's whole playbook is open to read: the guides bel
 
 | Command | What it does |
 | --- | --- |
+| `/crew` or `/crew <request>` | Makes this session the crew's lead; a request after it is your first message. |
 | `/crew setup` | Prepares the project. Run it once, and again after each skill update. |
 | `/crew stop` | Stops every running agent safely and records where things stand. |
 | `/crew resume` | Continues after a stop, or in a fresh session after a handoff. |
@@ -201,7 +202,7 @@ A live page for following the crew, in a browser tab, a Paseo side panel or on y
 | **Journal** | Everything the crew did, newest first, searchable |
 | **Sets** | Every set of tasks, including those in other worktrees |
 
-**Talking to the lead.** What you type in the Agents tab reaches the lead's session as your message, and the lead answers it there, so you can steer the crew from your phone. The lead's state in the header opens that conversation, and the arrow beside it stops, resumes or sets up the crew. In Paseo, the message arrives as if you typed it in Paseo. Elsewhere, it goes through Claude Code's messaging between sessions (Claude Code 2.1.224 or later), and the lead sees it as a message from another session that opens with *From the founder, via the Crew dashboard*. A rule that setup adds to your `CLAUDE.md` tells the lead it comes from you. If the session skips permission prompts, Claude Code holds messages from other sessions unless they say they run in the same permission mode, so the dashboard says so. In a project set up with an earlier Crew, run `/crew setup` once to enable messaging.
+**Talking to the lead.** What you type in the Agents tab reaches the lead's session as your message, and the lead answers it there, so you can steer the crew from your phone. The lead's state, under the project's name, opens that conversation, and the buttons beside it stop, resume or set up the crew. In Paseo, the message arrives as if you typed it in Paseo. Elsewhere, it goes through Claude Code's messaging between sessions (Claude Code 2.1.224 or later), and the lead sees it as a message from another session that opens with *From the founder, via the Crew dashboard*. A rule that setup adds to your `CLAUDE.md` tells the lead it comes from you. If the session skips permission prompts, Claude Code holds messages from other sessions unless they say they run in the same permission mode, so the dashboard says so. In a project set up with an earlier Crew, run `/crew setup` once to enable messaging.
 
 **On your phone or tablet.** The address the lead gives you works from any device on the same Wi-Fi or Tailscale network, and the QR code button shows it as a code to scan. The address includes a private key for the project, so other people on the network can't read it. If the crew runs on a remote server, open the dashboard through an SSH tunnel, `ssh -N -L <port>:127.0.0.1:<port> <server>`, then `http://127.0.0.1:<port>/`, with no key.
 

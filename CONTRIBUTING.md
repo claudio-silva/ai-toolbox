@@ -15,11 +15,13 @@ Folders are organization only. `platforms` in `aitools.json` is what aitools enf
 - **`SKILL.md`** (required). Its frontmatter needs `name` and `description`:
   - `name` is the directory name: lowercase letters, digits, and hyphens.
   - `description` says what the skill does and when to use it. Quote the value if it contains `: `. Strict YAML parsers, `npx skills` among them, skip the skill otherwise.
-- **`README.md`** (required, not installed). Write it for people browsing the repository, with these sections:
+- **`README.md`** (required, not installed). Write it for the people who will use the tool. This outline is a guideline, not a rule; adapt it to what the tool needs:
   - a summary;
-  - `## What's inside`;
-  - `## Install`, with the `npx aitools` and `npx skills` commands and the platforms;
-  - `## Contents`, a table of the files.
+  - what's inside;
+  - how to install it, with the `npx aitools` and `npx skills` commands and the platforms;
+  - the contents, a table of the files.
+
+  A larger tool can write its README for its users and move the internals (the contents table, how to build and test, the rules for editing it) to a `DEVELOPING.md`, left out of the install with `exclude` in `aitools.json`.
 - **Supporting files** — scripts, references, and assets the skill uses. They are all installed unless excluded. In `SKILL.md`, refer to them relative to the skill's directory.
 - **`aitools.json`** (optional) — only what defaults can't express:
 
@@ -54,3 +56,7 @@ Folders are organization only. `platforms` in `aitools.json` is what aitools enf
    ```
 
    Treat any aitools warning about the skill as an error.
+
+## License
+
+Contributions are accepted under the [Apache License 2.0](LICENSE), the license of this repository. A tool may also carry its own `LICENSE`, so it can stand on its own.

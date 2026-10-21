@@ -1,213 +1,202 @@
-# crew
+# Crew
 
-A multi-agent operating model for building software with Claude Code subagents, built to run unattended for long stretches. The main session acts as the **lead** of a small crew and the founder's steward: it plans with the founder, decomposes the work into verifiable tasks, decides which role, model and effort handles each one, briefs subagents, verifies what they land, queues the founder's mid-session requests, batches questions for the founder, and keeps its own context and cost down. A journal and a live web dashboard show the founder what the crew is doing. The goal is ergonomic software with few defects, at a sensible cost in money and time.
+**A software team inside Claude Code.** Crew makes your Claude Code session the lead of a small crew of specialist agents. You bring the idea. The lead plans it with you, then the crew builds it one task at a time: each task is built, reviewed independently, tested and committed. It keeps going for hours while you're away, and a live dashboard on your desktop or your phone shows what it's doing.
 
-## How you work with the crew
+[Why Crew](#why-crew) · [Getting started](#getting-started) · [How it works](#how-it-works) · [The dashboard](#the-dashboard) · [Commands](#commands) · [Configuration](#configuration)
 
-You are the **founder**: you own the product's direction and taste. The main Claude Code session is the **lead**: it acts on your behalf, runs the crew, and decides everything not reserved for you, so it can keep working while you are away. You talk only to the lead; the subagents never ask you anything.
+## Why Crew
 
-### Your part
+- **It keeps working while you're away.** The lead makes every decision that isn't yours to make. For the ones that are, it takes a sensible default, writes it down, and saves the question for one batch at the next milestone. Nothing waits on you, and on a Mac the computer stays awake while the crew works.
+- **Every task is checked before it's committed.** Each task's acceptance checks are written before any code. A fresh reviewer, who never saw the builder's reasoning, reruns every check and reads the diff. Reports need evidence, such as test output and screenshots.
+- **The right model for every job.** Opus where judgement matters: leading, planning, reviewing. Sonnet builds at half Opus's price. Haiku reads, searches and makes bulk edits for a fraction of that. Fable gives a second, independent opinion before decisions that are costly to reverse.
+- **You stay in charge without watching over it.** Talk to the lead at any time. It acknowledges each request in three lines, queues it, and applies it between tasks, never in the middle of one. It interrupts you only for what it must not decide alone: a production deploy, a force-push, a destructive data change, spending over budget, a security risk.
+- **You see everything as it happens.** Progress, running agents, a timeline of every agent run, the critical path, open defects, what each context compaction cost, and the full journal. On your phone too: scan a QR code.
+- **A clean git history.** One branch per set of tasks and one commit per accepted task. Independent tasks are built in parallel, each in its own git worktree, then merged locally. Nothing is pushed without your approval.
+- **Built for long sessions.** State lives in files and the rules survive context compaction, so the lead keeps working through it. When you want a fresh session, `/crew handoff` and `/crew resume` pick up exactly where it stopped.
+- **Works with your planning method.** Crew comes with its own (small tasks, each with checks that prove it's done), and you can use any other.
 
-| You | When |
+## Getting started
+
+**1. Check the requirements.**
+
+| Requirement | Why |
 | --- | --- |
-| Run `/crew setup`, then restart the session | Once per project, and again after each skill update |
-| Bring an idea, a PRD, a spec, or "what's next?" | Whenever you want; the lead shapes it into a plan with you |
-| Confirm the plan's outcome and scope | Before any building starts |
-| Answer the question batch (dialogs with the lead's default as the first option) | At each milestone, or when the crew runs out of unblocked work |
-| Read the milestone report; say "continue" or redirect | At each milestone |
-| Send requests or corrections | Any time: the lead acknowledges in 3 lines and queues them |
-| Approve deploys, destructive data operations, pushes and spending above your budget posture | When the lead interrupts you for them |
-| Keep the dashboard open (the URL the lead gives you when it starts it, or that `.crew/bin/crew status` prints; a Paseo side panel works well); skim `.crew/journal.md` | Whenever you like; nothing waits on it |
-| Run `/crew stop`, then `/crew resume` | When you want everything stopped safely, and later continued in the same session |
-| Run `/crew handoff`, `/clear`, `/crew resume` | When you want a fresh session |
+| Claude Code v2.1.292 or later | Lets the lead raise an agent's effort for harder work. Older versions work, without that. |
+| git | Branches, commits and parallel builds. Without it, the crew still works, with none of those. |
+| jq | The crew's hooks need it. `/crew setup` installs it if it's missing. |
+| Node.js 20 or later | Only for the dashboard. Everything else works without it. |
+
+**2. Install the skill.**
+
+```sh
+aitools install @gh/claudio-silva/ai-toolbox crew
+# or
+npx skills add claudio-silva/ai-toolbox --skill crew -a claude-code
+```
+
+**3. Set up your project.** In Claude Code, at the root of your project, run:
+
+```
+/crew setup
+```
+
+Setup lists every change it's about to make, then adds the crew's agents, hooks and files to the project ([what it adds](#what-setup-adds-to-your-project)). It asks only what it can't learn from the repository. Then **restart Claude Code** so the hooks and agents load. Run setup again after each skill update.
+
+**4. Pick the lead's model.** Run the main session on **Opus 5.5 at High effort** (`/model`). The lead's work is judgement: plans, routing, reviews, decisions. It hands the bulk work to cheaper models.
+
+**5. Tell the lead what you want.** Plain words are enough:
+
+> I want readers to export a book to EPUB. Let's plan it.
+
+> Here's the PRD for v2: …
+
+> What's next?
+
+The lead works out the goal and the scope with you, asks its questions up front, and gets the crew going once you confirm the plan.
+
+**6. Open the dashboard.** The lead's first reply starts with *Open the dashboard at http://…* (or run `.crew/bin/crew status`). Keep it in a browser tab or a Paseo side panel. To follow along on your phone, click the QR code button in its header and scan it.
+
+**7. Walk away.** When you come back, you'll find a milestone report and a short batch of questions. Say "continue", or change course.
+
+## How it works
 
 ### From idea to milestone
 
 ```mermaid
 flowchart TD
-  A["You: idea, PRD, spec or 'what's next?'"] --> B["Lead shapes it with you:<br/>outcome, options, scope<br/>(advisor gives a second opinion)"]
-  B --> C{"You confirm the plan's<br/>outcome and scope"}
-  C -- "change" --> B
-  C -- "yes" --> D["Planner reads the plan and the code,<br/>writes the task set: index + one spec per task"]
-  D --> E{"Gaps only you<br/>can close?"}
-  E -- "yes" --> F["Lead asks you one batch"] --> D
-  E -- "no" --> G["Task loop, unattended:<br/>build, review, commit, one task at a time"]
-  G --> H["Final review + QA checkpoint,<br/>merge the set branch locally"]
-  H --> I["Milestone report<br/>+ the questions batched on the way"]
-  I --> J{"You: continue?"}
-  J -- "yes" --> B2["Next stage or milestone"] --> D
-  J -- "redirect" --> B
+  idea(["Your idea, a PRD,<br/>or 'what's next?'"]):::you
+  shape["You and the lead shape it:<br/>goal, options, scope"]
+  ok{"You approve the plan"}:::you
+  plan["The planner splits it<br/>into small tasks, each with<br/>checks that prove it's done"]
+  build[["The crew builds the tasks,<br/>one by one, unattended"]]
+  close["Final review and QA,<br/>then a local merge"]
+  report(["Milestone report<br/>and your batched questions"]):::you
+  idea --> shape --> ok
+  ok -- "change it" --> shape
+  ok -- "go" --> plan --> build --> close --> report
+  report -- "continue" --> plan
+  report -- "change course" --> shape
+  classDef you fill:#fef3c7,stroke:#d97706,color:#1f2937
 ```
 
-### One task, inside the loop
+The yellow steps are yours. Before decisions that are costly to reverse, such as the roadmap, a milestone plan or the architecture, the lead asks the advisor for a second opinion.
+
+### The life of a task
 
 ```mermaid
-sequenceDiagram
-  participant L as Lead
-  participant B as Builder (fresh)
-  participant R as Reviewer (fresh)
-  participant D as Journal + dashboard
-  L->>B: Dispatch: task spec, Facts, how to verify
-  D-->>D: hook logs the start
-  B->>B: Implement, run every acceptance check, screenshots
-  B->>L: DONE + evidence, files changed, Facts
-  L->>R: Review brief: spec, changes, flags
-  R->>R: Re-run every check, read the diff
-  alt ACCEPT
-    R->>L: ACCEPT
-    L->>L: Commit the task, update the index, drain your queued requests
-  else CHANGES
-    R->>L: CHANGES + ranked findings
-    L->>B: Resume with the findings (at most 5 follow-ups)
-  end
-  D-->>D: updated live on every event
+flowchart TD
+  spec["Task spec<br/>with its acceptance checks"] --> build
+  build["Builder, fresh:<br/>implements the task,<br/>runs every check,<br/>takes screenshots"]
+  build -- "done, with evidence" --> review
+  build -. "a failure it can't fix<br/>in one honest attempt" .-> debug["Debugger,<br/>then a stronger one"]
+  debug -. "fixed" .-> review
+  debug -. "still stuck" .-> replan(["The lead re-plans the task,<br/>or asks you"])
+  review{"Reviewer, fresh:<br/>reruns the checks,<br/>reads the diff"}
+  review -- "changes needed" --> fix["The same builder<br/>fixes the findings"]
+  fix --> review
+  review -- "accepted" --> commit["The lead commits the task,<br/>then takes up your<br/>queued requests"]
+  commit --> next(["Next task"])
 ```
 
-A failure the builder cannot fix in one attempt goes to a debugger, then to a stronger debugger, then back to the plan. Independent tasks may run in parallel, each builder in its own git worktree.
+- **Small issues don't block a task.** A minor finding that no other work depends on is logged as a defect and fixed before the set closes, so it doesn't cost another review round. One that gets in the way of other work is fixed at once.
+- **Independent tasks can run in parallel,** each builder in its own git worktree.
+- **Every step appears on the dashboard as it happens.**
 
-### Your messages and the lead's questions
+### Meet the crew
 
-```mermaid
-flowchart LR
-  M["Your message<br/>while work runs"] --> K{"Lead classifies"}
-  K -- "clarification" --> K1["Answered now"]
-  K -- "operational: stop, pause, do X first" --> K2["Takes effect now"]
-  K -- "request" --> K3["Assessed, acknowledged in 3 lines,<br/>queued with a slot"]
-  K3 --> K4["Drained when the current task<br/>is accepted, never mid-task"]
-  Q["Something the lead<br/>is unsure about"] --> T{"Tier"}
-  T -- "irreversible, security, budget,<br/>missing credential, nothing left to do" --> T1["Interrupts you now"]
-  T -- "yours to decide, not blocking" --> T2["Default taken, recorded,<br/>asked in the next batch"]
-  T -- "everything else" --> T3["Lead decides and records why"]
-```
+| Role | Model · effort | What it does |
+| --- | --- | --- |
+| **Lead** | Opus · high | Your main session. Plans with you, assigns the work, checks the results, makes the decisions, talks to you. |
+| **Planner** | Opus · high | Splits a plan into tasks with acceptance checks, after reading the real code. |
+| **Builder** | Sonnet · medium (high for judgement calls) | Implements a task and the tests that matter for it. |
+| **Reviewer** | Opus · medium | Checks every task independently, and never reviews its own work. |
+| **Debugger** | Sonnet · high, escalating to Opus · xhigh | Takes over a failure that survived one fix attempt. |
+| **QA** | Sonnet · medium (Haiku for scripted runs) | Drives the real UI: key user journeys, exploratory sessions, screenshots. |
+| **Scout** | Haiku · medium | Reads, searches and summarises, so the lead's own context stays small. |
+| **Worker** | Haiku · high | Mechanical bulk changes: renames, moves, sweeps. |
+| **Advisor** | Fable · high | A second opinion on the vision, the roadmap and costly-to-reverse decisions. |
 
-If a request makes running work pointless, the lead stops those agents at once. Before reverting work already accepted, it asks you first.
+### Talking to the crew while it works
+
+| You say… | The lead… |
+| --- | --- |
+| A question, such as "why did you choose X?" | Answers right away. |
+| "Stop", "do X first" | Does it now. |
+| Anything that changes what gets built, such as "make the button blue" or "also add export" | Replies in three lines: what it understood, what it affects and costs, and when it will happen. Then it queues the request and applies it once the current task is accepted. |
+
+If a request makes running work pointless, the lead stops those agents at once. Before undoing work already accepted, it asks you.
+
+| When the lead is unsure about… | It… |
+| --- | --- |
+| Something irreversible (a deploy, a force-push, destroying data), a security risk, spending over budget, a missing credential, or no work left | Asks you right away. |
+| Something that's yours to decide, but not blocking | Takes a sensible default, writes it down, and asks you in the next batch. |
+| Anything else | Decides, and records why. |
 
 ### Sessions
 
 ```mermaid
 flowchart LR
-  S["/crew setup<br/>(once)"] --> R["Restart"] --> W["Work: the lead keeps going<br/>through compactions"]
-  W --> H["/crew handoff<br/>(waits for running agents)"] --> C["/clear"] --> U["/crew resume"] --> W
-  W --> P["/crew stop<br/>(stops agents safely)"] --> U
+  setup["/crew setup<br/>once per project"] --> restart["Restart<br/>Claude Code"] --> work(("The crew<br/>at work"))
+  work -- "pause" --> stop["/crew stop<br/>stops every agent safely"] --> resume["/crew resume"]
+  work -- "fresh session" --> handoff["/crew handoff,<br/>then /clear"] --> resume
+  resume --> work
 ```
 
-The lead has no context-size threshold: it rolls over only when you run `/crew handoff`. State lives in files (`docs/CREW.md`, the state file, `.crew/`), so a fresh session picks up exactly where the last one stopped. Compactions are expected: a `CLAUDE.md` block, the skill's size and the compaction hooks keep the crew's rules in context, each compaction is journaled with its cost, and the dashboard's Compactions tab shows what each one saved, so you can tune the per-model compaction windows from real data (`reference/context.md`).
+The lead never runs out of room. When its context fills up, Claude Code compacts it and the crew's rules come back with it, so it simply carries on. A fresh session is your call, not a necessity.
 
-## What's inside
+## The dashboard
 
-- **Roles** — lead, planner, scout, worker, builder, debugger, reviewer, QA and advisor, each with a default model and effort and a lifecycle (throwaway, resumed with at most 5 follow-ups, durable)
-- **Routing** — who does what, with numeric triggers, and the debugging escalation ladder when a fix attempt fails
-- **The crew standard method** — a plan that answers 8 questions, decomposed by the planner into a task set: an index plus one spec per task, each acceptance criterion with one method and a `Detects:` clause; flags (`judgement`, `cross-cutting`, `discovery`) that change how a task is briefed and reviewed; evidence-only statuses, demonstrated failures, a final outcome review and a reorient procedure. Any other planning framework can replace it
-- **The founder** — three tiers (interrupt now, batch, decide and record), questions batched with defaults taken so work never stalls, and milestone reports
-- **The request queue** — every founder message during work is classified, assessed, routed and acknowledged in 3 lines; requests are drained only at task-acceptance boundaries
-- **Advisor** — a read-only second opinion from Fable at fixed triggers (vision, roadmap, milestone plans, costly-to-reverse decisions)
-- **Briefs and reports** — templates for task dispatch, review, final review, debug escalation, QA, planning and advisor briefs, plus the milestone report
-- **Quality** — tests that matter over test counts, QC checkpoints, and a screenshot review rubric
-- **Deferred defects** — reviewers and QA mark each finding leaf or load-bearing; a first review is complete and re-reviews check only the fixes; leaf findings go to `.crew/defects.md` instead of another review round, briefs list them so agents don't chase them, one that bites other work is promoted, and the set's defects are fixed before its final review
-- **Git and worktree discipline** — a branch per task set, a commit per accepted task, a local merge at set close, and parallel builders in worktrees with a lifecycle that prepares each worktree (`.crew/worktree/setup.sh`) and keeps its task data when it is removed
-- **Journal and dashboard** — hooks log every subagent start, resume, finish and compaction to `.crew/journal.md`; a local web dashboard (Node, started with the session) shows the task set and its dependency graph, live agents, a Gantt chart of agent runs, timing (sleep, agent time, build / review / rework per task, the critical path and the parallel headroom), requests and questions, deferred defects, compactions (sizes, estimated overhead and savings) and the journal, and updates itself the moment a crew file changes
-- **Keep awake** — `crew session start` holds a `caffeinate` assertion tied to the Claude Code process (macOS), so an unattended run doesn't stall on idle sleep; sleep that happens anyway is journaled and left out of the timing
-- **Compaction strategy** — state in files, a `CLAUDE.md` block and a `SKILL.md` that carries every rule the lead must never lose (it is re-attached after a compaction), `PreCompact` instructions per role, a conditional post-compaction reminder, and a one-line request reminder while work is in flight; subagents never receive the lead's instructions
-- **Task data** — screenshots, reports over the cap and logs per task in `.crew/task-data/<id>/`
-- **Commands** — `/crew setup` (scaffolds `.crew/`, merges hooks and settings, installs the agents, writes `docs/CREW.md`), `/crew handoff` and `/crew resume` for session rollover, `/crew stop` to stop every subagent safely (and `/crew resume` to continue)
-- **Progressive disclosure** — `SKILL.md` holds the rules the lead applies unprompted; everything needed only at a trigger loads then, from `reference/` and `commands/` (see [Editing this skill](#editing-this-skill))
-
-### The dashboard
-
-A local web page, served by `.crew/dashboard/server.mjs` (Node.js, no dependencies at run time) at a port that stays the same for a project, so it can live in a browser tab or a Paseo side panel. The session-start hook starts it, and the lead opens its first reply with `Open the dashboard at <url>`; when one was already running for the project (started by another session, by you, or by a Paseo panel) it says nothing. `.crew/bin/crew status` prints its URL, and `.crew/bin/crew dashboard start|stop|restart|url` manages it (`start` exits 3, silently, when one is already running). It is built for a narrow panel and follows the system's light or dark theme. The header shows the project's own icon when the repository has a square one (a favicon, an app icon or a logo); a click switches to crew's mark and back, remembered per project.
-
-It also opens on a phone or a tablet on the same Wi-Fi or Tailscale network. The printed URL uses the computer's local address and the project's key (`http://192.168.1.20:47242/?key=…`), which the page then keeps in a cookie. The QR code button in the header shows that address as a code for the phone's camera. On the computer itself, and through an SSH tunnel to a remote one (`ssh -N -L 47242:127.0.0.1:47242 server`), `http://127.0.0.1:<port>/` needs no key.
-
-It reads the same files the crew writes (the task-set indexes and specs, `queue.md`, `defects.md`, `handoff.md`, the journal, the hook state and git) and pushes a fresh state to the page over server-sent events whenever one of them changes: no polling, and no reload, so the scroll position, the open tab and any open panel stay put. Running durations tick every second in the page (`02:53:22`, colons blinking) and freeze when the run ends (`1h 19m`); sleep and other closed intervals never tick. Each new journal line shows as a notice at the top for 10 seconds; notices stack, and a click opens the Journal.
+A live page for following the crew, in a browser tab, a Paseo side panel or on your phone. It updates the moment something changes, with no reload, and running clocks tick in real time. It follows your system's light or dark theme, or the one you pick, and its header shows your project's icon when it has one.
 
 | Tab | What it shows |
 | --- | --- |
-| Overview | The current set's progress and stage, the task being worked on, the lead's state (working, waiting for you, stopped, Claude Code closed), live agents, counts of open questions, requests, defects and compactions, the crew's time at work, keep-awake and why it is on or off, the last handoff and recent activity |
-| Tasks | The dependency graph with the critical path highlighted, and every task with its status, flags, phase time and agents; a task opens its spec, runs and screenshots |
-| Timing | Crew at work, split into agents at work and the lead alone, then idle and asleep; a zoomable Gantt chart of every agent run (a bar opens its task); build, review and rework per task; the critical path and the parallel headroom; time by role |
-| Requests | Your open questions first, then queued, scheduled, done and dropped requests |
-| Defects | Deferred, scheduled, fixed and promoted counts, the open and closed entries with when they are due, and a legend for the labels |
-| Compactions | Lead and subagent compactions: context before and after, and estimated overhead, savings and net per compaction |
-| Journal | The journal, newest first, filtered by lead, agents or system, with search |
-| Sets | Every task set found, including those in worktrees; each opens its index |
+| **Overview** | The current set's progress, the task in hand, the lead's state, running agents, questions waiting for you, requests, defects, the crew's time at work, and recent activity |
+| **Tasks** | The dependency graph with the critical path highlighted; each task opens its spec, its agent runs and its screenshots |
+| **Timing** | Where the time went (agents, the lead alone, idle, asleep), a zoomable timeline of every agent run, build, review and rework per task, and time by role |
+| **Requests** | Your open questions first, then your requests: queued, scheduled, done and dropped |
+| **Defects** | Minor issues logged for later, when each is due, and a legend for every label |
+| **Compactions** | Every context compaction: size before and after, and its estimated cost and savings |
+| **Journal** | Everything the crew did, newest first, searchable |
+| **Sets** | Every set of tasks, including those in other worktrees |
 
-Set `CREW_DASHBOARD=0` in the environment to keep it from starting, or `CREW_DASHBOARD_LAN=0` to keep it on `127.0.0.1`, for this computer only. Without Node.js 20 or later, everything else works and the dashboard is skipped.
+**On your phone or tablet.** The address the lead gives you works from any device on the same Wi-Fi or Tailscale network, and the QR code button shows it as a code to scan. The address includes a private key for the project, so other people on the network can't read it. If the crew runs on a remote server, open the dashboard through an SSH tunnel, `ssh -N -L <port>:127.0.0.1:<port> <server>`, then `http://127.0.0.1:<port>/`, with no key.
 
-### The `.crew/` layout in a project
+## Commands
 
-```
-docs/CREW.md                 committed (project facts and deviations from the defaults)
-.claude/agents/*.md          committed
-.claude/settings.json        committed (hooks, permission rule, worktree.baseRef)
-.crew/README.md              committed
-.crew/bin/crew               committed (the crew script)
-.crew/templates/*.md         committed (task spec and index templates)
-.crew/worktree/*.sh          committed (the project's worktree setup and teardown)
-.crew/queue.md               committed (founder requests and questions)
-.crew/defects.md             committed (deferred defects)
-.crew/handoff.md             committed (written by /crew handoff)
-.crew/plans/<slug>.md        committed
-.crew/tasks/<slug>/          committed (index.md and NN-<slug>.md specs)
-.crew/journal.md             gitignored (history, for the founder)
-.crew/dashboard/             gitignored (the dashboard server and page, installed by /crew setup)
-.crew/task-data/<id>/        gitignored (screenshots/, reports/, logs/ per task)
-.crew/tmp/                   gitignored (lock, hook state, the dashboard's port, key and log)
-.claude/worktrees/           gitignored
-```
-
-## Requirements
-
-- **`jq`** — a hard requirement for the hooks. `/crew setup` installs it if it is missing and aborts if it cannot.
-- **Claude Code v2.1.292 or later** for per-call effort overrides on the Agent tool. Older versions work, with a warning, without them.
-- **git** — expected. Without it, set `Git: none` in `CREW.md`: no branches, no commits, no parallel worktrees.
-- **Node.js 20 or later** — for the dashboard only. Without it the crew runs as usual and the dashboard is skipped.
-
-## Install
-
-```sh
-aitools install @gh/claudio-silva/ai-toolbox crew
-npx skills add claudio-silva/ai-toolbox --skill crew -a claude-code   # alternative
-```
-
-Claude Code only (`aitools.json` sets `platforms`): the roles rely on Claude Code subagents, the Agent tool's `model`/`effort` overrides, and Claude model names. See the [repository README](../../../README.md).
-
-## Contents
-
-| Path | Purpose |
+| Command | What it does |
 | --- | --- |
-| `SKILL.md` | The lead's core: commands, session start, the work loop, roles, routing, lifecycle, briefs, quality, context, journal, and the Read-when table |
-| `commands/setup.md` | `/crew setup`: prerequisites, scaffold, `.gitignore`, settings and hooks, agents, `CREW.md`, verification |
-| `commands/handoff.md` | `/crew handoff`: wait for running work, write `.crew/handoff.md` |
-| `commands/resume.md` | `/crew resume`: read the handoff, check HEAD, continue (after a handoff or after `/crew stop`) |
-| `commands/stop.md` | `/crew stop`: stop every running subagent safely, record where things are, report |
-| `reference/founder.md` | The three tiers, batched questions and default-taking, the question timeout, milestones |
-| `reference/requests.md` | Handling founder messages during work: classify, assess, route, acknowledge; the queue; draining |
-| `reference/planning.md` | From idea, brainstorm or PRD to a confirmed plan; framework selection; what a crew plan must answer |
-| `reference/execution.md` | Running a task set: branches and commits, the serial loop, parallel worktrees, closing, reorient |
-| `reference/briefs.md` | Brief and report templates |
-| `reference/roles.md` | Role cards, the model facts snapshot behind each choice, and how to refresh it |
-| `reference/testing.md` | Testing policy, QC checkpoints, screenshot review rubric |
-| `reference/context.md` | The lead's context and cost economics, where state lives, what survives a compaction and how to read the compaction numbers |
-| `scaffold/README.md` | Copied to `<project>/.crew/README.md`: what each file is, the journal, the dashboard |
-| `scaffold/queue.md` | The empty request and question queue |
-| `scaffold/defects.md` | The empty defect log |
-| `scaffold/bin/crew` | The crew script: journal, hook handlers, the state the dashboard reads, session registration, request queue, defect log, keep awake, starting the dashboard, worktree setup and teardown |
-| `scaffold/dashboard/` | Copied to `<project>/.crew/dashboard/`: the dashboard server (`server.mjs`), the model that turns crew files into its state (`model.mjs`), and the built page (`app/`) |
-| `scaffold/templates/task.md` | Task spec template |
-| `scaffold/templates/index.md` | Task-set index template |
-| `scaffold/worktree/setup.sh` | The project's worktree setup (setup fills the marked section) |
-| `scaffold/worktree/teardown.sh` | The project's worktree teardown (a no-op by default) |
-| `templates/agents/*.md` | Subagent definitions copied into `<project>/.claude/agents/` by setup (advisor, builder, debugger, planner, qa, reviewer, scout, worker) |
-| `templates/CREW.md` | Template for the per-project rules file (deviations only) |
-| `templates/settings.json` | Hooks, the permission rule and `worktree.baseRef`, merged into `<project>/.claude/settings.json` |
-| `dashboard/` | Source of the dashboard page (Vite, React, Tailwind, shadcn, ECharts). `npm install`, then `npm run build` writes `scaffold/dashboard/app/`; `npm run dev` serves it with hot reload against a running dashboard. Not installed |
-| `tests/hooks.sh` | Fixture tests for the crew script and the dashboard model (hooks, compactions, requests, defects, timing, reminders); not installed |
-| `tests/dashboard.test.mjs` | Tests for the dashboard parsers and the live server (`node --test tests/`); not installed |
-| `aitools.json` | Install metadata: Claude Code only; leaves `tests/` and `dashboard/` out |
+| `/crew setup` | Prepares the project. Run it once, and again after each skill update. |
+| `/crew stop` | Stops every running agent safely and records where things stand. |
+| `/crew resume` | Continues after a stop, or in a fresh session after a handoff. |
+| `/crew handoff` | Waits for running work and writes a handoff note. Then `/clear` and `/crew resume`. |
+| `.crew/bin/crew status` | Prints the dashboard's address, starting the dashboard if needed. |
 
-## Editing this skill
+## Configuration
 
-- **`SKILL.md` carries every rule the lead must apply unprompted:** on every turn, at every step of the work loop, or on an event it would otherwise miss (a founder message, a returned report, a compaction). Claude Code re-attaches an invoked skill's body after a compaction, so these rules survive whether or not a hook fires or a reminder to re-read is followed. Never move such a rule out of `SKILL.md` to make it shorter.
-- **Everything else loads at its trigger (progressive disclosure):** procedures, templates, checklists, rationale, examples and edge cases go in `reference/` or `commands/`, each with a Read-when row saying when to read it. `SKILL.md` keeps the rule and points to the detail; it never copies the detail in.
-- **5,000 tokens is an absolute limit for the body of `SKILL.md`.** Claude Code keeps only the first 5,000 tokens of a skill when it re-attaches it after a compaction, so anything past that is lost exactly when it matters. `tests/skill-size.sh` checks it with a conservative estimate (characters ÷ 3.5). Within the limit, judge each line by when the lead needs it, not by how short the file could be.
-- **Sections in order of importance, in a logical sequence:** session start, the work loop, founder requests, routing, briefs, quality, then the Read-when table, and last the reference sections (roles, lifecycle, context, journal). A new rule goes where its importance puts it, not at the end.
+- **`docs/CREW.md`** holds your project's own rules: facts about the project and anything that differs from the crew's defaults. It overrides the skill. Setup writes it with you.
+- **The question timeout.** Setup offers to give the lead's questions 10 minutes. If you don't answer in time, the lead takes its default and moves on.
+- **Compaction windows** are yours to tune. The Compactions tab shows what each compaction cost and saved.
+- **Environment variables:**
+  - `CREW_DASHBOARD=0`: don't start the dashboard.
+  - `CREW_DASHBOARD_LAN=0`: keep the dashboard on this computer only.
+  - `CREW_KEEP_AWAKE=0`: let the computer sleep.
+
+### What setup adds to your project
+
+| | What | Where |
+| --- | --- | --- |
+| **Committed** (shared with your team) | Your project's crew rules | `docs/CREW.md` |
+| | A short pointer block | `CLAUDE.md` |
+| | The crew's agents | `.claude/agents/` |
+| | Hooks and a permission rule, merged into your settings | `.claude/settings.json` |
+| | Plans, sets of tasks, the request queue, the defect log, the handoff note, the crew script and its templates | `.crew/` |
+| **Not committed** | The journal, the dashboard, screenshots and logs per task, scratch state | `.crew/` (gitignored) |
+
+## Learn more
+
+- How the lead plans and runs work: [planning](reference/planning.md), [execution](reference/execution.md), [testing and QC](reference/testing.md)
+- How it deals with you: [questions and milestones](reference/founder.md), [requests while work runs](reference/requests.md)
+- [The roles](reference/roles.md), with the model facts behind each choice, and [context and cost](reference/context.md)
+- Working on the skill itself: [DEVELOPING.md](DEVELOPING.md)
+
+Crew is for Claude Code only: it relies on Claude Code's subagents and its per-agent model and effort settings. See the [repository README](../../../README.md) for the other tools in this collection.

@@ -15,6 +15,19 @@
 - **Built for long sessions.** State lives in files and the rules survive context compaction, so the lead keeps working through it. Contexts stay small by design, and the dashboard shows whether your compaction settings fit your project ([Memory and context](#memory-and-context)). When you want a fresh session, `/crew handoff` and `/crew resume` pick up exactly where it stopped.
 - **Works with your planning method.** Crew comes with its own (small tasks, each with checks that prove it's done), and you can use any other.
 
+---
+
+> **Crew is for Claude Code only!** It has been carefully tuned to Claude's models and to the way Claude Code works:
+>
+> - **Claude's models.** Each role's model and effort was chosen from the benchmarks and prices of the Claude models. The same prices decide when an agent is reused and when a fresh one takes over: Haiku's price, for one, rises fivefold past 100K tokens of context.
+> - **Claude Code's machinery.** Crew runs on Claude Code's subagents, with a model and an effort for each, and on its hooks, which track every agent and every compaction. It also relies on agents that can be resumed, git worktrees for parallel builders, and prompt caching.
+> - **Claude Code's limits.** The skill is written around them. For example, its core rules fit in the 5,000 tokens of a skill that Claude Code keeps through a compaction.
+>
+> Making Crew work with another provider wouldn't be a matter of settings. It would mean redoing that tuning for other models, other prices and other agent tools.
+>
+> See the [repository README](../../../README.md) for other skills in this collection that target other providers (e.g. Codex).
+
+
 ## Getting started
 
 **1. Check the requirements.**
@@ -75,8 +88,6 @@ This page is the overview. Crew's whole playbook is open to read: the guides bel
 | **In your project** | [The `.crew/` folder](scaffold/README.md) | Every file setup adds, the journal, the dashboard in depth, task data and worktrees (also in your project, at `.crew/README.md`) |
 | | Commands: [setup](commands/setup.md) · [stop](commands/stop.md) · [resume](commands/resume.md) · [handoff](commands/handoff.md) | What each command does, step by step |
 | **Working on Crew** | [DEVELOPING.md](DEVELOPING.md) | Building the dashboard, running the tests, and the rules for editing the skill |
-
-Crew is for Claude Code only: it relies on Claude Code's subagents and its per-agent model and effort settings. See the [repository README](../../../README.md) for the other tools in this collection.
 
 ## Commands
 

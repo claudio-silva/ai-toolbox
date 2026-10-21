@@ -101,3 +101,9 @@ Folders are organization only. The supported platforms come from each skill's `a
 cd mcp/imagen
 make build      # mcp/imagen/bin/imagen
 ```
+
+## Author and license
+
+Created and maintained by **Cláudio Silva** ([@claudio-silva](https://github.com/claudio-silva)).
+
+Copyright © 2026 Cláudio Silva. Licensed under the [Apache License, Version 2.0](LICENSE). Some tools carry their own copy of the license, so they can be used on their own.

@@ -74,7 +74,7 @@ Not measured: the re-reads an agent performs after a compaction, and the detail 
 - **Subagents compacting mid-task** (builders at ~170k with hours to go): the task is too big for one context, or the window is too small. Prefer smaller tasks, then a larger window for that agent.
 - **The lead compacting rarely at a very large context**: each turn is paying for context it no longer uses; a smaller window saves on every turn and the summary loses little when state is in files.
 
-Windows are set per model with `/autocompact <size>` (saved under `modelSettings.<model>.autoCompactWindow`, Claude Code v2.1.288 or later), for every model with `autoCompactWindow` in a settings file, for one subagent with `autoCompactWindow: <tokens>` in its definition's frontmatter (v2.1.296 or later), or for one launch with `--autocompact`. A 1M window is a ceiling, not a target.
+Windows are set per model with `modelSettings.<model>.autoCompactWindow` in a settings file (Claude Code v2.1.288 or later); a model's window applies to the lead and to every subagent on that model. Recommended starting points: Haiku 100K, Sonnet 200K, Opus 300K, Fable 400K. `/autocompact <size>` sets and saves only the current model's window, the lead's. A top-level `autoCompactWindow` sets every model without its own; `autoCompactWindow: <tokens>` in an agent definition's frontmatter only lowers the window for that role (v2.1.296 or later); `--autocompact` sets one launch; `CLAUDE_CODE_AUTO_COMPACT_WINDOW` overrides them all. A 1M window is a ceiling, not a target.
 
 ## Handoff and stop
 

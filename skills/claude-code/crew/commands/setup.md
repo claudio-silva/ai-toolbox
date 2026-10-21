@@ -107,7 +107,7 @@ On re-runs, replace everything between the markers. If the file has the older si
 
 - Read the question timeout: `jq -r '.askUserQuestionTimeout // empty' ~/.claude/settings.json`.
 - If it is absent or shorter than `10m` (`60s`, `5m`), ask the founder in one `AskUserQuestion` whether to set it to `10m` ("Set to 10m (Recommended)" first). A founder who is present but busy needs time to notice and think; a founder who is away loses nothing, because the lead takes recorded defaults. Never offer a shorter value. When accepted, write it with `jq` to a temp file, move it into place, and validate with `jq .`. When declined, leave it as it is: unset means questions stay open until answered; a shorter value stays the founder's choice.
-- Recommend, without changing anything: the main session on `opus` at effort `high`; auto memory on (needed by `memory:` agents). Compaction windows are the founder's choice; the dashboard's Compactions tab gives the data to tune them (`/autocompact <size>` per model, or `autoCompactWindow` in an agent definition).
+- Recommend, without changing anything: the main session on `opus` at effort `high`; auto memory on (needed by `memory:` agents). Compaction windows are the founder's choice: recommend starting from Haiku 100K, Sonnet 200K, Opus 300K and Fable 400K in `modelSettings.<model>.autoCompactWindow` (`~/.claude/settings.json`), tuned from the dashboard's Compactions tab (`reference/context.md`, "Measuring compactions").
 
 ## 10. Journal
 

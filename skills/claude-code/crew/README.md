@@ -2,7 +2,7 @@
 
 **A software team inside Claude Code.** Crew makes your Claude Code session the lead of a small crew of specialist agents. You bring the idea. The lead plans it with you, then the crew builds it one task at a time: each task is built, reviewed independently, tested and committed. It keeps going for hours while you're away, and a live dashboard on your desktop or your phone shows what it's doing.
 
-[Why Crew](#why-crew) · [Getting started](#getting-started) · [How it works](#how-it-works) · [The dashboard](#the-dashboard) · [Commands](#commands) · [Configuration](#configuration)
+[Why Crew](#why-crew) · [Getting started](#getting-started) · [Commands](#commands) · [How it works](#how-it-works) · [The dashboard](#the-dashboard) · [Memory and context](#memory-and-context) · [Configuration](#configuration)
 
 ## Why Crew
 
@@ -12,7 +12,7 @@
 - **You stay in charge without watching over it.** Talk to the lead at any time. It acknowledges each request in three lines, queues it, and applies it between tasks, never in the middle of one. It interrupts you only for what it must not decide alone: a production deploy, a force-push, a destructive data change, spending over budget, a security risk.
 - **You see everything as it happens.** Progress, running agents, a timeline of every agent run, the critical path, open defects, what each context compaction cost, and the full journal. On your phone too: scan a QR code.
 - **A clean git history.** One branch per set of tasks and one commit per accepted task. Independent tasks are built in parallel, each in its own git worktree, then merged locally. Nothing is pushed without your approval.
-- **Built for long sessions.** State lives in files and the rules survive context compaction, so the lead keeps working through it. When you want a fresh session, `/crew handoff` and `/crew resume` pick up exactly where it stopped.
+- **Built for long sessions.** State lives in files and the rules survive context compaction, so the lead keeps working through it. Contexts stay small by design, and the dashboard shows whether your compaction settings fit your project ([Memory and context](#memory-and-context)). When you want a fresh session, `/crew handoff` and `/crew resume` pick up exactly where it stopped.
 - **Works with your planning method.** Crew comes with its own (small tasks, each with checks that prove it's done), and you can use any other.
 
 ## Getting started
@@ -57,6 +57,16 @@ The lead works out the goal and the scope with you, asks its questions up front,
 **6. Open the dashboard.** The lead's first reply starts with *Open the dashboard at http://…* (or run `.crew/bin/crew status`). Keep it in a browser tab or a Paseo side panel. To follow along on your phone, click the QR code button in its header and scan it.
 
 **7. Walk away.** When you come back, you'll find a milestone report and a short batch of questions. Say "continue", or change course.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `/crew setup` | Prepares the project. Run it once, and again after each skill update. |
+| `/crew stop` | Stops every running agent safely and records where things stand. |
+| `/crew resume` | Continues after a stop, or in a fresh session after a handoff. |
+| `/crew handoff` | Waits for running work and writes a handoff note. Then `/clear` and `/crew resume`. |
+| `.crew/bin/crew status` | Prints the dashboard's address, starting the dashboard if needed. |
 
 ## How it works
 
@@ -142,11 +152,11 @@ flowchart LR
   resume --> work
 ```
 
-The lead never runs out of room. When its context fills up, Claude Code compacts it and the crew's rules come back with it, so it simply carries on. A fresh session is your call, not a necessity.
+The lead never runs out of room. When its context fills up, Claude Code compacts it and the crew's rules come back with it (via hooks), so it simply carries on. A fresh session is your call, not a necessity. See [Memory and context](#memory-and-context).
 
 ## The dashboard
 
-A live page for following the crew, in a browser tab, a Paseo side panel or on your phone. It updates the moment something changes, with no reload, and running clocks tick in real time. It follows your system's light or dark theme, or the one you pick, and its header shows your project's icon when it has one.
+A live page for following the crew, in a browser tab, a Paseo side panel or on your phone. It updates the moment something changes, with no reload, and running clocks tick in real time. It has light and dark theme support, and its header shows your project's name and icon, when it has one; click it to switch to Crew's own icon.
 
 | Tab | What it shows |
 | --- | --- |
@@ -155,27 +165,84 @@ A live page for following the crew, in a browser tab, a Paseo side panel or on y
 | **Timing** | Where the time went (agents, the lead alone, idle, asleep), a zoomable timeline of every agent run, build, review and rework per task, and time by role |
 | **Requests** | Your open questions first, then your requests: queued, scheduled, done and dropped |
 | **Defects** | Minor issues logged for later, when each is due, and a legend for every label |
-| **Compactions** | Every context compaction: size before and after, and its estimated cost and savings |
+| **Compactions** | Every context compaction: size before and after, and its estimated cost and savings, to [tune the windows](#tuning-compaction-for-your-project) |
 | **Journal** | Everything the crew did, newest first, searchable |
 | **Sets** | Every set of tasks, including those in other worktrees |
 
 **On your phone or tablet.** The address the lead gives you works from any device on the same Wi-Fi or Tailscale network, and the QR code button shows it as a code to scan. The address includes a private key for the project, so other people on the network can't read it. If the crew runs on a remote server, open the dashboard through an SSH tunnel, `ssh -N -L <port>:127.0.0.1:<port> <server>`, then `http://127.0.0.1:<port>/`, with no key.
 
-## Commands
+## Memory and context
 
-| Command | What it does |
+Every agent works inside its context: everything it has read and said so far, sent again with each request. A larger context costs more on every request, and when it fills up, Claude Code compacts it into a summary that loses some detail. Crew is built so that neither hurts: what matters is kept in files, contexts stay small, and you tune compaction to your project with real numbers.
+
+### What the crew remembers
+
+The crew's long-term memory is in files, not in any agent's head: the plans, the tasks and their status, your requests and answers, the decisions taken, the defect log and the handoff note, all committed to git. Any agent can forget safely, the lead included, after a compaction or in a new session, and pick up exactly where things stood.
+
+The crew's rules stay with the lead through every compaction: Claude Code attaches the skill again, and Crew's hooks tell the summary what to keep (your queued requests, the task statuses, the running agents, the next step).
+
+QA also remembers across sessions: what it learns about driving your app is kept, and grows with every run.
+
+### Small contexts by design
+
+Compaction is the last resort. Crew keeps contexts from growing in the first place:
+
+- **The lead reads conclusions, not files.** Scouts do the reading and searching and report back a summary. Reports have a word limit, and long output goes to files.
+- **A fresh agent for each job.** Each task gets a new builder with a complete brief, and then a new reviewer. A fresh agent starts small, costs the least, and carries no bias from earlier work.
+- **The same agent, when that's cheaper.** The builder that wrote a task fixes its own review findings, because it already knows the code. A Sonnet or Opus agent can also take a follow-up task on files it just changed. After 5 follow-ups, it's retired and a fresh agent takes over from a summary.
+- **Haiku agents always start fresh.** Haiku's price rises fivefold past 100K tokens of context, so scouts and workers get new work only as new agents.
+
+### Tuning compaction for your project
+
+When a context reaches its model's *compaction window*, Claude Code summarises it and carries on. Each compaction costs one summarising request and makes every later request cheaper. A window that's too small compacts too often: the summaries cost more than they save, and agents lose detail and read files again. A window that's too large makes every request pay for context that's no longer needed. The right size depends on your project: the size of its code, of its tasks, and of what the agents must read.
+
+**The Compactions tab tells you whether your windows fit.** It lists every compaction, the lead's and the agents', with the context size before and after, what the summary cost, what it has saved since, and the net.
+
+| On the Compactions tab | It means | So |
+| --- | --- | --- |
+| Most of a role's rows have a net at or below zero, or few turns after | That model compacts too early for the work it does | Raise that model's window |
+| Builders compact in the middle of a task | The tasks are too big for one context, or the window is too small | Ask for smaller tasks first, then raise the Sonnet window |
+| The lead compacts rarely, at a very large size | Every request pays for context the lead no longer uses | Lower the lead's window: with state in files, the summary loses little |
+
+**Setting the windows.** A window belongs to a model, and it applies to the lead and to every crew agent running on that model. Set them in a settings file, which the CLI and the desktop app both read (Claude Code v2.1.288 or later). These are the recommended starting points, to adjust from what the Compactions tab shows:
+
+| Model | Crew roles | Window |
+| --- | --- | --- |
+| Haiku | Scout, worker, scripted QA | 100K |
+| Sonnet | Builder, debugger, QA | 200K |
+| Opus | Lead, planner, reviewer, hard debugging | 300K |
+| Fable | Advisor | 400K |
+
+```json
+{
+  "modelSettings": {
+    "claude-haiku-5-5":  { "autoCompactWindow": 100000 },
+    "claude-sonnet-5-5": { "autoCompactWindow": 200000 },
+    "claude-opus-5-5":   { "autoCompactWindow": 300000 },
+    "claude-fable-5-1":  { "autoCompactWindow": 400000 }
+  }
+}
+```
+
+| File | Applies to |
 | --- | --- |
-| `/crew setup` | Prepares the project. Run it once, and again after each skill update. |
-| `/crew stop` | Stops every running agent safely and records where things stand. |
-| `/crew resume` | Continues after a stop, or in a fresh session after a handoff. |
-| `/crew handoff` | Waits for running work and writes a handoff note. Then `/clear` and `/crew resume`. |
-| `.crew/bin/crew status` | Prints the dashboard's address, starting the dashboard if needed. |
+| `~/.claude/settings.json` | All your projects |
+| `.claude/settings.json` in the project | Everyone working on the project (committed) |
+| `.claude/settings.local.json` in the project | You, in this project only; it wins over the other two |
+
+Values are in tokens, from 100,000 to 1,000,000, and never above the model's own context size. Restart Claude Code after editing a settings file.
+
+Other ways to set them:
+
+- **`/autocompact 300k`** in a CLI session sets the window of the model you're on, the lead's, and saves it in your user settings. Crew agents on the same model (with an Opus lead, the planner and the reviewer) use it too. The other models still need the settings file.
+- **`autoCompactWindow: 150000`** in the frontmatter of one role's definition, such as `.claude/agents/builder.md`, gives that role a smaller window than its model's (v2.1.296 or later). It can only lower the window. Write the full number: `150k` doesn't work there.
+- **`claude --autocompact 500k`** sets a window for one launch, without saving it. The `CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable overrides all of the above, per-role windows included.
 
 ## Configuration
 
 - **`docs/CREW.md`** holds your project's own rules: facts about the project and anything that differs from the crew's defaults. It overrides the skill. Setup writes it with you.
 - **The question timeout.** Setup offers to give the lead's questions 10 minutes. If you don't answer in time, the lead takes its default and moves on.
-- **Compaction windows** are yours to tune. The Compactions tab shows what each compaction cost and saved.
+- **Compaction windows**, per model: see [Tuning compaction](#tuning-compaction-for-your-project).
 - **Environment variables:**
   - `CREW_DASHBOARD=0`: don't start the dashboard.
   - `CREW_DASHBOARD_LAN=0`: keep the dashboard on this computer only.

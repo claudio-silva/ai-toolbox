@@ -53,7 +53,7 @@ npx skills add claudio-silva/ai-toolbox --skill crew -a claude-code
 /crew setup
 ```
 
-Setup lists every change it's about to make, then adds the crew's agents, hooks and files to the project ([what it adds](#what-setup-adds-to-your-project)). It asks only what it can't learn from the repository. Then **restart Claude Code** so the hooks and agents load. Run setup again after each skill update ([Updating](#updating)).
+Setup lists every change it's about to make, then adds the crew's agents, hooks and files to the project ([what it adds](#what-setup-adds-to-your-project)). It asks only what it can't learn from the repository. The crew is ready at once: hooks work from the next message. The one exception is a project that had no `.claude/agents/` folder before: the crew's agents load in the next session (in the CLI, `/exit` then `claude --continue` keeps your conversation), and until then the lead stands in for them. Run setup again after each skill update ([Updating](#updating)); no restart is needed then.
 
 **4. Pick the lead's model.** Run the main session on **Opus 5.5 at High effort** (`/model`). The lead's work is judgement: plans, routing, reviews, decisions. It hands the bulk work to cheaper models.
 
@@ -177,7 +177,7 @@ If a request makes running work pointless, the lead stops those agents at once. 
 
 ```mermaid
 flowchart LR
-  setup["/crew setup<br/>once per project"] --> restart["Restart<br/>Claude Code"] --> work(("The crew<br/>at work"))
+  setup["/crew setup<br/>once per project"] --> work(("The crew<br/>at work"))
   work -- "pause" --> stop["/crew stop<br/>stops every agent safely"] --> resume["/crew resume"]
   work -- "fresh session" --> handoff["/crew handoff,<br/>then /clear"] --> resume
   resume --> work
@@ -305,8 +305,8 @@ To update:
    npx skills update crew
    ```
 
-2. Run `/crew setup` in each project that uses Crew. It merges the changes into the project, and a running dashboard restarts by itself on the new version.
-3. Restart Claude Code if setup says the hooks changed, and do what the release notes list under **After updating**, if anything.
+2. Run `/crew setup` in each project that uses Crew. It merges the changes into the project; the running session picks up the new hooks, agents and rules without a restart, and a running dashboard restarts by itself on the new version.
+3. Do what the release notes list under **After updating**, if anything.
 
 ## Status: alpha
 

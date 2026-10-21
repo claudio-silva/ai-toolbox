@@ -15,6 +15,7 @@ For people working on the skill itself. To use Crew, see the [README](README.md)
 tests/skill-size.sh           # SKILL.md's body within 5,000 tokens
 tests/hooks.sh                # the crew script and the dashboard model, on fixtures
 node --test tests/            # the dashboard parsers and the live server
+tests/probe-reload.sh         # what a running Claude Code picks up without a restart (real sessions, ~5 cents)
 
 cd dashboard
 npm install
@@ -133,6 +134,7 @@ docs/CREW.md                 committed (project facts and deviations from the de
 | `tests/skill-size.sh` | Checks that `SKILL.md`'s body fits 5,000 tokens; not installed |
 | `tests/hooks.sh` | Fixture tests for the crew script and the dashboard model (hooks, compactions, requests, defects, timing, reminders); not installed |
 | `tests/dashboard.test.mjs` | Tests for the dashboard parsers and the live server; not installed |
+| `tests/probe-reload.sh` | Drives real Claude Code sessions to see which changes (hooks, agents, skills, `CLAUDE.md`) a running session picks up; rerun it when Claude Code changes how it loads them, and keep `commands/setup.md` step 12 in line with it; not installed |
 | `bin/release` | Cuts a release: notes drafted by Haiku from the commits, `RELEASES.md`, a commit and a tag; not installed |
 | `aitools.json` | Install metadata: Claude Code only; leaves out `tests/`, `dashboard/`, `bin/`, `README.md`, this file and `.gitignore` (`npx skills` ignores it and installs everything; the extra files are inert) |
 | `LICENSE` | The Apache License 2.0; installed with the skill |

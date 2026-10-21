@@ -68,7 +68,7 @@ If the app needs gitignored files to run (for example `.env`, `.dev.vars`), list
 
 ## 6. Agents
 
-Copy `<skill>/templates/agents/*.md` to `.claude/agents/`. For existing files, diff and merge: keep project-specific additions, take the skill's version of everything else.
+Note whether `.claude/agents/` exists before you copy (step 12 needs it). Copy `<skill>/templates/agents/*.md` to `.claude/agents/`. For existing files, diff and merge: keep project-specific additions, take the skill's version of everything else.
 
 ## 7. `CREW.md`
 
@@ -146,13 +146,14 @@ Any failure → fix it before continuing.
 
 ## 12. Next session
 
-- Agent definitions hot-reload, except when `.claude/agents/` did not exist when the session started. Hook changes are treated as needing a restart; `settings.json` hooks are read at session start.
+- What a running session picks up without a restart (measured with `tests/probe-reload.sh`, Claude Code 2.1.303 to 2.1.306, in the CLI and through the Agent SDK): hooks in `.claude/settings.json`, new or changed, from the next event; agent definitions and skills, new or changed, when their directory existed at session start. Not picked up: agents in a `.claude/agents/` that this session created, even after `/clear` (which rescans skills, not agents). `CLAUDE.md` changes are not reliably re-read; the skill carries the rules anyway.
+- Never tell the founder to restart Claude Code after a re-run: nothing setup changes needs it.
 - Give the founder the dashboard URL: it opens in any browser, and as a Paseo side panel it sits beside the conversation. The URL stays the same for this project.
-- After a first setup, tell the founder to restart the session. After a re-run, only when hooks changed (a re-run that adds the `PreCompact` or `SessionStart` entries does).
+- When this setup created `.claude/agents/`, the crew's agents load in the next session; everything else works now. Say so in one line, and carry on if the founder wants: until then, emulate the roles (below). The next session can be any new one: in the CLI, `/exit` then `claude --continue` keeps this conversation; in other clients (Paseo, the desktop app), a new session or agent in the project.
 - A project that patched `.crew/bin/crew` by hand (for example a stopgap for the compaction reminder) gets the skill's version in step 2; show the diff and say what the stopgap did is now handled by the script.
-- In the setup session itself, when a role's definition is not loaded yet, emulate the role: use `general-purpose`, pass the role's `model` and `effort`, and put the role file's body at the top of the brief.
+- In a session where a role's definition is not loaded yet (`Agent type '…' not found`), emulate the role: use `general-purpose`, pass the role's `model` and `effort`, and put the role file's body at the top of the brief.
 - **Check in the next session:** a trivial scout delegation returns a capped report; the journal shows its start and stop lines; the dashboard lists it under Live agents while it runs. If the stop line is missing, the session guard does not hold inside subagent hooks: report that to the founder instead of guessing.
 
 ## 13. Re-running
 
-After a skill update, run `/crew setup` again. It repeats every step; everything merges, nothing is overwritten. Journal "Re-ran crew setup". Restart the session when hooks changed.
+After a skill update, run `/crew setup` again. It repeats every step; everything merges, nothing is overwritten. Journal "Re-ran crew setup". No restart: the session picks up the new hooks, agents and skill at once.

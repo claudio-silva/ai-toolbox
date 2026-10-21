@@ -85,8 +85,8 @@ function UpdatePanel({ u }: { u: UpdateInfo }) {
                   ))}
                 </div>
               </li>
-              <li>In Claude Code, run <Mono>/crew setup</Mono> in each project that uses Crew. This dashboard then restarts by itself on the new version.</li>
-              <li>Restart Claude Code if setup says the hooks changed.</li>
+              <li>In Claude Code, run <Mono>/crew setup</Mono> in each project that uses Crew. No restart: the session picks up the changes, and this dashboard restarts by itself on the new version.</li>
+              {u.releases.some((r) => r.body.includes('After updating')) && <li>Do what the notes above list under <b>After updating</b>.</li>}
             </ol>
           </section>
         </>

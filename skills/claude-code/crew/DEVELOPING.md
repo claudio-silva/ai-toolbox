@@ -106,3 +106,4 @@ docs/CREW.md                 committed (project facts and deviations from the de
 | `tests/hooks.sh` | Fixture tests for the crew script and the dashboard model (hooks, compactions, requests, defects, timing, reminders); not installed |
 | `tests/dashboard.test.mjs` | Tests for the dashboard parsers and the live server; not installed |
 | `aitools.json` | Install metadata: Claude Code only; leaves `tests/`, `dashboard/` and this file out |
+| `LICENSE` | The Apache License 2.0; installed with the skill |

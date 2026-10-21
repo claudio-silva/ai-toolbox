@@ -2,7 +2,7 @@
 
 **A software team inside Claude Code.** Crew makes your Claude Code session the lead of a small crew of specialist agents. You bring the idea. The lead plans it with you, then the crew builds it one task at a time: each task is built, reviewed independently, tested and committed. It keeps going for hours while you're away, and a live dashboard on your desktop or your phone shows what it's doing.
 
-[Why Crew](#why-crew) · [Getting started](#getting-started) · [Commands](#commands) · [How it works](#how-it-works) · [The dashboard](#the-dashboard) · [Memory and context](#memory-and-context) · [Configuration](#configuration)
+[Why Crew](#why-crew) · [Getting started](#getting-started) · [Learn more](#learn-more) · [Commands](#commands) · [How it works](#how-it-works) · [The dashboard](#the-dashboard) · [Memory and context](#memory-and-context) · [Configuration](#configuration) · [Status: alpha](#status-alpha)
 
 ## Why Crew
 
@@ -57,6 +57,26 @@ The lead works out the goal and the scope with you, asks its questions up front,
 **6. Open the dashboard.** The lead's first reply starts with *Open the dashboard at http://…* (or run `.crew/bin/crew status`). Keep it in a browser tab or a Paseo side panel. To follow along on your phone, click the QR code button in its header and scan it.
 
 **7. Walk away.** When you come back, you'll find a milestone report and a short batch of questions. Say "continue", or change course.
+
+## Learn more
+
+This page is the overview. Crew's whole playbook is open to read: the guides below are the ones the lead itself follows, so they describe exactly what it will do. They speak to the lead, and call you "the founder".
+
+| | Guide | What you'll find |
+| --- | --- | --- |
+| **Planning and building** | [Planning](reference/planning.md) | From an idea, a brainstorm or a PRD to a confirmed plan; choosing a planning method; how a plan becomes small tasks that can be checked |
+| | [Execution](reference/execution.md) | Running a set of tasks: branches and commits, the build and review loop, which findings wait and which are fixed now, parallel builders, closing a set |
+| | [Testing and QC](reference/testing.md) | Which tests are worth writing, interactive QA in the real UI, checkpoints, and how screenshots are reviewed |
+| **Working with you** | [Questions and milestones](reference/founder.md) | What the lead decides alone, what it asks you and when, how questions are batched with defaults, and the milestone report |
+| | [Requests while work runs](reference/requests.md) | How each message you send is assessed, routed, acknowledged and queued |
+| **The team and its costs** | [Roles and models](reference/roles.md) | Each role's job, and the model facts and prices behind every choice |
+| | [Context and cost](reference/context.md) | Why context size drives cost, where state lives, what survives a compaction, and how to read the compaction numbers |
+| | [Briefs and reports](reference/briefs.md) | The briefs the lead gives each role, and the report you get at each milestone |
+| **In your project** | [The `.crew/` folder](scaffold/README.md) | Every file setup adds, the journal, the dashboard in depth, task data and worktrees (also in your project, at `.crew/README.md`) |
+| | Commands: [setup](commands/setup.md) · [stop](commands/stop.md) · [resume](commands/resume.md) · [handoff](commands/handoff.md) | What each command does, step by step |
+| **Working on Crew** | [DEVELOPING.md](DEVELOPING.md) | Building the dashboard, running the tests, and the rules for editing the skill |
+
+Crew is for Claude Code only: it relies on Claude Code's subagents and its per-agent model and effort settings. See the [repository README](../../../README.md) for the other tools in this collection.
 
 ## Commands
 
@@ -259,11 +279,31 @@ Other ways to set them:
 | | Plans, sets of tasks, the request queue, the defect log, the handoff note, the crew script and its templates | `.crew/` |
 | **Not committed** | The journal, the dashboard, screenshots and logs per task, scratch state | `.crew/` (gitignored) |
 
-## Learn more
+## Status: alpha
 
-- How the lead plans and runs work: [planning](reference/planning.md), [execution](reference/execution.md), [testing and QC](reference/testing.md)
-- How it deals with you: [questions and milestones](reference/founder.md), [requests while work runs](reference/requests.md)
-- [The roles](reference/roles.md), with the model facts behind each choice, and [context and cost](reference/context.md)
-- Working on the skill itself: [DEVELOPING.md](DEVELOPING.md)
+> [!WARNING]
+> Crew is in alpha. It's under active development and changes often, and things will break from time to time. If you choose to use it anyway, expect that.
 
-Crew is for Claude Code only: it relies on Claude Code's subagents and its per-agent model and effort settings. See the [repository README](../../../README.md) for the other tools in this collection.
+An update can change the commands, the files in `.crew/` or the dashboard. To keep surprises small:
+
+- Run `/crew setup` after every update. It merges the changes into your project.
+- Update between sets of tasks, not in the middle of one.
+- [Report what breaks](https://github.com/claudio-silva/ai-toolbox/issues). It's how Crew gets out of alpha.
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome.
+
+- **Report a problem or suggest an idea** by [opening an issue](https://github.com/claudio-silva/ai-toolbox/issues). For a problem, include your Claude Code version, what you asked the lead, and, if you can share them, the relevant lines of `.crew/journal.md`.
+- **Change Crew itself:** [DEVELOPING.md](DEVELOPING.md) explains how to build the dashboard, run the tests, and edit the skill without breaking its rules. The repository's [CONTRIBUTING.md](../../../CONTRIBUTING.md) covers the conventions every tool here shares.
+- Contributions are accepted under the Apache License 2.0, like the rest of Crew.
+
+## Author
+
+Crew is created and maintained by **Cláudio Silva** ([@claudio-silva](https://github.com/claudio-silva)).
+
+## License
+
+Copyright © 2026 Cláudio Silva.
+
+Licensed under the [Apache License, Version 2.0](LICENSE). You may use, modify and share Crew, including commercially, as long as you keep the copyright and license notices. It comes with no warranty.

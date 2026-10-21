@@ -17,6 +17,42 @@ export interface Agent {
   task: string | null
 }
 
+// A subagent that is not running: when its last run ended and how.
+export interface PastAgent {
+  id: string
+  type: string
+  name: string
+  description: string
+  model: string
+  effort: string
+  started: number
+  ended: number
+  runs: number
+  status: string
+  task: string | null
+}
+
+// The lead's session. reach: how the page's messages get to it (null: they can't now).
+export interface LeadInfo {
+  session: string
+  alive: boolean
+  model: string
+  effort: string
+  window: number
+  compactAt: number
+  reach: 'paseo' | 'socket' | null
+}
+
+// One thing in a transcript (model.mjs transcriptEntries).
+export type Entry =
+  | { kind: 'user'; key: string; ts: number; text: string; via?: 'dashboard' }
+  | { kind: 'peer'; key: string; ts: number; text: string }
+  | { kind: 'summary'; key: string; ts: number; text: string }
+  | { kind: 'text' | 'error' | 'thinking'; key: string; ts: number; ctx: number; text: string }
+  | { kind: 'tool'; key: string; ts: number; ctx: number; id: string; name: string; summary: string; detail: string }
+  | { kind: 'result'; key: string; ts: number; id: string; error: boolean; text: string }
+  | { kind: 'compact'; key: string; ts: number; pre: number }
+
 export interface Shot {
   name: string
   path: string
@@ -217,6 +253,7 @@ export interface State {
   lead: { state: 'working' | 'agents' | 'waiting' | 'stopped' | 'closed'; since: string | null; sinceEpoch: number | null; agentsFinishing?: number }
   keepAwake: { on: boolean; mode: 'claude' | '12h' | null; since: number | null; battery: boolean; stopped: boolean } | null
   agents: Agent[]
+  roster: { lead: LeadInfo | null; past: PastAgent[] }
   current: CurrentSet | null
   sets: TaskSet[]
   queue: {

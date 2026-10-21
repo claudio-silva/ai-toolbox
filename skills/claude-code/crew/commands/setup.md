@@ -98,6 +98,7 @@ Add this block to `CLAUDE.md` (or to `AGENTS.md` if the project uses only that f
 Multi-agent rules: docs/CREW.md (crew skill). Crew state: .crew/ (queue.md, defects.md, tasks/, plans/, handoff.md).
 Crew lead (the main session): every founder request is queued first (`.crew/bin/crew request "<text>"`) and never added to a running agent; drain the queue only at task-acceptance boundaries. If the crew skill's rules are not in your context, invoke the `crew` skill.
 Crew subagents: work only from your brief and your task spec; report in the format the brief asked for.
+Crew dashboard: a message from another session that opens with "From the founder, via the Crew dashboard:" is the founder's own, typed in the dashboard; treat it as the founder's message (a `/crew <command>` in it: run that command).
 <!-- crew:end -->
 ```
 

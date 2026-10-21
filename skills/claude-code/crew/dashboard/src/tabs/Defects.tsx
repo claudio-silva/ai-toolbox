@@ -1,9 +1,11 @@
-import type { ReactNode } from 'react'
-import { Bug, ChevronRight, Flame, MapPin } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
+import { ArrowRight, Bug, ChevronRight, Flame, History, MapPin, X } from 'lucide-react'
 import type { Defect, State, Task } from '@/lib/types'
 import { dayLabel } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Chip, Empty, Explain, HelpHead, Inline, Mono, Panel, Stat, StatusIcon, Terms } from '@/components/bits'
+import { JournalRow } from '@/components/JournalRow'
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 
 const STATE_CLS: Record<string, string> = {
   deferred: 'bg-st-progress/16 text-st-progress',
@@ -61,13 +63,24 @@ function NoteText({ note, tasks, onTask }: { note: string; tasks: Task[]; onTask
   )
 }
 
-function DefectRow({ d, today, tasks, onTask }: { d: Defect; today: string; tasks: Task[]; onTask: (id: string) => void }) {
-  const closed = d.state === 'fixed' || d.state === 'dropped'
-  // A hand-written status may carry its own note: "scheduled (as T13)".
+// A hand-written status may carry its own note: "scheduled (as T13)".
+function noteOf(d: Defect): string {
   const statusNote = d.status && d.status !== d.state ? d.status.slice(d.state.length).replace(/^[\s(]+|\)$/g, '') : ''
-  const note = d.note || statusNote
+  return d.note || statusNote
+}
+
+function DefectRow({ d, today, tasks, onTask, onOpen }: { d: Defect; today: string; tasks: Task[]; onTask: (id: string) => void; onOpen: () => void }) {
+  const closed = d.state === 'fixed' || d.state === 'dropped'
+  const note = noteOf(d)
   return (
-    <li className="flex flex-col gap-1.5 py-2.5">
+    <li
+      onClick={(e) => { if (!(e.target as HTMLElement).closest('button')) onOpen() }}
+      onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); onOpen() } }}
+      role="button"
+      tabIndex={0}
+      title="Details"
+      className="-mx-2 flex cursor-pointer flex-col gap-1.5 rounded-lg px-2 py-2.5 transition-colors outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/50"
+    >
       <div className="flex items-baseline gap-2">
         <Mono className="shrink-0 font-semibold">{d.id}</Mono>
         <span className={cn('min-w-0 flex-1 text-[13px] leading-snug', closed && 'text-muted-foreground')}><Inline text={d.text} /></span>
@@ -125,6 +138,120 @@ function Legend() {
   )
 }
 
+// The tasks a defect names: where it was found ("T07 review") and the one fixing it ("as T11").
+function taskLink(text: string, tasks: Task[]): Task | undefined {
+  const m = /\bT\d{2,}\b/.exec(text)
+  return m ? tasks.find((t) => t.id === m[0]) : undefined
+}
+
+function TaskButton({ t, label, onTask }: { t: Task; label: string; onTask: (id: string) => void }) {
+  return (
+    <button onClick={() => onTask(t.id)} className="group flex w-full items-center gap-2.5 rounded-lg border bg-background/60 px-3 py-2 text-left transition-colors hover:bg-accent/60">
+      <StatusIcon status={t.status} />
+      <span className="text-[10.5px] font-medium tracking-wide text-muted-foreground uppercase">{label}</span>
+      <Mono className="font-semibold">{t.id}</Mono>
+      <span className="min-w-0 flex-1 truncate text-[12.5px]">{t.title}</span>
+      <ArrowRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+    </button>
+  )
+}
+
+function Field({ k, children }: { k: string; children: ReactNode }) {
+  return <><dt className="text-muted-foreground">{k}</dt><dd className="min-w-0">{children}</dd></>
+}
+
+// One defect in a side sheet. Its line in .crew/defects.md is the only record of it; the sheet
+// adds what the rest of the crew's files say: the journal lines that name it, the tasks it
+// names, and the other defects in the same place.
+function DefectSheet({ state, d, onClose, onOpen, onTask }: {
+  state: State; d: Defect | null; onClose: () => void; onOpen: (id: string) => void; onTask: (id: string) => void
+}) {
+  return (
+    <Sheet open={Boolean(d)} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent side="right" showCloseButton={false} className="w-full gap-0 overflow-y-auto p-0 sm:max-w-lg">
+        {d && <DefectBody state={state} d={d} onOpen={onOpen} onTask={onTask} />}
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+function DefectBody({ state, d, onOpen, onTask }: { state: State; d: Defect; onOpen: (id: string) => void; onTask: (id: string) => void }) {
+  const tasks = state.current?.tasks ?? []
+  const note = noteOf(d)
+  const found = d.from ? taskLink(d.from, tasks) : undefined
+  const fixing = note ? taskLink(note, tasks) : undefined
+  const re = new RegExp(`\\b${d.id}\\b`)
+  const history = state.journal.entries.filter((e) => re.test(e.text)).reverse()
+  const where = d.where.trim().toLowerCase()
+  const near = where ? state.defects.items.filter((x) => x.id !== d.id && x.where.trim().toLowerCase() === where) : []
+  return (
+    <>
+      <SheetHeader className="sticky top-0 z-10 border-b bg-background/90 px-5 pt-5 pb-4 backdrop-blur">
+        <SheetClose className="absolute top-3.5 right-3.5 grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+          <X className="size-4" /><span className="sr-only">Close</span>
+        </SheetClose>
+        <div className="flex items-center gap-2 pr-8">
+          <Mono className="text-sm font-semibold">{d.id}</Mono>
+          <StatePill state={d.state} />
+          {d.severity && <Severity s={d.severity} />}
+          {d.promoted && <Promoted />}
+        </div>
+        <SheetTitle className="text-base leading-snug"><Inline text={d.text} /></SheetTitle>
+        <SheetDescription className="text-[12px]">{logged(d.date, state.today)}</SheetDescription>
+      </SheetHeader>
+
+      <div className="flex flex-col gap-6 px-5 py-5">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[12.5px]">
+          {d.where && <Field k="Where"><Inline text={d.where} /></Field>}
+          {d.from && <Field k="Found in">{d.from}</Field>}
+          {d.severity && <Field k="Severity">{d.severity}{d.promoted ? ', promoted: deferring it got in the way of other work' : ''}</Field>}
+          {d.state === 'deferred' && <Field k="Due">{d.slot || 'end of set'}</Field>}
+          {d.state !== 'deferred' && d.slot && <Field k="Slot">{d.slot}</Field>}
+          <Field k="Status">{d.status || d.state || 'logged'}</Field>
+          {note && <Field k="Note"><Inline text={note} /></Field>}
+        </dl>
+
+        {(found || fixing) && (
+          <section className="flex flex-col gap-2">
+            {fixing && <TaskButton t={fixing} label={d.state === 'fixed' ? 'Fixed in' : 'Fix in'} onTask={onTask} />}
+            {found && found !== fixing && <TaskButton t={found} label="Found in" onTask={onTask} />}
+          </section>
+        )}
+
+        <section className="flex flex-col gap-1">
+          <h3 className="flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase"><History className="size-3.5" /> In the journal</h3>
+          {history.length ? (
+            <div className="divide-y divide-border/60">{history.map((e, i) => <JournalRow key={i} e={e} />)}</div>
+          ) : (
+            <p className="text-[12.5px] text-muted-foreground">No journal line names {d.id} (the page reads the journal's last {state.journal.entries.length} lines).</p>
+          )}
+        </section>
+
+        {near.length > 0 && (
+          <section className="flex flex-col gap-1">
+            <h3 className="flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase"><MapPin className="size-3.5" /> Also in {d.where}</h3>
+            <ul className="flex flex-col">
+              {near.map((x) => (
+                <li key={x.id}>
+                  <button onClick={() => onOpen(x.id)} className="flex w-full items-baseline gap-2 rounded-md px-1.5 py-1.5 text-left hover:bg-accent/60">
+                    <Mono className="shrink-0 font-semibold">{x.id}</Mono>
+                    <span className="min-w-0 flex-1 text-[12.5px]"><Inline text={x.text} /></span>
+                    <StatePill state={x.state} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        <p className="text-[11.5px] text-muted-foreground">
+          A defect is one line in <Mono>.crew/defects.md</Mono>, written with <Mono>crew defect</Mono>. The rest comes from the journal and the task set.
+        </p>
+      </div>
+    </>
+  )
+}
+
 // When the open defects will be dealt with: the set's deferred ones at its end.
 function DueLine({ state, open }: { state: State; open: Defect[] }) {
   const cur = state.current
@@ -140,6 +267,7 @@ function DueLine({ state, open }: { state: State; open: Defect[] }) {
 
 export function Defects({ state, onTask }: { state: State; onTask: (id: string) => void }) {
   const { items, summary: s } = state.defects
+  const [shown, setShown] = useState<string | null>(null)
   if (!items.length) {
     return (
       <Empty icon={Bug} title="No defects logged">
@@ -150,7 +278,7 @@ export function Defects({ state, onTask }: { state: State; onTask: (id: string) 
   const tasks = state.current?.tasks ?? []
   const open = items.filter((d) => d.state !== 'fixed' && d.state !== 'dropped')
   const closed = items.filter((d) => d.state === 'fixed' || d.state === 'dropped')
-  const row = (d: Defect) => <DefectRow key={d.id} d={d} today={state.today} tasks={tasks} onTask={onTask} />
+  const row = (d: Defect) => <DefectRow key={d.id} d={d} today={state.today} tasks={tasks} onTask={onTask} onOpen={() => setShown(d.id)} />
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-2.5">
@@ -177,6 +305,14 @@ export function Defects({ state, onTask }: { state: State; onTask: (id: string) 
           <ul className="divide-y divide-border/60 px-4 pb-2">{closed.map(row)}</ul>
         </details>
       )}
+
+      <DefectSheet
+        state={state}
+        d={items.find((d) => d.id === shown) ?? null}
+        onClose={() => setShown(null)}
+        onOpen={setShown}
+        onTask={(id) => { setShown(null); onTask(id) }}
+      />
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  Bot, Bug, ChevronDown, Gauge, GitBranch, Inbox, Layers, ListChecks, Monitor, Moon, Pause, Play, PowerOff, ScrollText, Shrink, Square, Sun, Timer,
+  Bot, Bug, ChevronDown, Gauge, GitBranch, Inbox, Layers, ListChecks, Monitor, Moon, Pause, Play, PowerOff, RotateCcw, ScrollText, Shrink, Square, Sun, Timer, Wrench,
   type LucideIcon,
 } from 'lucide-react'
 import type { State } from '@/lib/types'
@@ -13,10 +13,13 @@ import { ShareButton } from './Share'
 import { UpdateNotice, VersionButton } from './Update'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { leadBlocker, sendToLead, VIA_LABEL } from '@/lib/lead'
+import { notify } from './EventToasts'
 
 export const TAB_META: Record<Tab, { label: string; icon: LucideIcon }> = {
   overview: { label: 'Overview', icon: Gauge },
+  agents: { label: 'Agents', icon: Bot },
   tasks: { label: 'Tasks', icon: ListChecks },
   timing: { label: 'Timing', icon: Timer },
   queue: { label: 'Requests', icon: Inbox },
@@ -28,7 +31,7 @@ export const TAB_META: Record<Tab, { label: string; icon: LucideIcon }> = {
 
 // The lead's state, in two short lines beside the project's name: what it is doing, then the
 // detail (agents, since when, how long).
-function LeadStatus({ state }: { state: State }) {
+function LeadStatus({ state, onClick }: { state: State; onClick: () => void }) {
   const base = useClockBase()
   const { lead, agents } = state
   const n = agents.length
@@ -54,9 +57,10 @@ function LeadStatus({ state }: { state: State }) {
   const live = lead.state === 'working' && lead.sinceEpoch != null
   const Icon = icon
   return (
-    <div
-      title={[head, since, detail].filter(Boolean).join(' · ')}
-      className={cn('flex max-w-full min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-1 ring-1 ring-inset sm:px-2', tone)}
+    <button
+      onClick={onClick}
+      title={`${[head, since, detail].filter(Boolean).join(' · ')}. Open the lead's conversation.`}
+      className={cn('flex max-w-full min-w-0 items-center gap-1.5 rounded-l-lg py-1 pr-1.5 pl-1.5 text-left ring-1 ring-inset transition-[filter] hover:brightness-110 sm:pl-2', tone)}
     >
       {pulse ? (
         <span className="relative flex size-2 shrink-0">
@@ -76,7 +80,58 @@ function LeadStatus({ state }: { state: State }) {
           <span className="truncate text-[11px] opacity-75">{[since, detail].filter(Boolean).join(' · ')}</span>
         )}
       </div>
-    </div>
+    </button>
+  )
+}
+
+// The session's controls, beside the lead's state: each one is a message to the lead, as if the
+// founder typed the command where the session runs.
+const SESSION_ACTIONS = [
+  { cmd: '/crew stop', label: 'Stop the crew', hint: 'Agents finish their step, then nothing new starts', icon: Square },
+  { cmd: '/crew resume', label: 'Resume the crew', hint: 'Picks up where it stopped', icon: RotateCcw },
+  { cmd: '/crew setup', label: 'Run setup again', hint: 'Updates the project to the installed Crew', icon: Wrench },
+] as const
+
+function SessionMenu({ state }: { state: State }) {
+  const why = leadBlocker(state)
+  const stopped = state.lead.state === 'stopped'
+  const run = (cmd: string) => {
+    sendToLead(cmd)
+      .then((r) => notify(`Sent ${cmd} to the lead ${VIA_LABEL[r.via]}.`))
+      .catch((e: Error) => notify(`${cmd} not sent: ${e.message}`, true))
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          aria-label="Session controls"
+          title="Session controls"
+          className="flex self-stretch items-center rounded-r-lg px-1 text-muted-foreground ring-1 ring-border ring-inset hover:bg-accent hover:text-foreground data-[state=open]:bg-accent"
+        >
+          <ChevronDown className="size-3.5" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="center" className="w-72">
+        <DropdownMenuLabel>Crew session</DropdownMenuLabel>
+        {SESSION_ACTIONS.map((a) => {
+          const Icon = a.icon
+          const off = Boolean(why) || (a.cmd === '/crew stop' && stopped) || (a.cmd === '/crew resume' && !stopped)
+          return (
+            <DropdownMenuItem key={a.cmd} disabled={off} onSelect={() => run(a.cmd)} className="items-start">
+              <Icon className="mt-0.5" />
+              <span className="flex flex-col leading-tight">
+                <span>{a.label} <span className="font-mono text-[11px] text-muted-foreground">{a.cmd}</span></span>
+                <span className="text-[11px] text-muted-foreground">{a.hint}</span>
+              </span>
+            </DropdownMenuItem>
+          )
+        })}
+        <DropdownMenuSeparator />
+        <p className="px-2 pt-0.5 pb-1.5 text-[11px] leading-snug text-muted-foreground">
+          {why ?? 'Each one goes to the lead as a message from you, like one typed in the Agents tab.'}
+        </p>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -277,7 +332,7 @@ function TabStrip({ tab, setTab, badges }: { tab: Tab; setTab: (t: Tab) => void;
   )
 }
 
-export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, badges }: {
+export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, badges, onLead }: {
   state: State | null
   conn: Conn
   changedAt: number
@@ -286,6 +341,7 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
   tab: Tab
   setTab: (t: Tab) => void
   badges: Badges
+  onLead: () => void
 }) {
   return (
     <header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
@@ -305,7 +361,9 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
               </span>
             )}
           </div>
-          <div className="flex min-w-[7.5rem] flex-1 justify-center">{state && <LeadStatus state={state} />}</div>
+          <div className="flex min-w-[7.5rem] flex-1 justify-center">
+            {state && <div className="flex max-w-full min-w-0"><LeadStatus state={state} onClick={onLead} /><SessionMenu state={state} /></div>}
+          </div>
           <div className="flex shrink-0 items-center">
             <UpdateNotice u={state?.update} />
             <ConnDot conn={conn} changedAt={changedAt} />

@@ -107,6 +107,10 @@
 #     .crew/dashboard/model.mjs reads it and computes everything the page shows. Nothing here
 #     renders. The server watches .crew/ and git, so no hook needs to tell it anything; it waits
 #     while journal.lock is held, so it never reads a half-written state.
+#   - The founder can message the lead from the dashboard. Each session's way in is kept in
+#     tmp/journal-state/reach/<session> (owner-only): its Paseo agent id when Paseo runs it, else
+#     its cross-session inbox socket and token. Hooks and `crew session start` record it from
+#     the environment Claude Code gives them.
 
 # Make sure git acts on the directories we name, not on an inherited repository.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
@@ -435,6 +439,28 @@ note_claude() {
   [ "$old" != "$REPLY" ] || return 0
   printf '%s\n' "$REPLY" > "$f"
   [ -z "$old" ] || reap_orphans "$1"
+}
+
+# note_reach SESSION: how the dashboard can send the founder's messages to this session, from
+# the environment Claude Code gives hooks and the commands it runs: in Paseo, its agent id (the
+# `paseo send` route); otherwise the session's cross-session inbox socket and its token (Claude
+# Code 2.1.224+). One line, tab-separated: socket, token, Paseo agent id, Paseo CLI. Owner-only:
+# the token is what lets a message reach a session that runs without permission prompts.
+note_reach() {
+  local f="$STATE/reach/$1" line paseo=${PASEO_AGENT_ID:-} parent
+  [ -n "$1" ] || return 0
+  # A Claude Code started by hand in a Paseo agent's terminal inherits that agent's id: the id
+  # is this session's only when Paseo's daemon itself runs this Claude Code.
+  if [ -n "$paseo" ]; then
+    claude_pid
+    parent=$(ps -o ppid= -p "${REPLY:-0}" 2>/dev/null | tr -d ' ')
+    case $(ps -o comm= -p "${parent:-0}" 2>/dev/null) in *[Pp]aseo*) ;; *) paseo="" ;; esac
+  fi
+  [ -n "${CLAUDE_CODE_MESSAGING_SOCKET:-}$paseo" ] || return 0
+  line="${CLAUDE_CODE_MESSAGING_SOCKET:-}$TAB${CLAUDE_CODE_MESSAGING_TOKEN:-}$TAB$paseo$TAB${paseo:+${PASEO_CLI:-}}"
+  [ "$(cat "$f" 2>/dev/null)" != "$line" ] || return 0
+  mkdir -p "$STATE/reach" 2>/dev/null && chmod 700 "$STATE/reach" 2>/dev/null
+  (umask 077; printf '%s\n' "$line" > "$f.new" && mv -f "$f.new" "$f") 2>/dev/null
 }
 
 # reap_orphans [SESSION]: close the runs of subagents whose Claude Code process has ended
@@ -1223,6 +1249,8 @@ hook_file_changed() {
 hook_lead() {  # $1 = working | idle
   [ -z "$J_AGENT_TYPE" ] || return 0
   ensure_dirs
+  safe_name "$J_SESSION"
+  note_reach "$REPLY"
   lock_take
   now_parts
   # "stopped" (crew session stop) sticks until `crew session start` runs again (/crew resume).
@@ -1249,6 +1277,7 @@ hook_session_start() {
   printf '%s %s\n' "$J_HOOK_MODEL" "$J_EFFORT_LVL" > "$STATE/lead-model/$REPLY" 2>/dev/null
   local sess=$REPLY
   remember_transcript "$J_SESSION" "$J_TRANSCRIPT"
+  note_reach "$sess"
   lock_take
   note_claude "$sess"
   lock_release
@@ -1573,10 +1602,11 @@ cmd_session() {
       touch "$STATE/sessions/$sid"
       clock_sample
       note_claude "$sid"
+      note_reach "$sid"
       reap_orphans
       keep_awake_start
       # Prune registrations (and per-session notes) older than 30 days.
-      find "$STATE/sessions" "$STATE/lead-model" "$STATE/transcripts" "$STATE/claude" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
+      find "$STATE/sessions" "$STATE/lead-model" "$STATE/transcripts" "$STATE/claude" "$STATE/reach" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
       # The lead is at work: it is running this command (this also clears "stopped").
       now_parts
       printf 'working %s %s\n' "$NOW_HM" "$NOW_EPOCH" > "$STATE/lead"

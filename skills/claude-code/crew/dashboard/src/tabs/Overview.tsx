@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import {
-  Activity, ArrowRight, BatteryWarning, Bot, Bug, Coffee, FileClock, GitBranch, Inbox, MessageCircleQuestion, Shrink, Sparkles, Timer,
+  Activity, ArrowRight, BatteryWarning, Bot, Bug, ChevronRight, Coffee, Crown, FileClock, GitBranch, Inbox, MessageCircleQuestion, Shrink, Sparkles, Timer,
 } from 'lucide-react'
 import type { State } from '@/lib/types'
 import type { Tab } from '@/lib/persist'
@@ -12,6 +12,35 @@ import { crewNow, elapsedLabel, TimeBar, TimeHelp } from '@/components/TimeSplit
 import { AgentRow } from '@/components/AgentRow'
 import { JournalRow } from '@/components/JournalRow'
 import type { Doc } from '@/components/DocSheet'
+import { modelName } from '@/lib/lead'
+import { capital } from '@/lib/format'
+import { cn } from '@/lib/utils'
+
+const LEAD_LINE: Record<State['lead']['state'], string> = {
+  working: 'Working', agents: 'Idle while agents work', waiting: 'Waiting for you', stopped: 'Stopped by you', closed: 'Claude Code closed',
+}
+
+// The lead, above the subagents: its state and model; opens its conversation.
+function LeadLine({ state, onOpen }: { state: State; onOpen: () => void }) {
+  const l = state.roster.lead
+  const busy = state.lead.state === 'working'
+  return (
+    <button onClick={onOpen} title="Open the lead's conversation" className="group flex w-full items-center gap-3 rounded-lg border bg-background/60 px-3 py-2 text-left transition-colors hover:bg-accent/60">
+      <span className="relative grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-primary to-[oklch(0.6_0.2_320)] text-primary-foreground">
+        <Crown className="size-4" />
+        {busy && <span className="crew-pulse absolute -top-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card bg-primary" />}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col leading-tight">
+        <span className="text-[13px] font-semibold">Lead</span>
+        <span className={cn('truncate text-xs', busy ? 'text-primary' : 'text-muted-foreground')}>
+          {[LEAD_LINE[state.lead.state], l?.model && modelName(l.model), l?.effort && capital(l.effort)].filter(Boolean).join(' · ')}
+        </span>
+      </span>
+      <span className="hidden text-xs text-muted-foreground sm:inline">{l?.reach ? 'Message it' : 'Conversation'}</span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+    </button>
+  )
+}
 
 function SetHero({ state, onTask, onDoc }: { state: State; onTask: (id: string) => void; onDoc: (d: Doc) => void }) {
   const cur = state.current!
@@ -136,11 +165,12 @@ function KeepAwake({ state }: { state: State }) {
   )
 }
 
-export function Overview({ state, goTab, onTask, onDoc }: {
+export function Overview({ state, goTab, onTask, onDoc, onAgent }: {
   state: State
   goTab: (t: Tab) => void
   onTask: (id: string) => void
   onDoc: (d: Doc) => void
+  onAgent: (id: string) => void
 }) {
   const q = state.queue.counts
   const d = state.defects.summary
@@ -190,14 +220,16 @@ export function Overview({ state, goTab, onTask, onDoc }: {
         />
       </div>
 
-      <Panel title={state.agents.length ? `Live agents · ${state.agents.length}` : 'Live agents'} icon={Bot}>
-        {state.agents.length ? (
-          <div className="flex flex-col gap-2">
-            {state.agents.map((a) => <AgentRow key={a.id} agent={a} onTask={onTask} />)}
-          </div>
-        ) : (
-          <p className="text-[12.5px] text-muted-foreground">No agents running.</p>
-        )}
+      <Panel
+        title={state.agents.length ? `Live agents · ${state.agents.length}` : 'Live agents'}
+        icon={Bot}
+        action={<button onClick={() => goTab('agents')} className="text-xs text-muted-foreground hover:text-foreground">Agents →</button>}
+      >
+        <div className="flex flex-col gap-2">
+          <LeadLine state={state} onOpen={() => onAgent('lead')} />
+          {state.agents.map((a) => <AgentRow key={a.id} agent={a} onTask={onTask} onOpen={() => onAgent(a.id)} />)}
+          {!state.agents.length && <p className="px-1 text-[12.5px] text-muted-foreground">No subagents running.</p>}
+        </div>
       </Panel>
 
       <TimingMini state={state} goTab={goTab} />

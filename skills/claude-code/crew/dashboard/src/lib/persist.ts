@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
-export const TABS = ['overview', 'tasks', 'timing', 'queue', 'defects', 'compactions', 'journal', 'sets'] as const
+export const TABS = ['overview', 'agents', 'tasks','timing', 'queue', 'defects', 'compactions', 'journal', 'sets'] as const
 export type Tab = (typeof TABS)[number]
 
 const KEY = 'crew-dashboard:scroll:'

@@ -23,6 +23,15 @@ function EventToast({ e, onOpen }: { e: JournalEntry; onOpen: () => void }) {
   )
 }
 
+// A short notice in the same place (the result of a page action).
+export function notify(text: string, error = false) {
+  toast.custom(() => (
+    <div className={`w-[min(calc(100vw-24px),400px)] rounded-xl border bg-popover/95 px-3 py-2 text-[12.5px] shadow-lg backdrop-blur-md ${error ? 'border-st-rework/50 text-st-rework' : 'text-popover-foreground'}`}>
+      {text}
+    </div>
+  ), { duration: error ? 10000 : 5000 })
+}
+
 export function EventToasts({ state, dark, goTab }: { state: State | null; dark: boolean; goTab: (t: Tab) => void }) {
   const seen = useRef<number | null>(null)
   const go = useRef(goTab)

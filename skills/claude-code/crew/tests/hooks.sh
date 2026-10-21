@@ -24,16 +24,24 @@ trap cleanup EXIT
 mkdir -p "$T/stubs"
 printf '#!/bin/bash\n# caffeinate stub\nsleep 120\n' > "$T/stubs/caffeinate"
 printf '#!/bin/sh\ncat "%s" 2>/dev/null\n' "$T/sysctl.out" > "$T/stubs/sysctl"
-chmod +x "$T/stubs/caffeinate" "$T/stubs/sysctl"
+# ps: names the process FAKE_PASEO_PID "Paseo Daemon" (Paseo runs Claude Code), else the real ps.
+cat > "$T/stubs/ps" <<'PS'
+#!/bin/sh
+if [ "$1 $2 $3" = "-o comm= -p" ] && [ -n "${FAKE_PASEO_PID:-}" ] && [ "$4" = "$FAKE_PASEO_PID" ]; then
+  echo '/Applications/Paseo.app/Contents/MacOS/Paseo Daemon'; exit 0
+fi
+exec /bin/ps "$@"
+PS
+chmod +x "$T/stubs/caffeinate" "$T/stubs/sysctl" "$T/stubs/ps"
 printf '24000000\n179643921385406 %s\n' $((24000000 * 5000)) > "$T/sysctl.out"   # awake: 5000 s
 export PATH="$T/stubs:$PATH"
 # Claude Code: a process whose command line says claude, standing in for the one the session runs in.
 claude_stub() { bash -c 'exec -a claude-stub sleep 600' & CREW_CLAUDE_PID=$!; export CREW_CLAUDE_PID; }
 claude_stub
-unset CREW_KEEP_AWAKE
+unset CREW_KEEP_AWAKE PASEO_AGENT_ID PASEO_CLI CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN
 export CREW_DASHBOARD=0
 command -v node >/dev/null 2>&1 || { printf 'tests/hooks.sh needs Node.js 20 or later\n' >&2; exit 1; }
-PASS=0; FAIL=0
+PASS=0; FAIL=0; TAB=$'\t'
 ok() { PASS=$((PASS + 1)); printf 'PASS  %s\n' "$1"; }
 ko() { FAIL=$((FAIL + 1)); printf 'FAIL  %s\n      %s\n' "$1" "${2:-}"; }
 check() {  # check NAME EXPECTED_SUBSTRING ACTUAL
@@ -104,6 +112,19 @@ J_BASE="\"session_id\":\"$SID\",\"transcript_path\":\"$MAIN\",\"cwd\":\"$P\",\"h
 out=$(hook session-start "{$J_BASE,\"source\":\"startup\",\"model\":\"claude-opus-5-5\",\"effort\":{\"level\":\"high\"}}")
 check "session-start is silent" "" "x$out"
 check "session-start records the lead model" "claude-opus-5-5 high" "$(cat "$P/.crew/tmp/journal-state/lead-model/$SID")"
+
+# ---- the lead's way in, for the dashboard's messages ----
+R="$P/.crew/tmp/journal-state/reach/$SID"
+check "reach: nothing to record outside Claude Code's inbox and Paseo" "missing" "$([ -e "$R" ] && echo present || echo missing)"
+CLAUDE_CODE_MESSAGING_SOCKET=/tmp/cc.sock CLAUDE_CODE_MESSAGING_TOKEN=tok1 PASEO_AGENT_ID=agent-1 PASEO_CLI=/opt/paseo \
+  "$CREW" session start "$SID" >/dev/null
+check "reach: socket and token; a Paseo id inherited by hand is not this session's" "/tmp/cc.sock${TAB}tok1${TAB}${TAB}" "$(cat "$R")"
+check "reach: only this user reads it" "-rw-------" "$(ls -l "$R")"
+FAKE_PASEO_PID=$$ CLAUDE_CODE_MESSAGING_SOCKET=/tmp/cc.sock CLAUDE_CODE_MESSAGING_TOKEN=tok2 PASEO_AGENT_ID=agent-1 PASEO_CLI=/opt/paseo \
+  hook lead-busy "{$J_BASE,\"prompt\":\"hi\"}" >/dev/null
+check "reach: Paseo's daemon runs it: its agent id and CLI" "/tmp/cc.sock${TAB}tok2${TAB}agent-1${TAB}/opt/paseo" "$(cat "$R")"
+"$CREW" session start "$SID" >/dev/null
+check "reach: a start without either keeps what was recorded" "agent-1" "$(cat "$R")"
 
 # ---- 1. lead compaction (nothing running) ----
 out=$(hook pre-compact "{$J_BASE,\"trigger\":\"auto\",\"custom_instructions\":\"\"}")

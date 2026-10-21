@@ -8,6 +8,7 @@
 //   buildState(root, { now }) -> the state the page renders (see the shape at the bottom).
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
@@ -1024,6 +1025,280 @@ export function projectIcon(root, now = Date.now()) {
 }
 
 // ---------------------------------------------------------------------------
+// The Agents tab: the lead's session, its way in, past agents, transcripts
+// ---------------------------------------------------------------------------
+
+// reach/<session> (bin/crew's note_reach): socket, token, Paseo agent id, Paseo CLI. The server
+// delivers with it; the page only learns which way exists, never the token.
+export function readReach(stateDir, sess) {
+  const t = read(path.join(stateDir, 'reach', sess));
+  if (!t) return null;
+  const [socket = '', token = '', paseo = '', paseoCli = ''] = t.replace(/\r?\n$/, '').split('\t');
+  return { socket, token, paseo, paseoCli };
+}
+
+// How a message reaches the session now: 'paseo' (Paseo runs it: a message as if typed there),
+// 'socket' (its inbox socket: Claude Code shows it to the lead as another session's message), or
+// null (no way known, or its Claude Code is gone).
+export function reachVia(r) {
+  if (!r) return null;
+  if (r.paseo && /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(r.paseo) && (r.paseoCli ? isFile(r.paseoCli) : onPath('paseo'))) return 'paseo';
+  if (r.socket && stat(r.socket)?.isSocket()) return 'socket';
+  return null;
+}
+
+// The lead's session: of the sessions `crew session start` registered (hooks also record
+// sessions that never ran the crew), the newest transcript whose Claude Code still runs, else
+// the newest transcript.
+export function leadSession(stateDir, sessions) {
+  const reg = listDir(path.join(stateDir, 'sessions')).filter((s) => s !== 'any' && sessions.transcriptOf.has(s));
+  if (!reg.length) return null;
+  const mtime = (s) => stat(sessions.transcriptOf.get(s))?.mtimeMs ?? 0;
+  const alive = (s) => (sessions.pids.has(s) ? sessions.alive.has(s) : sessions.live);
+  reg.sort((a, b) => Number(alive(b)) - Number(alive(a)) || mtime(b) - mtime(a));
+  return { session: reg[0], alive: alive(reg[0]), transcript: sessions.transcriptOf.get(reg[0]) };
+}
+
+// The lead's model and effort: as SessionStart recorded them (lead-model/<session>); else from
+// its Claude Code's command line (--model, --effort: how Paseo and the Agent SDK start it); else
+// the model of its newest reply in the transcript.
+export function leadModel(stateDir, ls, sessions) {
+  let [model = '', effort = ''] = trim(read(path.join(stateDir, 'lead-model', ls.session)) || '').split(/\s+/);
+  const pid = sessions.pids.get(ls.session);
+  if ((!model || !effort) && pid && ls.alive) {
+    const args = run('ps', ['-o', 'args=', '-p', String(pid)]);
+    model ||= /(?:^|\s)--model[= ](\S+)/.exec(args)?.[1] ?? '';
+    effort ||= /(?:^|\s)--effort[= ](\S+)/.exec(args)?.[1] ?? '';
+  }
+  // An alias ("opus") says less than the transcript's full id ("claude-opus-5-5").
+  if (!/^claude-/.test(model) && ls.transcript) {
+    const s = stat(ls.transcript);
+    if (s) {
+      let fd;
+      try {
+        fd = fs.openSync(ls.transcript, 'r');
+        const n = Math.min(s.size, 262144);
+        const buf = Buffer.alloc(n);
+        fs.readSync(fd, buf, 0, n, s.size - n);
+        model = [...buf.toString('utf8').matchAll(/"model":"(claude-[^"]+)"/g)].pop()?.[1] ?? model;
+      } catch { /* unreadable */ } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+      }
+    }
+  }
+  return { model, effort };
+}
+
+// The lead's permission mode now: the newest permissionMode its transcript records (Claude Code
+// writes it on the founder's messages); '' when none is found.
+export function permissionModeOf(transcript) {
+  const s = stat(transcript);
+  if (!s) return '';
+  let fd;
+  try {
+    fd = fs.openSync(transcript, 'r');
+    const n = Math.min(s.size, 1 << 20);
+    const buf = Buffer.alloc(n);
+    fs.readSync(fd, buf, 0, n, s.size - n);
+    return [...buf.toString('utf8').matchAll(/"permissionMode":"([A-Za-z]+)"/g)].pop()?.[1] ?? '';
+  } catch { return ''; } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+// Where the lead's context compacts: its model's autoCompactWindow in the settings files (the
+// project's local settings, the project's, the user's, in that order), else a top-level
+// autoCompactWindow, else the model's context size; compaction triggers about 33K below it.
+// (CLAUDE_CODE_AUTO_COMPACT_WINDOW in the session's environment is not visible from here.)
+export const COMPACT_MARGIN = 33000;
+export function compactWindow(root, model, home = os.homedir()) {
+  const files = [
+    path.join(root, '.claude', 'settings.local.json'), path.join(root, '.claude', 'settings.json'), path.join(home, '.claude', 'settings.json'),
+  ];
+  const keys = [...new Set([model, String(model).replace(/\[1m\]$/i, ''), modelAlias(model)].filter(Boolean))];
+  let top = 0;
+  for (const f of files) {
+    let j = null;
+    try { j = JSON.parse(read(f) || 'null'); } catch { /* not JSON: skip */ }
+    if (!j || typeof j !== 'object') continue;
+    const ms = j.modelSettings && typeof j.modelSettings === 'object' ? j.modelSettings : {};
+    // The exact id first, then any key for the same family ("haiku" ↔ "claude-haiku-5-5").
+    for (const k of [...keys, ...Object.keys(ms).filter((x) => modelAlias(x) && modelAlias(x) === modelAlias(model))]) {
+      const w = Number(ms[k]?.autoCompactWindow);
+      if (w > 0) return w;
+    }
+    if (!top && Number(j.autoCompactWindow) > 0) top = Number(j.autoCompactWindow);
+  }
+  return top || (/\[1m\]/i.test(model) ? 1000000 : 200000);
+}
+
+// Subagents that ran and are not running now, newest first: when their last run ended and how.
+function pastAgents(stateDir, runs, running, limit = 60) {
+  const last = new Map();
+  const count = new Map();
+  for (const r of runs) {
+    if (!r.id || running.has(r.id)) continue;
+    count.set(r.id, (count.get(r.id) || 0) + 1);
+    const p = last.get(r.id);
+    if (!p || r.end >= p.end) last.set(r.id, r);
+  }
+  const out = [];
+  for (const [id, r] of last) {
+    const a = loadAgent(stateDir, id);
+    out.push({
+      id, type: a?.type || r.type, name: a?.name || '', description: a?.description || '',
+      model: a?.model || 'default', effort: a?.effort || 'default',
+      started: a?.started || r.start, ended: r.end, runs: count.get(id), status: r.status,
+      taskNum: taskNum(a?.description || '') ?? (isInt(r.task) ? Number(r.task) : null),
+    });
+  }
+  return out.sort((a, b) => b.ended - a.ended).slice(0, limit);
+}
+
+// The transcript of the lead ('lead') or of a subagent (its id): the lead's from the session's
+// record; a subagent's under a recorded session's transcript (<session>/subagents/agent-<id>.jsonl).
+export function transcriptFile(stateDir, who, sessions) {
+  if (who === 'lead') return leadSession(stateDir, sessions)?.transcript ?? null;
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(who)) return null;
+  const own = trim(read(path.join(stateDir, 'running', who)) || '');
+  const tps = [sessions.transcriptOf.get(own), ...sessions.transcriptOf.values()].filter(Boolean);
+  for (const tp of tps) {
+    const f = path.join(tp.replace(/\.jsonl$/, ''), 'subagents', `agent-${who}.jsonl`);
+    if (isFile(f)) return f;
+  }
+  return null;
+}
+
+// A transcript's records as what the page shows: the founder's and peers' messages, the agent's
+// text, thinking and tool calls, tool results, compactions. Texts are capped; each assistant
+// entry carries the context size of its request (ctx), for the context meter.
+export const FOUNDER_TAG = 'From the founder, via the Crew dashboard:';
+const PEER_HEAD = 'Another Claude session sent a message:\n';
+const PEER_TAIL = '\n\nThis came from another Claude session';
+const cap = (s, n) => (s.length > n ? `${s.slice(0, n)}\n… (${s.length - n} more characters)` : s);
+
+function blockText(c) {
+  if (typeof c === 'string') return c;
+  if (!Array.isArray(c)) return '';
+  return c.map((b) => (b?.type === 'text' ? b.text : b?.type === 'image' ? '[image]' : '')).filter(Boolean).join('\n');
+}
+
+export function toolSummary(name, input) {
+  const i = input && typeof input === 'object' ? input : {};
+  const short = (s) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  switch (name) {
+    case 'Bash': return short(i.description || i.command);
+    case 'Read': case 'Write': case 'Edit': case 'NotebookEdit': return short(i.file_path || i.notebook_path);
+    case 'Grep': case 'Glob': return short(`${i.pattern ?? ''}${i.path ? ` in ${i.path}` : ''}`);
+    case 'Agent': case 'Task': return short(`${i.subagent_type ? `${i.subagent_type}: ` : ''}${i.description ?? ''}`);
+    case 'Skill': return short(`${i.skill ?? ''} ${i.args ?? ''}`);
+    case 'WebFetch': return short(i.url);
+    case 'WebSearch': return short(i.query);
+    case 'TodoWrite': return `${Array.isArray(i.todos) ? i.todos.length : 0} items`;
+    default: return Object.keys(i).length ? short(JSON.stringify(i)) : '';
+  }
+}
+
+export function transcriptEntries(text) {
+  const out = [];
+  for (const line of text.split('\n')) {
+    if (!line || line[0] !== '{') continue;
+    let r;
+    try { r = JSON.parse(line); } catch { continue; }
+    const ts = Math.floor((Date.parse(r.timestamp) || 0) / 1000);
+    const key = r.uuid || `${ts}-${out.length}`;
+    const m = r.message;
+    if (r.type === 'system' && r.subtype === 'compact_boundary') {
+      out.push({ kind: 'compact', key, ts, pre: num(r.compactMetadata?.preTokens) });
+      continue;
+    }
+    if (r.type === 'user' && m) {
+      const c = m.content;
+      const s = blockText(c);
+      if (r.origin?.kind === 'peer' || s.startsWith(PEER_HEAD)) {
+        let body = typeof r.origin?.body === 'string' ? r.origin.body : s.startsWith(PEER_HEAD) ? s.slice(PEER_HEAD.length) : s;
+        const tail = body.indexOf(PEER_TAIL);
+        if (tail >= 0) body = body.slice(0, tail);
+        body = body.replace(/^<cross-session-message\b[^>]*>\n?|\n?<\/cross-session-message>$/g, '').trim();
+        if (body.startsWith(FOUNDER_TAG)) out.push({ kind: 'user', key, ts, via: 'dashboard', text: cap(body.slice(FOUNDER_TAG.length).trim(), 20000) });
+        else out.push({ kind: 'peer', key, ts, text: cap(body, 20000) });
+        continue;
+      }
+      if (r.isCompactSummary) { out.push({ kind: 'summary', key, ts, text: cap(s, 20000) }); continue; }
+      if (Array.isArray(c)) {
+        c.forEach((b, i) => {
+          if (b?.type !== 'tool_result') return;
+          const t = typeof b.content === 'string' ? b.content : blockText(b.content);
+          out.push({ kind: 'result', key: `${key}:${i}`, ts, id: b.tool_use_id, error: Boolean(b.is_error), text: cap(t, 4000) });
+        });
+      }
+      if (r.isMeta || !s.trim()) continue;
+      // A slash command as typed; the command's own output and other harness lines are not shown.
+      const cmd = /<command-name>([^<]*)<\/command-name>/.exec(s);
+      if (cmd) {
+        const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(s)?.[1]?.trim();
+        out.push({ kind: 'user', key, ts, text: `${cmd[1].trim()}${args ? ` ${args}` : ''}` });
+        continue;
+      }
+      if (/^\s*<(local-command-|bash-|command-message|system-reminder|task-notification)/.test(s)) continue;
+      out.push({ kind: 'user', key, ts, text: cap(s, 20000) });
+      continue;
+    }
+    if (r.type === 'assistant' && m && Array.isArray(m.content)) {
+      const u = m.usage;
+      const ctx = u ? num(u.input_tokens) + num(u.cache_creation_input_tokens) + num(u.cache_read_input_tokens) : 0;
+      m.content.forEach((b, i) => {
+        const k = `${key}:${i}`;
+        if (b?.type === 'text' && b.text?.trim()) {
+          out.push({ kind: r.isApiErrorMessage ? 'error' : 'text', key: k, ts, ctx, text: cap(b.text, 20000) });
+        } else if (b?.type === 'thinking' && b.thinking?.trim()) {
+          out.push({ kind: 'thinking', key: k, ts, ctx, text: cap(b.thinking, 8000) });
+        } else if (b?.type === 'tool_use') {
+          let detail = '';
+          try { detail = JSON.stringify(b.input, null, 2); } catch { /* unprintable */ }
+          out.push({ kind: 'tool', key: k, ts, ctx, id: b.id, name: b.name, summary: toolSummary(b.name, b.input), detail: cap(detail, 4000) });
+        }
+      });
+    }
+  }
+  return out;
+}
+
+// Read whole lines of a transcript: new ones from `from` (to the end), or a chunk of at most
+// `max` bytes ending at `before` (default: the end), starting at a line. start/end are byte
+// offsets: ask for `before: start` to get older lines, `from: end` to get newer ones.
+export function readTranscript(file, { from = null, before = null, max = 1500000 } = {}) {
+  const s = stat(file);
+  if (!s) return null;
+  const size = s.size;
+  let start;
+  let end;
+  if (from != null) { start = Math.min(Math.max(0, from), size); end = size; } else { end = Math.min(before ?? size, size); start = Math.max(0, end - max); }
+  let fd;
+  let buf = Buffer.alloc(0);
+  try {
+    fd = fs.openSync(file, 'r');
+    buf = Buffer.alloc(end - start);
+    const n = fs.readSync(fd, buf, 0, end - start, start);
+    buf = buf.subarray(0, n);
+  } catch { return null; } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+  // A chunk that starts mid-file starts after its first newline; every chunk ends at its last.
+  let a = 0;
+  if (from == null && start > 0) {
+    const nl = buf.indexOf(10);
+    a = nl < 0 ? buf.length : nl + 1;
+  }
+  const last = buf.lastIndexOf(10);
+  const b = last < a ? a : last + 1;
+  return {
+    entries: transcriptEntries(buf.subarray(a, b).toString('utf8')),
+    start: start + a, end: start + b, size, more: start + a > 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The state
 // ---------------------------------------------------------------------------
 
@@ -1105,6 +1380,23 @@ export function buildState(rootIn, opts = {}) {
   const compactions = compactionsModel(stateDir);
   const ds = defectSummary(defects);
 
+  // The Agents tab: the lead (its model, where it compacts, whether the page can message it) and
+  // the subagents that are not running.
+  const taskIdOf = (tn) => (tn == null ? null : (current?.tasks.find((t) => t.num === tn)?.id ?? `T${String(tn).padStart(2, '0')}`));
+  const ls = leadSession(stateDir, sessions);
+  let leadInfo = null;
+  if (ls) {
+    const { model, effort } = leadModel(stateDir, ls, sessions);
+    const window = model ? compactWindow(root, model) : 0;
+    leadInfo = {
+      session: ls.session, alive: ls.alive, model, effort,
+      window, compactAt: window ? Math.max(0, window - COMPACT_MARGIN) : 0,
+      reach: ls.alive ? reachVia(readReach(stateDir, ls.session)) : null,
+    };
+  }
+  const past = pastAgents(stateDir, runs, new Set(agents.map((a) => a.id)))
+    .map(({ taskNum: tn, ...a }) => ({ ...a, task: taskIdOf(tn) }));
+
   const state = {
     version: MODEL_VERSION,
     generatedAt: now,
@@ -1112,7 +1404,8 @@ export function buildState(rootIn, opts = {}) {
     repo,
     lead,
     keepAwake: awake,
-    agents: agents.map(({ taskNum: tn, ...a }) => ({ ...a, task: tn == null ? null : (current?.tasks.find((t) => t.num === tn)?.id ?? `T${String(tn).padStart(2, '0')}`) })),
+    agents: agents.map(({ taskNum: tn, ...a }) => ({ ...a, task: taskIdOf(tn) })),
+    roster: { lead: leadInfo, past },
     current,
     sets: sets.map(({ rows, crewDir: _c, ...s }, i) => ({ ...s, current: i === cur }))
       .sort((a, b) => Number(b.current) - Number(a.current) || b.mtime - a.mtime),

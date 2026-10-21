@@ -192,13 +192,16 @@ A live page for following the crew, in a browser tab, a Paseo side panel or on y
 | Tab | What it shows |
 | --- | --- |
 | **Overview** | The current set's progress, the task in hand, the lead's state, running agents, questions waiting for you, requests, defects, the crew's time at work, and recent activity |
+| **Agents** | The lead, then the running subagents, then the finished ones, each with its conversation as it happens: what it was asked, what it said, its tool calls and their results. You can write to the lead from here, attach files, and see its model, effort and how full its context is |
 | **Tasks** | The dependency graph with the critical path highlighted; each task opens its spec, its agent runs and its screenshots |
 | **Timing** | Where the time went (agents, the lead alone, idle, asleep), a zoomable timeline of every agent run, build, review and rework per task, and time by role |
-| **Requests** | Your open questions first, then your requests: queued, scheduled, done and dropped |
-| **Defects** | Minor issues logged for later, when each is due, and a legend for every label |
+| **Requests** | Your open questions first, then your requests grouped by when they're due (now, after a task, at the end of the set), then the closed ones: done and dropped |
+| **Defects** | Minor issues logged for later, when each is due, and a legend for every label; each one opens its details, the tasks it touches and what the journal says about it |
 | **Compactions** | Every context compaction: size before and after, and its estimated cost and savings, to [tune the windows](#tuning-compaction-for-your-project) |
 | **Journal** | Everything the crew did, newest first, searchable |
 | **Sets** | Every set of tasks, including those in other worktrees |
+
+**Talking to the lead.** What you type in the Agents tab reaches the lead's session as your message, and the lead answers it there, so you can steer the crew from your phone. The lead's state in the header opens that conversation, and the arrow beside it stops, resumes or sets up the crew. In Paseo, the message arrives as if you typed it in Paseo. Elsewhere, it goes through Claude Code's messaging between sessions (Claude Code 2.1.224 or later), and the lead sees it as a message from another session that opens with *From the founder, via the Crew dashboard*. A rule that setup adds to your `CLAUDE.md` tells the lead it comes from you. If the session skips permission prompts, Claude Code holds messages from other sessions unless they say they run in the same permission mode, so the dashboard says so. In a project set up with an earlier Crew, run `/crew setup` once to enable messaging.
 
 **On your phone or tablet.** The address the lead gives you works from any device on the same Wi-Fi or Tailscale network, and the QR code button shows it as a code to scan. The address includes a private key for the project, so other people on the network can't read it. If the crew runs on a remote server, open the dashboard through an SSH tunnel, `ssh -N -L <port>:127.0.0.1:<port> <server>`, then `http://127.0.0.1:<port>/`, with no key.
 

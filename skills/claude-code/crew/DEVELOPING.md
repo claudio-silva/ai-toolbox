@@ -16,6 +16,7 @@ tests/skill-size.sh           # SKILL.md's body within 5,000 tokens
 tests/hooks.sh                # the crew script and the dashboard model, on fixtures
 node --test tests/            # the dashboard parsers and the live server
 tests/probe-reload.sh         # what a running Claude Code picks up without a restart (real sessions, ~5 cents)
+tests/probe-inbox.sh --bypass # how a session takes a message from outside, as the dashboard sends it (~2 cents)
 
 cd dashboard
 npm install
@@ -135,6 +136,7 @@ docs/CREW.md                 committed (project facts and deviations from the de
 | `tests/hooks.sh` | Fixture tests for the crew script and the dashboard model (hooks, compactions, requests, defects, timing, reminders); not installed |
 | `tests/dashboard.test.mjs` | Tests for the dashboard parsers and the live server; not installed |
 | `tests/probe-reload.sh` | Drives real Claude Code sessions to see which changes (hooks, agents, skills, `CLAUDE.md`) a running session picks up; rerun it when Claude Code changes how it loads them, and keep `commands/setup.md` step 12 in line with it; not installed |
+| `tests/probe-inbox.sh` | Drives a real Claude Code session and posts to its messaging socket the way the dashboard does (with the token, without it, in the `from-mode` envelope), to see which messages it takes, which it holds and how its transcript records them; rerun it when Claude Code changes cross-session messaging; not installed |
 | `bin/release` | Cuts a release: notes drafted by Haiku from the commits, `RELEASES.md`, a commit and a tag; not installed |
 | `aitools.json` | Install metadata: Claude Code only; leaves out `tests/`, `dashboard/`, `bin/`, `README.md`, this file and `.gitignore` (`npx skills` ignores it and installs everything; the extra files are inert) |
 | `LICENSE` | The Apache License 2.0; installed with the skill |

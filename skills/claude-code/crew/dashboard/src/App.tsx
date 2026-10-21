@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { LoaderCircle, TriangleAlert, WifiOff } from 'lucide-react'
 import { useLive } from '@/lib/live'
 import { useTab, useTheme, type Tab } from '@/lib/persist'
@@ -8,7 +8,9 @@ import { DocSheet, type Doc } from '@/components/DocSheet'
 import { EventToasts } from '@/components/EventToasts'
 import { ClockBase } from '@/lib/clock'
 import { capital } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import { Overview } from '@/tabs/Overview'
+import { Agents } from '@/tabs/Agents'
 import { Tasks } from '@/tabs/Tasks'
 import { Timing } from '@/tabs/Timing'
 import { Queue } from '@/tabs/Queue'
@@ -28,6 +30,8 @@ function useHeaderHeight() {
   }, [])
 }
 
+const AGENT_KEY = 'crew-dashboard:agent'
+
 export default function App() {
   const { state, conn, problem, changedAt } = useLive()
   const [theme, setTheme, dark] = useTheme()
@@ -35,6 +39,16 @@ export default function App() {
   const [taskId, setTaskId] = useState<string | null>(null)
   const [doc, setDoc] = useState<Doc | null>(null)
   useHeaderHeight()
+
+  // The agent shown in the Agents tab ('lead' or a subagent id), kept across reloads.
+  const [agent, setAgent] = useState<string>(() => {
+    try { return sessionStorage.getItem(AGENT_KEY) || 'lead' } catch { return 'lead' }
+  })
+  const pickAgent = useCallback((id: string) => {
+    setAgent(id)
+    try { sessionStorage.setItem(AGENT_KEY, id) } catch { /* private mode */ }
+  }, [])
+  const openAgent = useCallback((id: string) => { pickAgent(id); setTab('agents') }, [pickAgent, setTab])
 
   useEffect(() => {
     if (!state) return
@@ -46,6 +60,7 @@ export default function App() {
   const badges = useMemo(() => {
     const b: Partial<Record<Tab, { n: number | string; tone?: 'warn' | 'muted' }>> = {}
     if (!state) return b
+    if (state.agents.length) b.agents = { n: state.agents.length }
     if (state.current) b.tasks = { n: `${state.current.accepted}/${state.current.total}` }
     const q = state.queue.counts
     if (q.openQuestions) b.queue = { n: q.openQuestions, tone: 'warn' }
@@ -61,9 +76,9 @@ export default function App() {
   return (
     <ClockBase.Provider value={state?.generatedAt ?? Math.floor(Date.now() / 1000)}>
       <div className="min-h-dvh">
-        <Header state={state} conn={conn} changedAt={changedAt} theme={theme} setTheme={setTheme} tab={tab} setTab={setTab} badges={badges} />
+        <Header state={state} conn={conn} changedAt={changedAt} theme={theme} setTheme={setTheme} tab={tab} setTab={setTab} badges={badges} onLead={() => openAgent('lead')} />
 
-        <main className="mx-auto max-w-5xl px-3 pt-4 pb-10 sm:px-5">
+        <main className={cn('mx-auto max-w-5xl px-3 pt-4 sm:px-5', tab === 'agents' ? 'pb-3' : 'pb-10')}>
           {problem && (
             <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-st-rework/40 bg-st-rework/8 px-3.5 py-2.5 text-[12.5px]">
               <TriangleAlert className="mt-0.5 size-4 shrink-0 text-st-rework" />
@@ -87,7 +102,8 @@ export default function App() {
             </div>
           ) : (
             <div key={tab} className="animate-in fade-in-0 duration-200">
-              {tab === 'overview' && <Overview state={state} goTab={setTab} onTask={setTaskId} onDoc={setDoc} />}
+              {tab === 'overview' && <Overview state={state} goTab={setTab} onTask={setTaskId} onDoc={setDoc} onAgent={openAgent} />}
+              {tab === 'agents' && <Agents state={state} sel={agent} pick={pickAgent} onTask={setTaskId} />}
               {tab === 'tasks' && <Tasks state={state} onTask={setTaskId} onDoc={setDoc} />}
               {tab === 'timing' && <Timing state={state} dark={dark} onTask={setTaskId} goTab={setTab} />}
               {tab === 'queue' && <Queue state={state} />}

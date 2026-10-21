@@ -2,26 +2,15 @@
 // and the version beside the project's name. Both open the same panel: what's new, and how to
 // update.
 
-import { useMemo, useState } from 'react'
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
+import { useState } from 'react'
 import { ArrowUpCircle, RefreshCw } from 'lucide-react'
 import type { UpdateInfo } from '@/lib/types'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Mono } from '@/components/bits'
 import { CopyButton } from './Share'
+import { MdText } from './MdText'
 import { span } from '@/lib/format'
 import { cn } from '@/lib/utils'
-
-function Notes({ text }: { text: string }) {
-  const html = useMemo(() => {
-    const raw = marked.parse(text, { gfm: true, async: false }) as string
-    const doc = new DOMParser().parseFromString(DOMPurify.sanitize(raw), 'text/html')
-    doc.querySelectorAll('a[href]').forEach((a) => { a.setAttribute('target', '_blank'); a.setAttribute('rel', 'noreferrer') })
-    return doc.body.innerHTML
-  }, [text])
-  return <div className="prose-crew prose-tight" dangerouslySetInnerHTML={{ __html: html }} />
-}
 
 function Heading({ children }: { children: string }) {
   return <h4 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{children}</h4>
@@ -65,7 +54,7 @@ function UpdatePanel({ u }: { u: UpdateInfo }) {
               {u.releases.map((r) => (
                 <div key={r.version}>
                   <div className="text-[12.5px] font-semibold">{r.version} <span className="font-normal text-muted-foreground">· {r.date}</span></div>
-                  <Notes text={r.body} />
+                  <MdText text={r.body} />
                 </div>
               ))}
             </div>

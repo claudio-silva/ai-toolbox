@@ -41,6 +41,7 @@
 //     pages reconnect by themselves.
 
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -62,7 +63,10 @@ if (major < 20) {
   process.exit(1);
 }
 
-const { buildState, allowedDirs, parseReleases, compareVersions } = await import('./model.mjs');
+const {
+  buildState, allowedDirs, parseReleases, compareVersions,
+  claudeSessions, leadSession, readReach, reachVia, transcriptFile, readTranscript, permissionModeOf, FOUNDER_TAG, safeName,
+} = await import('./model.mjs');
 
 // ---------------------------------------------------------------------------
 // Arguments, paths
@@ -334,6 +338,117 @@ function cmdState() {
 }
 
 // ---------------------------------------------------------------------------
+// Messages to the lead (the Agents tab, the header's session menu)
+// ---------------------------------------------------------------------------
+//
+// bin/crew records each session's way in (tmp/journal-state/reach/<session>). In Paseo, `paseo
+// send` puts the message in the session as if the founder typed it in Paseo. Elsewhere, Claude
+// Code's cross-session inbox (2.1.224+): one connection to the session's socket, an auth line
+// with the session's token (without it, a session that skips permission prompts holds the
+// message), then the message; Claude Code starts a turn when the lead is idle and shows it
+// between tool calls when it is busy, as a message from another session. FOUNDER_TAG opens it,
+// and the CLAUDE.md block tells the lead that such a message is the founder's.
+//   A session that runs without permission prompts holds a peer message unless its sender says
+// it runs in the same permission class: the message is wrapped in Claude Code's own envelope,
+// <cross-session-message from-mode="bypass|prompting">, with the lead's class as its transcript
+// records it (the founder's own choice for that session). Without one, nothing is claimed.
+
+const STATE_DIR = path.join(TMP, 'journal-state');
+const ATTACH = path.join(TMP, 'attachments');
+const MESSAGE_MAX = 100000;
+const UPLOAD_MAX = 25 * 1024 * 1024;
+
+class Refused extends Error {
+  constructor(code, message) { super(message); this.code = code; }
+}
+
+function readBody(req, max) {
+  return new Promise((resolve, reject) => {
+    const parts = [];
+    let n = 0;
+    req.on('data', (c) => {
+      n += c.length;
+      if (n > max) { reject(new Refused(413, `Too large (at most ${Math.round(max / 1024)} KB).`)); req.destroy(); return; }
+      parts.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(parts)));
+    req.on('error', reject);
+  });
+}
+
+function envelope(text, mode) {
+  const body = text.replace(/<\/?\s*cross-session-message/gi, '‹cross-session-message');
+  if (!mode) return body;
+  const cls = mode === 'bypassPermissions' ? 'bypass' : 'prompting';
+  return `<cross-session-message from-mode="${cls}">\n${body}\n</cross-session-message>`;
+}
+
+function postToSocket(socket, token, text) {
+  return new Promise((resolve, reject) => {
+    const c = net.createConnection(socket, () => {
+      if (token) c.write(JSON.stringify({ type: 'auth', token }) + '\n');
+      c.end(JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n');
+    });
+    c.setTimeout(5000, () => c.destroy(new Error('the session did not take the message')));
+    c.on('error', reject);
+    c.on('close', (failed) => { if (!failed) resolve(); });
+  });
+}
+
+function paseoSend(cli, id, text) {
+  return new Promise((resolve, reject) => {
+    const file = path.join(os.tmpdir(), `crew-message-${process.pid}-${Date.now()}.txt`);
+    fs.writeFileSync(file, text, { mode: 0o600 });
+    const p = spawn(cli || 'paseo', ['send', id, '--prompt-file', file, '--no-wait'], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 20000 });
+    let err = '';
+    p.stderr.on('data', (d) => { err += d; });
+    p.on('error', (e) => { fs.rmSync(file, { force: true }); reject(e); });
+    p.on('close', (code) => {
+      fs.rmSync(file, { force: true });
+      if (code === 0) resolve(); else reject(new Error(err.trim().split('\n').pop() || `paseo exited with ${code}`));
+    });
+  });
+}
+
+// Deliver the founder's text (and the paths of files they attached) to the lead's session.
+async function messageLead(text, files = []) {
+  const sessions = claudeSessions(STATE_DIR);
+  const ls = leadSession(STATE_DIR, sessions);
+  if (!ls) throw new Refused(409, 'No crew session yet: run /crew in Claude Code first.');
+  if (!ls.alive) throw new Refused(409, "The crew's Claude Code session is closed.");
+  const r = readReach(STATE_DIR, ls.session);
+  const via = reachVia(r);
+  if (!via) {
+    throw new Refused(409, 'This session has not recorded a way in yet. Send it any message where it runs, or run /crew resume there; '
+      + 'outside Paseo it needs Claude Code 2.1.224 or later.');
+  }
+  // Attachments by absolute path: the lead may be working in a worktree.
+  const paths = files.map((f) => path.resolve(ROOT, String(f)));
+  if (paths.some((f) => !inside(f, ATTACH) || !fs.existsSync(f))) throw new Refused(400, 'An attached file is missing; attach it again.');
+  const attached = paths.length ? `\n\nAttached files:\n${paths.map((f) => `- ${f}`).join('\n')}` : '';
+  const body = `${text}${attached}`;
+  try {
+    if (via === 'paseo') await paseoSend(r.paseoCli, r.paseo, body);
+    else await postToSocket(r.socket, r.token, envelope(`${FOUNDER_TAG}\n\n${body}`, permissionModeOf(ls.transcript)));
+  } catch (e) {
+    throw new Refused(502, `Could not deliver the message: ${e?.message || e}`);
+  }
+  return { ok: true, via, session: ls.session };
+}
+
+// An attached file, kept under .crew/tmp/attachments/ (gitignored) for the lead to read.
+function saveAttachment(name, data) {
+  const base = safeName(path.basename(String(name || 'file'))).slice(-80);
+  const d = new Date();
+  const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${String(d.getSeconds()).padStart(2, '0')}`;
+  fs.mkdirSync(ATTACH, { recursive: true });
+  let file = path.join(ATTACH, `${stamp}-${base}`);
+  for (let i = 2; fs.existsSync(file); i++) file = path.join(ATTACH, `${stamp}-${i}-${base}`);
+  fs.writeFileSync(file, data);
+  return path.relative(ROOT, file).split(path.sep).join('/');
+}
+
+// ---------------------------------------------------------------------------
 // The server
 // ---------------------------------------------------------------------------
 
@@ -394,6 +509,7 @@ function sameKey(a, b) {
 
 async function cmdServe() {
   const clients = new Set();
+  const tails = new Set(); // transcript streams
   let stateJson = '';
   let compareJson = '';
   let current = null;
@@ -585,6 +701,25 @@ async function cmdServe() {
       runCheck(true).then(() => send(res, 200, 'application/json', JSON.stringify(updateView(false))));
       return;
     }
+    if (req.method === 'POST' && (u.pathname === '/api/lead/message' || u.pathname === '/api/lead/attach')) {
+      // The founder writing to the lead. Same guard as above: other sites' pages cannot send it.
+      if (req.headers['x-crew'] !== '1') { send(res, 403, 'text/plain', 'Forbidden'); return; }
+      const json = (code, o) => send(res, code, 'application/json; charset=utf-8', JSON.stringify(o));
+      const fail = (e) => json(e instanceof Refused ? e.code : 500, { ok: false, error: String(e?.message || e) });
+      if (u.pathname === '/api/lead/attach') {
+        readBody(req, UPLOAD_MAX).then((data) => json(200, { ok: true, path: saveAttachment(u.searchParams.get('name'), data) })).catch(fail);
+        return;
+      }
+      readBody(req, MESSAGE_MAX).then((data) => {
+        let m;
+        try { m = JSON.parse(data.toString('utf8')); } catch { throw new Refused(400, 'Not JSON.'); }
+        const text = String(m?.text ?? '').trim();
+        const files = Array.isArray(m?.files) ? m.files.map(String) : [];
+        if (!text && !files.length) throw new Refused(400, 'Nothing to send.');
+        return messageLead(text, files);
+      }).then((r) => { log(`message to the lead (${r.via})`); json(200, r); }).catch(fail);
+      return;
+    }
     if (req.method !== 'GET' && req.method !== 'HEAD') { send(res, 405, 'text/plain', 'Method not allowed'); return; }
     if (u.pathname === '/api/ping') {
       send(res, 200, 'application/json', JSON.stringify({ app: APP_ID, root: ROOT, pid: process.pid, version: SERVER_VERSION }));
@@ -613,6 +748,39 @@ async function cmdServe() {
       res.write(`event: state\ndata: ${stateJson}\n\n`);
       clients.add(res);
       req.on('close', () => clients.delete(res));
+      return;
+    }
+    if (u.pathname === '/api/transcript' || u.pathname === '/api/transcript/stream') {
+      // An agent's transcript ('lead' or a subagent id), only from the transcripts bin/crew recorded.
+      const file = transcriptFile(STATE_DIR, u.searchParams.get('agent') || '', claudeSessions(STATE_DIR));
+      const at = (k) => (/^\d+$/.test(u.searchParams.get(k) || '') ? Number(u.searchParams.get(k)) : null);
+      if (!file) { send(res, 404, 'application/json', JSON.stringify({ error: 'No transcript for this agent.' })); return; }
+      if (u.pathname === '/api/transcript') {
+        const t = readTranscript(file, { before: at('before') });
+        if (!t) { send(res, 404, 'application/json', JSON.stringify({ error: 'The transcript cannot be read.' })); return; }
+        send(res, 200, 'application/json; charset=utf-8', JSON.stringify(t));
+        return;
+      }
+      // Lines added from `from` on, as they are written.
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive', 'X-Accel-Buffering': 'no',
+      });
+      res.write('retry: 2000\n\n');
+      let pos = at('from') ?? 0;
+      const pump = () => {
+        const size = fs.statSync(file, { throwIfNoEntry: false })?.size ?? 0;
+        if (size < pos) { res.write('event: reset\ndata: {}\n\n'); pos = size; return; }
+        if (size === pos) return;
+        const t = readTranscript(file, { from: pos });
+        if (!t || t.end === pos) return;
+        pos = t.end;
+        res.write(`event: entries\ndata: ${JSON.stringify({ entries: t.entries, end: t.end })}\n\n`);
+      };
+      pump();
+      fs.watchFile(file, { interval: 500 }, pump);
+      tails.add(res);
+      req.on('close', () => { fs.unwatchFile(file, pump); tails.delete(res); });
       return;
     }
     if (u.pathname === '/api/icon') {
@@ -644,7 +812,7 @@ async function cmdServe() {
   server.keepAliveTimeout = 5000;
 
   // Keep idle connections open through anything in between (a comment line, ignored by pages).
-  const heartbeat = setInterval(() => { for (const res of clients) res.write(': hb\n\n'); }, 30000);
+  const heartbeat = setInterval(() => { for (const res of [...clients, ...tails]) res.write(': hb\n\n'); }, 30000);
 
   let closing = false;
   function shutdown(then) {
@@ -654,7 +822,7 @@ async function cmdServe() {
     clearInterval(updateTimer);
     clearTimeout(tick);
     for (const w of watchers.values()) w.close();
-    for (const res of clients) res.end();
+    for (const res of [...clients, ...tails]) res.end();
     const info = readInfo();
     if (info && info.pid === process.pid) { try { fs.unlinkSync(INFO); } catch { /* gone */ } }
     server.close(() => { if (then) then(); process.exit(0); });

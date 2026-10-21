@@ -9,6 +9,7 @@ import type { Tab, Theme } from '@/lib/persist'
 import { useClockBase } from '@/lib/clock'
 import { capital } from '@/lib/format'
 import { Duration } from './Duration'
+import { ShareButton } from './Share'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -24,27 +25,38 @@ export const TAB_META: Record<Tab, { label: string; icon: LucideIcon }> = {
   sets: { label: 'Sets', icon: Layers },
 }
 
-function LeadPill({ state }: { state: State }) {
+// The lead's state, in two short lines beside the project's name: what it is doing, then the
+// detail (agents, since when, how long).
+function LeadStatus({ state }: { state: State }) {
   const base = useClockBase()
   const { lead, agents } = state
   const n = agents.length
+  const nAgents = `${n} agent${n === 1 ? '' : 's'}`
   let icon: LucideIcon = Pause
-  let text = 'Waiting for you'
+  let head = 'Waiting for you'
   let tone = 'bg-st-progress/14 text-st-progress ring-st-progress/30'
   let pulse = false
+  let detail = ''
   if (lead.state === 'working') {
-    icon = Play; text = 'Lead working'; tone = 'bg-primary/12 text-primary ring-primary/30'; pulse = true
+    icon = Play; head = 'Lead working'; tone = 'bg-primary/12 text-primary ring-primary/30'; pulse = true
+    if (n > 0) detail = nAgents
   } else if (lead.state === 'agents') {
-    icon = Bot; text = `${n} agent${n === 1 ? '' : 's'} working · lead idle`; tone = 'bg-st-review/13 text-st-review ring-st-review/30'; pulse = true
+    icon = Bot; head = `${nAgents} working`; tone = 'bg-st-review/13 text-st-review ring-st-review/30'; pulse = true; detail = 'lead idle'
   } else if (lead.state === 'stopped') {
-    icon = Square; text = 'Stopped by you'; tone = 'bg-muted text-muted-foreground ring-border'
+    icon = Square; head = 'Stopped by you'; tone = 'bg-muted text-muted-foreground ring-border'
+    if (n > 0) detail = `${n} finishing`
   } else if (lead.state === 'closed') {
-    icon = PowerOff; text = 'Claude Code closed'; tone = 'bg-muted text-muted-foreground ring-border'
+    icon = PowerOff; head = 'Claude Code closed'; tone = 'bg-muted text-muted-foreground ring-border'
   }
+  const since = lead.since && lead.state !== 'agents' ? `since ${lead.since}` : ''
+  // Working: how long, ticking, first; the start time is in the title.
+  const live = lead.state === 'working' && lead.sinceEpoch != null
   const Icon = icon
-  const extra = lead.state === 'stopped' && n > 0 ? ` · ${n} finishing` : lead.state === 'working' && n > 0 ? ` · ${n} agent${n === 1 ? '' : 's'}` : ''
   return (
-    <span className={cn('inline-flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset', tone)}>
+    <div
+      title={[head, since, detail].filter(Boolean).join(' · ')}
+      className={cn('flex max-w-full min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-1 ring-1 ring-inset sm:px-2', tone)}
+    >
       {pulse ? (
         <span className="relative flex size-2 shrink-0">
           <span className="absolute inline-flex size-full animate-ping rounded-full bg-current opacity-50" />
@@ -53,16 +65,17 @@ function LeadPill({ state }: { state: State }) {
       ) : (
         <Icon className="size-3.5 shrink-0" strokeWidth={2.5} />
       )}
-      <span className="truncate">
-        {text}{extra}
-        {lead.since && lead.state !== 'agents' && (
-          <span className="font-normal opacity-75">
-            {' '}· since {lead.since}
-            {lead.state === 'working' && lead.sinceEpoch != null && <> (<Duration secs={Math.max(0, base - lead.sinceEpoch)} live />)</>}
+      <div className="flex min-w-0 flex-col leading-tight">
+        <span className="truncate text-[11.5px] font-medium sm:text-[12px]">{head}</span>
+        {live ? (
+          <span className="truncate text-[11px] opacity-75">
+            for <Duration secs={Math.max(0, base - lead.sinceEpoch!)} live />{detail && ` · ${detail}`}
           </span>
+        ) : (detail || since) && (
+          <span className="truncate text-[11px] opacity-75">{[since, detail].filter(Boolean).join(' · ')}</span>
         )}
-      </span>
-    </span>
+      </div>
+    </div>
   )
 }
 
@@ -72,7 +85,7 @@ function ConnDot({ conn, changedAt }: { conn: Conn; changedAt: number }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5 rounded-full px-1.5 py-1 text-[11px] text-muted-foreground sm:px-2">
           <span className={cn('size-2 rounded-full', cls, conn !== 'live' && 'crew-pulse')} />
           <span className="hidden sm:inline">{label}</span>
         </span>
@@ -143,7 +156,7 @@ function ThemeToggle({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) =
     <button
       onClick={() => setTheme(next)}
       title={`Theme: ${theme} (click for ${next})`}
-      className="grid size-8 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      className="grid size-7 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:size-8"
     >
       <Icon className="size-4" />
     </button>
@@ -276,12 +289,12 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
   return (
     <header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
       <div className="mx-auto flex max-w-5xl flex-col gap-2 px-3 pt-2.5 sm:px-5">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-1.5 sm:gap-3">
           <Logo state={state} />
-          <div className="flex min-w-0 flex-1 flex-col leading-tight">
+          <div className="flex min-w-0 flex-col leading-tight">
             <div className="flex items-baseline gap-1.5">
               <span className="truncate text-[15px] font-semibold tracking-tight">{state ? capital(state.repo.name) : 'Crew'}</span>
-              <span className="text-[11px] font-medium text-muted-foreground">crew</span>
+              <span className="hidden text-[11px] font-medium text-muted-foreground sm:inline">crew</span>
             </div>
             {state && (
               <span className="flex items-center gap-1 truncate text-[11px] text-muted-foreground">
@@ -291,10 +304,13 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
               </span>
             )}
           </div>
-          <ConnDot conn={conn} changedAt={changedAt} />
-          <ThemeToggle theme={theme} setTheme={setTheme} />
+          <div className="flex min-w-[7.5rem] flex-1">{state && <LeadStatus state={state} />}</div>
+          <div className="flex shrink-0 items-center">
+            <ShareButton />
+            <ConnDot conn={conn} changedAt={changedAt} />
+            <ThemeToggle theme={theme} setTheme={setTheme} />
+          </div>
         </div>
-        {state && <div className="flex min-w-0"><LeadPill state={state} /></div>}
         <TabStrip tab={tab} setTab={setTab} badges={badges} />
       </div>
     </header>

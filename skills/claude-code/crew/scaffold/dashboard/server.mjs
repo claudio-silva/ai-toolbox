@@ -464,6 +464,13 @@ async function cmdServe() {
       send(res, 200, 'application/json', JSON.stringify({ app: APP_ID, root: ROOT, pid: process.pid, version: SERVER_VERSION }));
       return;
     }
+    if (u.pathname === '/api/share') {
+      // For the page's QR code: this computer's address on the network, worked out now, and the key.
+      const address = LAN ? lanAddress() : '';
+      const url = address ? `http://${address}:${port}/?key=${key}` : null;
+      send(res, 200, 'application/json', JSON.stringify({ url, local: urlFor(port), lan: LAN, address, port }));
+      return;
+    }
     if (u.pathname === '/api/state') {
       if (!stateJson) recompute();
       send(res, 200, 'application/json; charset=utf-8', stateJson);

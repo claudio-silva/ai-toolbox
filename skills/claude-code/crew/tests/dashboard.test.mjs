@@ -249,6 +249,11 @@ test('server: pushes the new state when a crew file changes; guards Host, key an
   // Another device: the printed URL carries this computer's address and the key.
   const printed = spawnSync(process.execPath, [path.join(DASH, 'server.mjs'), 'url', '--root', root], { encoding: 'utf8' }).stdout.trim();
   const addr = /^http:\/\/([\d.]+):(\d+)\/\?key=(.+)$/.exec(printed);
+  // The page's QR code asks the same, behind the same guard.
+  const share = JSON.parse((await get(`${url}api/share`)).body);
+  assert.deepEqual([share.lan, share.port, share.local], [true, port, url]);
+  assert.equal(share.url, addr ? printed : null);
+  assert.equal((await get(`${url}api/share`, { Host: 'evil.example:80' })).status, 403);
   if (addr && addr[1] !== '127.0.0.1') {
     assert.deepEqual([addr[2], addr[3]], [String(port), key]);
     const lan = `http://${addr[1]}:${port}/`;

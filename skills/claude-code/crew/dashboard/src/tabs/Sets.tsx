@@ -3,10 +3,12 @@ import type { State } from '@/lib/types'
 import { pct, when } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Chip, Empty, Inline, Mono, Note, StatusBar, StatusLegend } from '@/components/bits'
+import { LEAD_STATE } from '@/lib/lead'
 import type { Doc } from '@/components/DocSheet'
 
 export function Sets({ state, onDoc }: { state: State; onDoc: (d: Doc) => void }) {
   const sets = state.sets
+  const lead = (session: string | null) => state.roster.leads.find((l) => l.session === session)
   if (!sets.length) {
     return <Empty icon={Layers} title="No task sets yet">Each planned set of tasks lives in its own folder under <Mono>.crew/tasks/</Mono>.</Empty>
   }
@@ -31,6 +33,7 @@ export function Sets({ state, onDoc }: { state: State; onDoc: (d: Doc) => void }
                   <span className="rounded-full bg-st-progress/14 px-2 py-0.5 text-[10.5px] font-medium text-st-progress">open</span>
                 ) : null}
                 {s.where && <Chip className="py-0 text-[10.5px]"><FolderGit2 className="size-3" />{s.where}</Chip>}
+                {lead(s.lead) && <Chip className="py-0 text-[10.5px]"><span className={cn('size-1.5 rounded-full', LEAD_STATE[lead(s.lead)!.state.state].dot)} />lead: {LEAD_STATE[lead(s.lead)!.state.state].label.toLowerCase()}</Chip>}
               </div>
               <div className="mt-1 text-[13.5px] leading-snug font-semibold">{s.title}</div>
               {s.stage && <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground"><Inline text={s.stage} /></div>}
@@ -47,7 +50,7 @@ export function Sets({ state, onDoc }: { state: State; onDoc: (d: Doc) => void }
           </div>
         </button>
       ))}
-      <Note>The current set first, then the most recently changed. A set that also exists in a worktree shows once, from the main checkout.</Note>
+      <Note>The current set first, then the other open ones, then the most recently changed. A set that also exists in another checkout shows once: from the checkout where it is open, else the main one.</Note>
     </div>
   )
 }

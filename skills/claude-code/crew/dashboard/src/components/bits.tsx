@@ -146,6 +146,11 @@ export function Chip({ children, className, title }: { children: ReactNode; clas
   )
 }
 
+// Where a request, question or defect is kept: its task set's files, or the project's backlog.
+export function PlaceChip({ place }: { place: string }) {
+  return <Chip className={cn('py-0 text-[10.5px]', place === 'backlog' && 'border-dashed')}>{place}</Chip>
+}
+
 export function Dot({ className, pulse }: { className?: string; pulse?: boolean }) {
   return <span className={cn('inline-block size-2 shrink-0 rounded-full', pulse && 'crew-pulse', className)} />
 }

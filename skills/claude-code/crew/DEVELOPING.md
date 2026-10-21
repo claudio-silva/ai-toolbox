@@ -63,7 +63,7 @@ Crew is written to stand alone: its README, license, release notes, tests and re
 - **Advisor** — a read-only second opinion from Fable at fixed triggers (vision, roadmap, milestone plans, costly-to-reverse decisions)
 - **Briefs and reports** — templates for task dispatch, review, final review, debug escalation, QA, planning and advisor briefs, plus the milestone report
 - **Quality** — tests that matter over test counts, QC checkpoints, and a screenshot review rubric
-- **Deferred defects** — reviewers and QA mark each finding leaf or load-bearing; a first review is complete and re-reviews check only the fixes; leaf findings go to `.crew/defects.md` instead of another review round, briefs list them so agents don't chase them, one that bites other work is promoted, and the set's defects are fixed before its final review
+- **Deferred defects** — reviewers and QA mark each finding leaf or load-bearing; a first review is complete and re-reviews check only the fixes; leaf findings go to the set's `defects.md` instead of another review round, briefs list them so agents don't chase them, one that bites other work is promoted, and the set's defects are fixed before its final review
 - **Git and worktree discipline** — a branch per task set, a commit per accepted task, a local merge at set close, and parallel builders in worktrees with a lifecycle that prepares each worktree (`.crew/worktree/setup.sh`) and keeps its task data when it is removed
 - **Journal and dashboard** — hooks log every subagent start, resume, finish and compaction to `.crew/journal.md`; the dashboard reads the crew's files and pushes a fresh state to the page whenever one changes
 - **Keep awake** — `crew session start` holds a `caffeinate` assertion tied to the Claude Code process (macOS), so an unattended run doesn't stall on idle sleep; sleep that happens anyway is journaled and left out of the timing
@@ -89,11 +89,11 @@ docs/CREW.md                 committed (project facts and deviations from the de
 .crew/bin/crew               committed (the crew script)
 .crew/templates/*.md         committed (task spec and index templates)
 .crew/worktree/*.sh          committed (the project's worktree setup and teardown)
-.crew/queue.md               committed (founder requests and questions)
-.crew/defects.md             committed (deferred defects)
-.crew/handoff.md             committed (written by /crew handoff)
+.crew/queue.md               committed (the backlog of founder requests and questions)
+.crew/defects.md             committed (the backlog of deferred defects)
+.crew/handoff.md             committed (written by /crew handoff when no set is open)
 .crew/plans/<slug>.md        committed
-.crew/tasks/<slug>/          committed (index.md and NN-<slug>.md specs)
+.crew/tasks/<slug>/          committed (index.md, NN-<slug>.md specs, and the set's queue.md, defects.md, handoff.md)
 .crew/journal.md             gitignored (history, for the founder)
 .crew/dashboard/             gitignored (the dashboard server, page and RELEASES.md, installed by /crew setup)
 .crew/task-data/<id>/        gitignored (screenshots/, reports/, logs/ per task)
@@ -107,13 +107,13 @@ docs/CREW.md                 committed (project facts and deviations from the de
 | --- | --- |
 | `SKILL.md` | The lead's core: commands, session start, the work loop, roles, routing, lifecycle, briefs, quality, context, journal, and the Read-when table |
 | `commands/setup.md` | `/crew setup`: prerequisites, scaffold, `.gitignore`, settings and hooks, agents, `CREW.md`, verification |
-| `commands/handoff.md` | `/crew handoff`: wait for running work, write `.crew/handoff.md` |
+| `commands/handoff.md` | `/crew handoff`: wait for running work, write the set's handoff |
 | `commands/resume.md` | `/crew resume`: read the handoff, check HEAD, continue (after a handoff or after `/crew stop`) |
 | `commands/stop.md` | `/crew stop`: stop every running subagent safely, record where things are, report |
 | `reference/founder.md` | The three tiers, batched questions and default-taking, the question timeout, milestones |
 | `reference/requests.md` | Handling founder messages during work: classify, assess, route, acknowledge; the queue; draining |
 | `reference/planning.md` | From idea, brainstorm or PRD to a confirmed plan; framework selection; what a crew plan must answer |
-| `reference/execution.md` | Running a task set: branches and commits, the serial loop, parallel worktrees, closing, reorient |
+| `reference/execution.md` | Running a task set: branches and commits, the serial loop, parallel worktrees, closing, several leads, reorient |
 | `reference/briefs.md` | Brief and report templates |
 | `reference/roles.md` | Role cards, the model facts snapshot behind each choice, and how to refresh it |
 | `reference/testing.md` | Testing policy, QC checkpoints, screenshot review rubric |

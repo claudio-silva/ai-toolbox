@@ -35,11 +35,11 @@ A 1M window is therefore a safety margin, not a target. Long memory belongs in *
 | Crew rules and project facts for agents | `docs/CREW.md` |
 | Durable role know-how | `.claude/agent-memory/<agent>/MEMORY.md` (`memory: project`) |
 | Cross-project facts about the user | the harness's user memory |
-| Founder requests and questions | `.crew/queue.md` (committed) |
-| Deferred defects (leaf findings from reviews and QA) | `.crew/defects.md` (committed) |
+| Founder requests and questions | the task set's `queue.md`; the backlog, `.crew/queue.md` (committed) |
+| Deferred defects (leaf findings from reviews and QA) | the task set's `defects.md`; the backlog, `.crew/defects.md` (committed) |
 | Plans | `.crew/plans/<slug>.md` (committed), unless `CREW.md` names another location |
 | Task statuses, specs and Facts for a task set | `.crew/tasks/<slug>/index.md` and `NN-<slug>.md` (committed) |
-| Where the last session stopped | `.crew/handoff.md` (committed with the next task) |
+| Where the last session stopped | the task set's `handoff.md`, else `.crew/handoff.md` (committed with the next task); `crew where` names it |
 | Evidence per task: screenshots, reports over the cap, logs | `.crew/task-data/<id>/` (gitignored, never deleted by crew) |
 | Development history and the founder's dashboard | `.crew/journal.md`, and the web page served by `.crew/dashboard/` (gitignored; for the founder; never read by the lead) |
 | Scratch: lock, hook state, agent runs and sleep for the dashboard's Timing tab | `.crew/tmp/` (gitignored) |
@@ -52,7 +52,7 @@ Compaction replaces the conversation with a summary. Claude Code then re-injects
 
 Crew relies on five layers, in this order:
 
-1. **State in files.** The state file, the plan, the index, the specs and `.crew/queue.md` hold everything that must survive. If losing context now would lose a decision, write it down now.
+1. **State in files.** The state file, the plan, the index, the specs and the queue hold everything that must survive. If losing context now would lose a decision, write it down now.
 2. **`CLAUDE.md`.** `/crew setup` writes a short crew block there (the pointer to `CREW.md`, the request rule, where state lives). It is re-injected after every compaction, for the lead and for subagents, and costs a few hundred tokens per session.
 3. **`SKILL.md` carries every rule you must never lose.** Claude Code re-attaches the skill's body after a compaction, so a rule written there survives whether or not a hook fires and whether or not a reminder is followed. Anything you must apply unprompted (every founder message, every delegation, every returned report, every step of the work loop) belongs in `SKILL.md`; everything needed only at a trigger stays in the reference file the Read-when table names. The body stays within the 5,000 tokens that are re-attached, with its sections in order of importance. If the skill's rules are no longer in your context, invoke the `crew` skill again.
 4. **The compaction hooks.** `PreCompact` appends crew's instructions to the summarizer (keep the request rule, the task statuses, the live agents, unwritten decisions and the next step; for a subagent, its spec path, verified criteria, changed files and report format). `SessionStart(compact)` adds a conditional reminder: read `CREW.md`, the queue, the active index and the state file only if they are no longer in context; run `ListAgents` only if unsure which subagents are live. A subagent is reminded of its spec path, never of the lead's duties.
@@ -78,4 +78,4 @@ Windows are set per model with `modelSettings.<model>.autoCompactWindow` in a se
 
 ## Handoff and stop
 
-The founder rolls the session over with `/crew handoff`, then `/clear`, then `/crew resume` (`commands/handoff.md`, `commands/resume.md`). `/crew stop` stops every running subagent safely in the current session and waits; `/crew resume` continues from the handoff it wrote (`commands/stop.md`).
+The founder rolls the session over with `/crew handoff`, then `/clear`, then `/crew resume` (`commands/handoff.md`, `commands/resume.md`). `/crew stop` stops every running subagent of the current session safely (other leads carry on) and waits; `/crew resume` continues from the handoff it wrote (`commands/stop.md`).

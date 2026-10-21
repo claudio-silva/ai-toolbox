@@ -2,7 +2,8 @@ import { useState, type ReactNode } from 'react'
 import { CheckCheck, ChevronRight, Inbox, MessageCircleQuestion } from 'lucide-react'
 import type { Question, Request, State } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { Empty, Inline, Mono, Note, Panel } from '@/components/bits'
+import { Empty, Inline, Mono, Note, Panel, PlaceChip } from '@/components/bits'
+import { manyPlaces, placeOf } from '@/lib/sets'
 
 const STATE_CLS: Record<string, string> = {
   queued: 'bg-st-progress/16 text-st-progress',
@@ -26,13 +27,14 @@ export function slotOf(slot: string): Slot {
   return { key: 'other', label: 'Other', order: 9000 }
 }
 
-function QuestionCard({ q }: { q: Question }) {
+function QuestionCard({ q, place }: { q: Question; place: boolean }) {
   const open = q.state !== 'answered'
   return (
     <div className={cn('flex flex-col gap-1.5 rounded-xl border px-3.5 py-3', open ? 'border-st-progress/40 bg-st-progress/6' : 'bg-background/50')}>
       <div className="flex items-center gap-2 text-[11.5px] text-muted-foreground">
         <Mono className="font-semibold text-foreground">{q.id}</Mono>
         <span>{q.date}</span>
+        {place && <PlaceChip place={placeOf(q)} />}
         <span className={cn('ml-auto rounded-full px-2 py-0.5 text-[10.5px] font-medium', open ? 'bg-st-progress/18 text-st-progress' : 'bg-muted')}>{q.status || 'open'}</span>
       </div>
       <p className={cn('text-[13px] leading-snug', !open && 'text-muted-foreground')}><Inline text={q.text} /></p>
@@ -43,7 +45,7 @@ function QuestionCard({ q }: { q: Question }) {
   )
 }
 
-function RequestRow({ r }: { r: Request }) {
+function RequestRow({ r, place }: { r: Request; place: boolean }) {
   const closed = r.state === 'done' || r.state === 'dropped'
   return (
     <li className="grid grid-cols-[2.25rem_1fr_auto] gap-x-1 gap-y-1 px-1 py-2.5">
@@ -54,6 +56,7 @@ function RequestRow({ r }: { r: Request }) {
       <dl className="col-span-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[11.5px] leading-snug text-muted-foreground">
         {r.affects && <><dt className="font-medium">Affects</dt><dd><Inline text={r.affects} /></dd></>}
         {r.slot && <><dt className="font-medium">Slot</dt><dd><Inline text={r.slot} /></dd></>}
+        {place && <><dt className="font-medium">Kept in</dt><dd>{placeOf(r) === 'backlog' ? 'the backlog' : `the set “${placeOf(r)}”`}</dd></>}
         <dt className="font-medium">Status</dt><dd>{r.status || r.state} · {r.date}</dd>
       </dl>
     </li>
@@ -77,6 +80,7 @@ function Group({ label, count, open, onToggle, dot, children }: { label: string;
 
 export function Queue({ state }: { state: State }) {
   const { requests, questions } = state.queue
+  const place = manyPlaces(state)
   // Folded groups; every slot starts open, done and dropped start shut.
   const [shut, setShut] = useState<Record<string, boolean>>({ done: true, dropped: true })
   const toggle = (k: string) => setShut((s) => ({ ...s, [k]: !s[k] }))
@@ -84,8 +88,10 @@ export function Queue({ state }: { state: State }) {
   const answered = questions.filter((q) => q.state === 'answered')
   const yours = requests.filter((r) => r.state !== 'done' && r.state !== 'dropped')
   const slots = new Map<string, Slot & { items: Request[] }>()
+  // A slot names one set's task: with several places, the slots are per place.
   for (const r of yours) {
-    const sl = slotOf(r.slot)
+    const s0 = slotOf(r.slot)
+    const sl = place ? { ...s0, key: `${r.set ?? ''}|${s0.key}`, label: `${s0.label} · ${placeOf(r)}` } : s0
     if (!slots.has(sl.key)) slots.set(sl.key, { ...sl, items: [] })
     slots.get(sl.key)!.items.push(r)
   }
@@ -96,16 +102,16 @@ export function Queue({ state }: { state: State }) {
     <div className="flex flex-col gap-4">
       <Panel title={openQs.length ? `Questions for you · ${openQs.length}` : 'Questions for you'} icon={MessageCircleQuestion}>
         {questions.length === 0 ? (
-          <p className="text-[12.5px] text-muted-foreground">No questions. When the crew needs a decision from you, it asks in <Mono>.crew/queue.md</Mono> and carries on with a default.</p>
+          <p className="text-[12.5px] text-muted-foreground">No questions. When the crew needs a decision from you, it asks in its task set's <Mono>queue.md</Mono> and carries on with a default.</p>
         ) : (
           <div className="flex flex-col gap-2">
-            {openQs.map((q) => <QuestionCard key={q.id} q={q} />)}
+            {openQs.map((q) => <QuestionCard key={`${q.set}:${q.id}`} q={q} place={place} />)}
             {answered.length > 0 && (
               <details className="group">
                 <summary className="flex cursor-pointer list-none items-center gap-1 py-1 text-xs text-muted-foreground hover:text-foreground">
                   <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" /> {answered.length} answered
                 </summary>
-                <div className="mt-1.5 flex flex-col gap-2">{answered.map((q) => <QuestionCard key={q.id} q={q} />)}</div>
+                <div className="mt-1.5 flex flex-col gap-2">{answered.map((q) => <QuestionCard key={`${q.set}:${q.id}`} q={q} place={place} />)}</div>
               </details>
             )}
           </div>
@@ -122,7 +128,7 @@ export function Queue({ state }: { state: State }) {
             {bySlot.length === 0 && <p className="px-1 pb-2 text-[12.5px] text-muted-foreground">None waiting: everything you asked for is done or dropped.</p>}
             {bySlot.map((g) => (
               <Group key={g.key} label={g.label} count={g.items.length} open={!shut[g.key]} onToggle={() => toggle(g.key)}>
-                {g.items.map((r) => <RequestRow key={r.id} r={r} />)}
+                {g.items.map((r) => <RequestRow key={`${r.set}:${r.id}`} r={r} place={place} />)}
               </Group>
             ))}
           </Panel>
@@ -130,19 +136,19 @@ export function Queue({ state }: { state: State }) {
             <Panel title="Closed" icon={CheckCheck} bodyClassName="px-3 pb-2">
               {done.length > 0 && (
                 <Group label="Done" dot="bg-st-accepted" count={done.length} open={!shut.done} onToggle={() => toggle('done')}>
-                  {done.map((r) => <RequestRow key={r.id} r={r} />)}
+                  {done.map((r) => <RequestRow key={`${r.set}:${r.id}`} r={r} place={place} />)}
                 </Group>
               )}
               {dropped.length > 0 && (
                 <Group label="Dropped" dot="bg-st-pending" count={dropped.length} open={!shut.dropped} onToggle={() => toggle('dropped')}>
-                  {dropped.map((r) => <RequestRow key={r.id} r={r} />)}
+                  {dropped.map((r) => <RequestRow key={`${r.set}:${r.id}`} r={r} place={place} />)}
                 </Group>
               )}
             </Panel>
           )}
         </>
       )}
-      <Note>From <Mono>.crew/queue.md</Mono>.</Note>
+      <Note>From each open task set's <Mono>queue.md</Mono> and the project's backlog, <Mono>.crew/queue.md</Mono>.</Note>
     </div>
   )
 }

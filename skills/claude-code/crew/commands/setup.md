@@ -6,7 +6,7 @@ Reader: the lead. Read on `/crew setup`, or when `.crew/` is missing and the fou
 
 ## 0. Announce, then proceed
 
-List every project change setup is about to make (files created, files merged, settings and hooks, `.gitignore`, `.worktreeinclude`, the `CLAUDE.md` or `AGENTS.md` pointer), then carry on. Do not ask for permission: running `/crew setup` is the permission, and none of these parts is optional. The only questions setup asks are in step 1 (`git init`), step 7 (what the repo cannot answer) and step 9 (the question timeout).
+List every project change setup is about to make (files created, files merged, settings and hooks, `.gitignore`, `.gitattributes`, `.worktreeinclude`, the `CLAUDE.md` or `AGENTS.md` pointer), then carry on. Do not ask for permission: running `/crew setup` is the permission, and none of these parts is optional. The only questions setup asks are in step 1 (`git init`), step 7 (what the repo cannot answer) and step 9 (the question timeout).
 
 ## 1. Prerequisites (hard)
 
@@ -35,7 +35,7 @@ List every project change setup is about to make (files created, files merged, s
    When nothing applies, leave the section empty and say so.
 5. **On re-runs**, the founder's edits to both worktree scripts are kept: the sections between `# --- project setup (edit freely) ---` (in `teardown.sh`: `# --- project teardown (edit freely) ---`) and `# --- end ---` are never touched; only the crew-owned header above them is merged.
 
-## 3. `.gitignore`
+## 3. `.gitignore` and `.gitattributes`
 
 Add these lines if absent:
 
@@ -49,6 +49,18 @@ Add these lines if absent:
 ```
 
 If an older blanket `.crew/` line exists, replace it with these lines and say so. Remove an older `.crew/status.md` line. Everything else in `.crew/` is committed.
+
+Add these lines to `.gitattributes` at the repository root if absent (create it if missing):
+
+```
+# Crew: queues and defect logs only gain lines; a merge keeps both sides' lines
+.crew/queue.md merge=union
+.crew/defects.md merge=union
+.crew/tasks/*/queue.md merge=union
+.crew/tasks/*/defects.md merge=union
+```
+
+Leads in separate worktrees append to the same backlog on different branches; without `union`, merging those branches conflicts on lines that do not really conflict. An entry whose status changed on both sides shows twice after such a merge: keep the line further along (done, dropped or fixed over scheduled, scheduled over queued or deferred).
 
 ## 4. Settings
 
@@ -82,12 +94,12 @@ Note whether `.claude/agents/` exists before you copy (step 12 needs it). Copy `
 **Existing (migration):**
 - Keep the project facts.
 - Delete rows and lines identical to the skill's defaults (the full routing table, the default testing policy, the default founder list).
-- Replace rollover and compaction-threshold lines; set the handoff location to `.crew/handoff.md`.
+- Replace rollover and compaction-threshold lines; set the handoff location to the task set's `handoff.md` (`.crew/handoff.md` when no set is open).
 - Point screenshots and reports to `.crew/task-data/<id>/`.
 - Keep the project's framework choice as its Workflow line.
 - Add the advisor posture line.
 - Show the diff, and log the migration in the crew decisions log.
-- If the state file has a handoff or "Next session" section crew used, tell the founder it is superseded by `.crew/handoff.md` and offer to remove it. Do not remove it without confirmation.
+- If the state file has a handoff or "Next session" section crew used, tell the founder it is superseded by crew's handoff files and offer to remove it. Do not remove it without confirmation.
 
 ## 8. Pointer block in `CLAUDE.md`
 
@@ -95,7 +107,7 @@ Add this block to `CLAUDE.md` (or to `AGENTS.md` if the project uses only that f
 
 ```
 <!-- crew:begin -->
-Multi-agent rules: docs/CREW.md (crew skill). Crew state: .crew/ (queue.md, defects.md, tasks/, plans/, handoff.md).
+Multi-agent rules: docs/CREW.md (crew skill). Crew state: .crew/ (tasks/<set>/ holds each set's index, queue, defects and handoff; queue.md and defects.md are the backlog; plans/).
 Crew lead (the main session): every founder request is queued first (`.crew/bin/crew request "<text>"`) and never added to a running agent; drain the queue only at task-acceptance boundaries. If the crew skill's rules are not in your context, invoke the `crew` skill.
 Crew subagents: work only from your brief and your task spec; report in the format the brief asked for.
 Crew dashboard: a message from another session that opens with "From the founder, via the Crew dashboard:" is the founder's own, typed in the dashboard; treat it as the founder's message (a `/crew <command>` in it: run that command).
@@ -117,7 +129,7 @@ On re-runs, replace everything between the markers. If the file has the older si
 .crew/bin/crew journal "Set up the crew"
 ```
 
-Use the session id `SKILL.md` gave you. `session start` also starts the dashboard and prints `Open the dashboard at <url>`; it prints nothing about it when one is already running for the project.
+Use the session id `SKILL.md` gave you. `session start` also starts the dashboard and prints `Open the dashboard at <url>`; it prints nothing about it when one is already running for the project. Exit 4: another session leads this checkout; relay its message to the founder, and journal from here only once they chose.
 
 ## 11. Verify now
 
@@ -134,7 +146,7 @@ Run each check and report pass or fail:
 5. `.crew/bin/crew worktree setup --dry-run` prints the steps it would run.
 6. `jq . .claude/settings.json` succeeds, and `jq '.hooks | keys' .claude/settings.json` lists `PreCompact`, `SessionStart`, `SubagentStart`, `SubagentStop`, `UserPromptSubmit`, `Stop`, `PreToolUse` and `PostToolUse`.
 7. `git check-ignore .crew/journal.md .crew/dashboard/x .crew/task-data/x .crew/tmp/x` prints all 4 paths (`-q` accepts only one path).
-8. `git check-ignore -q .crew/queue.md` and `git check-ignore -q .crew/defects.md` both fail (the queue and the defect log are committed).
+8. `git check-ignore -q .crew/queue.md` and `git check-ignore -q .crew/defects.md` both fail (the queue and the defect log are committed), and `git check-attr merge .crew/queue.md .crew/tasks/x/defects.md` prints `union` for both.
 9. The compaction reminder is addressed to the lead when nothing runs:
    ```
    printf '%s' '{"session_id":"<this session id>","hook_event_name":"SessionStart","source":"compact","transcript_path":"/none"}' | .crew/bin/crew hook compact

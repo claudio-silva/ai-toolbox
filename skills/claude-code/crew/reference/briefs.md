@@ -13,14 +13,14 @@ TASK T<NN> <slug>. Spec: .crew/tasks/<plan-slug>/<NN>-<slug>.md — read it firs
 FLAGS: <none | judgement | cross-cutting | discovery>
 FACTS (from the index, the ones this task needs):
 - <fact>
-KNOWN DEFECTS (open entries in .crew/defects.md on this task's surfaces, or "none"): known and scheduled;
+KNOWN DEFECTS (open entries in the set's defects.md and .crew/defects.md on this task's surfaces, or "none"): known and scheduled;
 don't fix them, don't chase them; if one blocks your work or causes a failure you see, report it under OPEN.
 - D<n> <symptom> · where: <surface>
 PROJECT RULES: AGENTS.md / CLAUDE.md, docs/CREW.md.
 
 VERIFY BY
 - Dev server: <command> → <URL>. Seed and log in: <how>.
-- Worktree: <"none, work in the main checkout; do not commit" | "you are in a worktree at <path>; run .crew/bin/crew worktree setup first; commit once as T<NN> <slug>: <summary>">
+- Worktree: <"none, work in <the lead's checkout>; do not commit" | "you are in a worktree at <path>; run .crew/bin/crew worktree setup first; commit once as T<NN> <slug>: <summary>">
 - Screenshots: .crew/task-data/T<NN>-<slug>/screenshots/  (output beyond the report cap: .crew/task-data/T<NN>-<slug>/reports/ and logs/)
 
 REPORT (≤ 300 words; the first line is the status keyword)
@@ -43,7 +43,7 @@ SPEC: <spec path>; FLAGS: <flags>
 WORKTREE: <none | path — run every command in it with `cd <path> && <cmd>` or `git -C <path>`; screenshots are under <path>/.crew/task-data/>
 CHANGES: <commit or diff command>; builder report: <path or pasted ≤300 words>
 SCREENSHOTS: <paths>; UI spec: <path §>
-KNOWN DEFECTS: <open entries in .crew/defects.md on these surfaces, or "none"> — already logged; not findings.
+KNOWN DEFECTS: <open entries in the set's defects.md and .crew/defects.md on these surfaces, or "none"> — already logged; not findings.
 PREVIOUS FINDINGS: <for a re-review: the findings sent back, or "none">
 RE-REVIEW SCOPE: <first review: "complete — list every finding now; later rounds check only the fixes" |
        re-review: "only PREVIOUS FINDINGS and the fix diff <command>; a new finding outside it only if high
@@ -93,7 +93,7 @@ MODE: critical-journeys | exploratory | scripted (<checklist path>)
 PERSONA: <target user, e.g. "a 70-year-old novelist who knows Word, not tech">
 SCOPE: <journeys/areas>; spec: <path §>; build/commit under test: <ref>
 SETUP: (from your MEMORY.md) + <anything new>
-KNOWN DEFECTS: <open entries in .crew/defects.md for this scope, or "none"> — already logged; report one only if it got worse.
+KNOWN DEFECTS: <open entries in the set's defects.md and .crew/defects.md for this scope, or "none"> — already logged; report one only if it got worse.
 OUTPUT: defects (severity · leaf or load-bearing · repro · expected/actual · screenshot) and UX friction (separately);
         screenshots of key states in .crew/task-data/qa-<YYYY-MM-DD>-<mode>/screenshots/;
         update MEMORY.md only with durable how-to facts.

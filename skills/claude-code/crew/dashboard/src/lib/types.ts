@@ -1,5 +1,8 @@
 // The model served by ../../scaffold/dashboard/model.mjs (buildState). Keep the two in step.
 
+// model.mjs's MODEL_VERSION: the page shows only states of this shape.
+export const MODEL_VERSION = 2
+
 export type StatusKey = 'accepted' | 'progress' | 'review' | 'rework' | 'blocked' | 'pending'
 export type Phase = 'build' | 'review' | 'rework' | 'other'
 
@@ -15,6 +18,9 @@ export interface Agent {
   runStart: number
   kind: 'first' | 'resume'
   task: string | null
+  // The lead's session that started it, and its task set (null: not recorded).
+  session: string
+  set: string | null
 }
 
 // A subagent that is not running: when its last run ended and how.
@@ -30,17 +36,34 @@ export interface PastAgent {
   runs: number
   status: string
   task: string | null
+  session: string
+  set: string | null
 }
 
-// The lead's session. reach: how the page's messages get to it (null: they can't now).
+export type LeadState = { state: 'working' | 'agents' | 'waiting' | 'stopped' | 'closed'; since: string | null; sinceEpoch: number | null; agentsFinishing?: number }
+
+export interface Handoff { written: string; where: string; next: string; path: string }
+
+// A lead: one per checkout, with the task set open there (null: none). reach: how the page's
+// messages get to it (null: they can't now). awake: its caffeinate runs.
 export interface LeadInfo {
   session: string
   alive: boolean
+  checkout: string
+  main: boolean
+  label: string
+  branch: string
+  set: string | null
+  setTitle: string | null
+  state: LeadState
+  agents: number
   model: string
   effort: string
   window: number
   compactAt: number
   reach: 'paseo' | 'socket' | null
+  awake?: boolean
+  handoff: Handoff | null
 }
 
 // One thing in a transcript (model.mjs transcriptEntries).
@@ -131,7 +154,10 @@ export type Counts = Record<StatusKey, number>
 export interface TaskSet {
   file: string
   rel: string
+  slug: string
   where: string
+  checkout: string
+  lead: string | null
   title: string
   total: number
   accepted: number
@@ -144,10 +170,16 @@ export interface TaskSet {
   current: boolean
 }
 
+// An open task set as the page shows it (the current one, or any in `open`). lead: the session
+// leading it, if any.
 export interface CurrentSet {
   file: string
   rel: string
+  slug: string
   where: string
+  checkout: string
+  lead: string | null
+  handoff: Handoff | null
   title: string
   stage: string
   branch: string
@@ -167,6 +199,8 @@ export interface Request {
   slot: string
   status: string
   state: string
+  set: string | null
+  setTitle: string | null
 }
 
 export interface Question {
@@ -176,6 +210,8 @@ export interface Question {
   default: string
   status: string
   state: string
+  set: string | null
+  setTitle: string | null
 }
 
 export interface Defect {
@@ -190,6 +226,8 @@ export interface Defect {
   state: string
   note: string
   promoted: boolean
+  set: string | null
+  setTitle: string | null
 }
 
 export interface Compaction {
@@ -250,11 +288,14 @@ export interface State {
     name: string; root: string; branch: string; sha: string; state: 'branch' | 'detached' | 'none'
     icon: { path: string; w: number; h: number; mtime: number } | null
   }
-  lead: { state: 'working' | 'agents' | 'waiting' | 'stopped' | 'closed'; since: string | null; sinceEpoch: number | null; agentsFinishing?: number }
-  keepAwake: { on: boolean; mode: 'claude' | '12h' | null; since: number | null; battery: boolean; stopped: boolean } | null
+  // The state of `roster.lead`.
+  lead: LeadState
+  keepAwake: { on: boolean; mode: 'claude' | '12h' | null; since: number | null; battery: boolean; stopped: boolean; bySession: string[] } | null
   agents: Agent[]
-  roster: { lead: LeadInfo | null; past: PastAgent[] }
+  // lead: the current set's lead, else the first of `leads` (live ones first).
+  roster: { lead: LeadInfo | null; leads: LeadInfo[]; past: PastAgent[] }
   current: CurrentSet | null
+  open: CurrentSet[]
   sets: TaskSet[]
   queue: {
     requests: Request[]
@@ -276,7 +317,7 @@ export interface State {
     rows: Compaction[]
   } | null
   journal: { total: number; entries: JournalEntry[] }
-  handoff: { written: string; where: string; next: string; path: string } | null
+  handoff: Handoff | null
   worktrees: { path: string; branch: string }[]
   live: boolean
   update?: UpdateInfo

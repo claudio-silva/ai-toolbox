@@ -100,6 +100,34 @@ function png(w, h) {
   return b;
 }
 
+test('several leads: openSetIn, etimeSecs, leadStateOf, leadWorkIntervals per session', () => {
+  const set = (slug, branch = '', live = true) => ({ slug, branch, live });
+  // The index's Branch:, else the crew/<folder> branch; off crew/, the only open set.
+  assert.equal(M.openSetIn('feature/x', [set('a', 'feature/x (from main)'), set('b')])?.slug, 'a');
+  assert.equal(M.openSetIn('crew/b', [set('a'), set('b')])?.slug, 'b');
+  assert.equal(M.openSetIn('main', [set('a'), set('b', '', false)])?.slug, 'a');
+  assert.equal(M.openSetIn('main', [set('a'), set('b')]), null);
+  assert.equal(M.openSetIn('crew/c', [set('a')]), null);
+
+  assert.equal(M.etimeSecs('05:07'), 307);
+  assert.equal(M.etimeSecs('1:02:03'), 3723);
+  assert.equal(M.etimeSecs('2-01:00:00'), 2 * 86400 + 3600);
+
+  const now = 1_800_000_000;
+  assert.equal(M.leadStateOf(`working 10:00 ${now - 60}`, 0, now, true).state, 'working');
+  assert.equal(M.leadStateOf(`idle 10:00 ${now - 60}`, 2, now, true).state, 'agents');
+  assert.equal(M.leadStateOf(`idle 10:00 ${now - 60}`, 0, now, true).state, 'waiting');
+  assert.equal(M.leadStateOf(`stopped 10:00 ${now - 60}`, 0, now, false).state, 'stopped');
+  assert.equal(M.leadStateOf(`working 10:00 ${now - 60}`, 0, now, false, now - 30).sinceEpoch, now - 30);
+
+  // Two leads' logs interleave; each one's work runs to its next change, the last to `until`.
+  const log = [
+    { at: 100, state: 'working', session: 'a' }, { at: 150, state: 'working', session: 'b' },
+    { at: 200, state: 'idle', session: 'a' }, { at: 300, state: 'working', session: 'a' },
+  ];
+  assert.deepEqual(M.leadWorkIntervals(log, (s) => (s === 'a' ? 400 : 250)), [[100, 200], [150, 250], [300, 400]]);
+});
+
 test('computeTiming: the split of the elapsed time, and where it ends', () => {
   const tasks = [{ id: 'T01', num: 1, depNums: [] }];
   const runs = [{ start: 1000, end: 1600, id: 'a', type: 'builder', task: '1', kind: 'first', status: 'DONE' }];

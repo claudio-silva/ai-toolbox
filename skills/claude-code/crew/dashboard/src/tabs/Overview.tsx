@@ -2,7 +2,7 @@ import { useState } from 'react'
 import {
   Activity, ArrowRight, BatteryWarning, Bot, Bug, ChevronRight, Coffee, Crown, FileClock, GitBranch, Inbox, MessageCircleQuestion, Shrink, Sparkles, Timer,
 } from 'lucide-react'
-import type { State } from '@/lib/types'
+import type { LeadInfo, State } from '@/lib/types'
 import type { Tab } from '@/lib/persist'
 import { pct, span, usd, when } from '@/lib/format'
 import { rates } from '@/lib/rates'
@@ -12,34 +12,64 @@ import { crewNow, elapsedLabel, TimeBar, TimeHelp } from '@/components/TimeSplit
 import { AgentRow } from '@/components/AgentRow'
 import { JournalRow } from '@/components/JournalRow'
 import type { Doc } from '@/components/DocSheet'
-import { modelName } from '@/lib/lead'
+import { LEAD_STATE, leadKey, leadName, modelName } from '@/lib/lead'
+import { LeadActions } from '@/components/LeadControls'
 import { capital } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-const LEAD_LINE: Record<State['lead']['state'], string> = {
+const LEAD_LINE: Record<LeadInfo['state']['state'], string> = {
   working: 'Working', agents: 'Idle while agents work', waiting: 'Waiting for you', stopped: 'Stopped by you', closed: 'Claude Code closed',
 }
 
-// The lead, above the subagents: its state and model; opens its conversation.
-function LeadLine({ state, onOpen }: { state: State; onOpen: () => void }) {
-  const l = state.roster.lead
-  const busy = state.lead.state === 'working'
+// A lead, above its subagents: its state and model, which open its conversation, and its controls.
+function LeadLine({ state, l, onOpen }: { state: State; l: LeadInfo | null; onOpen: () => void }) {
+  const st = l?.state.state ?? state.lead.state
+  const busy = st === 'working'
   return (
-    <button onClick={onOpen} title="Open the lead's conversation" className="group flex w-full items-center gap-3 rounded-lg border bg-background/60 px-3 py-2 text-left transition-colors hover:bg-accent/60">
-      <span className="relative grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-primary to-[oklch(0.6_0.2_320)] text-primary-foreground">
-        <Crown className="size-4" />
-        {busy && <span className="crew-pulse absolute -top-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card bg-primary" />}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col leading-tight">
-        <span className="text-[13px] font-semibold">Lead</span>
-        <span className={cn('truncate text-xs', busy ? 'text-primary' : 'text-muted-foreground')}>
-          {[LEAD_LINE[state.lead.state], l?.model && modelName(l.model), l?.effort && capital(l.effort)].filter(Boolean).join(' · ')}
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-background/60 p-1 pr-2">
+      <button onClick={onOpen} aria-label="Open the lead's conversation" className="group flex min-w-0 flex-1 basis-56 items-center gap-3 rounded-md px-2 py-1 text-left transition-colors hover:bg-accent/60">
+        <span className="relative grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-primary to-[oklch(0.6_0.2_320)] text-primary-foreground">
+          <Crown className="size-4" />
+          {busy && <span className="crew-pulse absolute -top-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card bg-primary" />}
         </span>
-      </span>
-      <span className="hidden text-xs text-muted-foreground sm:inline">{l?.reach ? 'Message it' : 'Conversation'}</span>
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-    </button>
+        <span className="flex min-w-0 flex-1 flex-col leading-tight">
+          <span className="truncate text-[13px] font-semibold">{l ? leadName(state, l) : 'Lead'}</span>
+          <span className={cn('truncate text-xs', busy ? 'text-primary' : st === 'waiting' ? 'text-st-progress' : 'text-muted-foreground')}>
+            {[LEAD_LINE[st], l?.model && modelName(l.model), l?.effort && capital(l.effort)].filter(Boolean).join(' · ')}
+          </span>
+        </span>
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+      </button>
+      <LeadActions lead={l} className="ml-auto" />
+    </div>
   )
+}
+
+// The leads of other task sets or checkouts, one line each; a click opens one.
+function OtherLeads({ state, onAgent }: { state: State; onAgent: (id: string) => void }) {
+  const me = state.roster.lead?.session
+  const others = state.roster.leads.filter((l) => l.session !== me)
+  if (!others.length) return null
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[12px] text-muted-foreground">
+      <span>Other leads:</span>
+      {others.map((l) => {
+        const st = LEAD_STATE[l.state.state]
+        return (
+          <button key={l.session} onClick={() => onAgent(leadKey(l))} className="inline-flex min-w-0 items-center gap-1.5 hover:text-foreground">
+            <span className={cn('size-2 shrink-0 rounded-full', st.dot, st.pulse && 'crew-pulse')} />
+            <span className="truncate">{l.setTitle ?? l.label}</span>
+            <span className={cn(l.state.state === 'waiting' && 'text-st-progress')}>· {st.label.toLowerCase()}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// A path from the project's root when it is under it.
+function relPath(state: State, p: string) {
+  return p.startsWith(`${state.repo.root}/`) ? p.slice(state.repo.root.length + 1) : p
 }
 
 function SetHero({ state, onTask, onDoc }: { state: State; onTask: (id: string) => void; onDoc: (d: Doc) => void }) {
@@ -226,9 +256,10 @@ export function Overview({ state, goTab, onTask, onDoc, onAgent }: {
         action={<button onClick={() => goTab('agents')} className="text-xs text-muted-foreground hover:text-foreground">Agents →</button>}
       >
         <div className="flex flex-col gap-2">
-          <LeadLine state={state} onOpen={() => onAgent('lead')} />
+          <LeadLine state={state} l={state.roster.lead} onOpen={() => onAgent(state.roster.lead ? leadKey(state.roster.lead) : 'lead')} />
           {state.agents.map((a) => <AgentRow key={a.id} agent={a} onTask={onTask} onOpen={() => onAgent(a.id)} />)}
           {!state.agents.length && <p className="px-1 text-[12.5px] text-muted-foreground">No subagents running.</p>}
+          <OtherLeads state={state} onAgent={onAgent} />
         </div>
       </Panel>
 
@@ -240,7 +271,7 @@ export function Overview({ state, goTab, onTask, onDoc, onAgent }: {
         <Panel
           title="Handoff"
           icon={FileClock}
-          action={<button onClick={() => onDoc({ path: state.handoff!.path, title: 'Crew handoff', sub: `.crew/handoff.md${state.handoff!.written ? ` · ${state.handoff!.written}` : ''}` })} className="text-xs text-muted-foreground hover:text-foreground">Open →</button>}
+          action={<button onClick={() => onDoc({ path: state.handoff!.path, title: 'Crew handoff', sub: `${relPath(state, state.handoff!.path)}${state.handoff!.written ? ` · ${state.handoff!.written}` : ''}` })} className="text-xs text-muted-foreground hover:text-foreground">Open →</button>}
         >
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
             {state.handoff.written && <><dt className="text-muted-foreground">Written</dt><dd>{state.handoff.written}</dd></>}

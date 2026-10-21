@@ -11,6 +11,7 @@ A direct task is a task set of one: write `.crew/tasks/<task-slug>/index.md` wit
    - a task set: `crew/<plan-slug>`; a later stage: `crew/<plan-slug>-s<N>`;
    - a direct task: `crew/<task-slug>`.
    Trivial changes that skip review commit on the current branch, with no task set. A milestone is recorded in the state file, not as a branch.
+   One task set is open per checkout, and one lead per checkout. A second set beside an open one runs from its own worktree with its own lead (Several leads, below).
 3. Baseline commit of the plan, the specs and the index: `Plan <slug>: <what this set covers>`.
 4. `.crew/bin/crew journal "Started task set <slug>"`.
 
@@ -29,7 +30,7 @@ You own `.crew/tasks/<plan-slug>/index.md`; builders never edit it.
    - `cross-cutting`: have a scout re-check the surfaces named in Read first and Design against the current tree; patch the spec where it no longer matches the tree, and record the correction in Facts.
    - `judgement`: the builder runs at effort high and the brief names the judgement.
    - `discovery`: the brief repeats the rule "on a failing criterion, first decide: code wrong or premise wrong? On a false premise, stop and report."
-3. **Dispatch** a fresh builder (a worker for mechanical work) with the dispatch format in `reference/briefs.md`, listing the known defects on the task's surfaces (`grep` `.crew/defects.md` for them). Set the row to `in progress`.
+3. **Dispatch** a fresh builder (a worker for mechanical work) with the dispatch format in `reference/briefs.md`, listing the known defects on the task's surfaces (Known defects in briefs, below). Set the row to `in progress`.
 4. **On the report:** set `in review`, brief a fresh reviewer. For UI, look at 1–3 key screenshots.
 5. **ACCEPT:**
    - Run `git status --short` and check nothing is unexplained.
@@ -62,7 +63,7 @@ Typical leaves: misaligned or cropped elements, spacing, copy polish, a rare err
 
 **Re-review scope.** A re-review checks the findings sent back and the fix diff, nothing else. A new finding outside that diff is triaged like any other: high → fix now (it escaped the first review); otherwise defer it. Review rounds then converge instead of finding something new each time.
 
-**Known defects in briefs.** Before every dispatch, review and QA brief, `grep` `.crew/defects.md` for the surfaces the work touches and list the open matches under KNOWN DEFECTS: known and scheduled, so agents neither fix nor chase them, and a reviewer or QA does not report them again.
+**Known defects in briefs.** Before every dispatch, review and QA brief, `grep` the set's `defects.md` and the backlog's (`.crew/defects.md`) for the surfaces the work touches and list the open matches under KNOWN DEFECTS: known and scheduled, so agents neither fix nor chase them, and a reviewer or QA does not report them again.
 
 **Promotion.** A deferred defect that blocks another task's check, or causes a failure in other work, is fixed now: fold it into the current task when small, otherwise run it as an urgent task, and mark it `crew defect D<n> --promote --note "<what it broke>"`. A failure whose cause is unclear goes to the debugger with the defect log in its brief. Promotions on the dashboard show how often deferral backfired; many of them mean the leaf test is being read too loosely.
 
@@ -84,13 +85,13 @@ Run tasks in parallel only when they have no dependency between them, no overlap
 2. **Commit everything** on the set branch first; worktrees see only committed work.
 3. **Dispatch** every builder in the batch with `isolation: worktree`. Add to each brief:
    > You are in a worktree at <path>. Run `.crew/bin/crew worktree setup` first. Keep everything you produce inside the worktree; screenshots and reports go under `.crew/task-data/T<NN>-<slug>/`. When done, commit once as `T<NN> <slug>: <summary>`. Report the worktree path and branch.
-4. No agent edits source files in the main checkout until the batch is integrated. You still update `.crew/` files there, and the hooks write the journal and their state there.
+4. No agent edits source files in your checkout (the main one, or the worktree you lead from) until the batch is integrated. You still update `.crew/` files there.
 5. **Review in the worktree.** Add to the review brief:
    > Run every command in <path>, with `cd <path> && <cmd>` or `git -C <path>`; screenshots are under `<path>/.crew/task-data/`.
 6. **Integrate one task at a time**, after its ACCEPT:
    1. Cherry-pick its commit onto the set branch (or fast-forward when possible).
    2. Re-run the project's checks on the set branch.
-   3. Run `.crew/bin/crew worktree teardown <path>`. It copies the worktree's `.crew/task-data/` into the main checkout, appends any worktree journal lines, runs `.crew/worktree/teardown.sh`, and removes the worktree and its branch.
+   3. Run `.crew/bin/crew worktree teardown <path>`. Run it from your checkout: it copies the worktree's `.crew/task-data/` into it, appends any worktree journal lines, runs `.crew/worktree/teardown.sh`, and removes the worktree and its branch.
    4. Update the index and drain the queue as in the serial loop.
 7. **A merge conflict goes to a builder**, never to you.
 
@@ -99,13 +100,22 @@ Only two things leave a worktree: the builder's commit and `.crew/task-data/`. E
 ## Closing a set
 
 1. All tasks `accepted`.
-2. **Deferred defects** of the set: fixed by one task, or (low ones only) moved on (Findings, above).
+2. **Deferred defects** of the set: fixed by one task, or (low ones only) moved on (Findings, above). Then `.crew/bin/crew carry` moves what is still open in the set's queue and defect log to the backlog, `.crew/queue.md` and `.crew/defects.md`.
 3. **Final review** by a fresh reviewer (template in `reference/briefs.md`). CHANGES → add the follow-up tasks to the index and run them.
 4. **QC checkpoint** (`reference/testing.md`).
-5. **Merge locally:** `git merge --no-ff crew/<slug>` into the base branch, then delete the set branch. Never push; pushing is the founder's call unless `CREW.md` says otherwise.
+5. **Merge locally:** `git merge --no-ff crew/<slug>` into the base branch, then delete the set branch. Never push; pushing is the founder's call unless `CREW.md` says otherwise. Leading from a worktree, merge in the checkout that has the base branch (`git -C <it> merge --no-ff crew/<slug>`) only when its `git status --short` is clean and `crew where` shows no other lead there; otherwise tell the founder the set is ready to merge, and leave the worktree for them to remove.
 6. Add a line `Closed: <YYYY-MM-DD>` under the index title.
 7. Update the state file (status, milestone, decisions).
 8. `.crew/bin/crew journal "Closed task set <slug>; merged into <base>"`.
+
+## Several leads
+
+Each checkout has at most one lead: `crew session start` refuses a second session in a checkout that has one (exit 4) and offers a take-over. Two sets run side by side from separate checkouts: the founder adds a worktree for the second, `git worktree add ../<repo>-<slug> -b crew/<slug> <base>`, and starts Claude Code there with `/crew`. Not the builders' worktrees under `.claude/worktrees/`: those are short-lived.
+
+- Each lead works in its own checkout and set: `crew where` names them, the other leads, and their sets. Never edit another set's files or another checkout's source.
+- `crew request` and `crew defect` write your set's files; their numbers are unique across the project. `--backlog` writes `.crew/queue.md` or `.crew/defects.md`, for work no open set takes.
+- The journal, the dashboard and the hooks' state are shared; `crew running` lists your agents (`--all`: every lead's).
+- Two sets that touch the same files will conflict at merge: the planner keeps sets apart, and the founder decides the merge order.
 
 ## Reorient
 

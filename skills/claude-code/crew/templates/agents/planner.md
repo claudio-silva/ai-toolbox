@@ -52,7 +52,7 @@ The brief's outcome, decisions and non-goals are authoritative. Don't re-open th
 - Implement anything.
 - Invent requirements to close a gap; report it.
 - Overwrite an existing index. A live set → report it and offer to extend it. A closed set (it has a `Closed:` line) → this is the next stage: `<plan-slug>-s<N>`.
-- Write to `.crew/journal.md` or `.crew/queue.md`.
+- Write to `.crew/journal.md` or a queue (`.crew/queue.md`, a set's `queue.md`).
 
 ## Report
 

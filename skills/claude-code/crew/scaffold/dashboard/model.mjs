@@ -12,7 +12,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-export const MODEL_VERSION = 1;
+// The shape of buildState's result. The page ignores a state of another version (one sent by
+// the previous server while a new page loads, during an update); keep lib/types.ts in step.
+export const MODEL_VERSION = 2;
 
 const TASK_RE = /^[Tt]0*([0-9]+)([^0-9]|$)/;
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg)$/i;
@@ -317,7 +319,7 @@ export function parseHandoff(text) {
 export function loadAgent(stateDir, id) {
   const t = read(path.join(stateDir, 'agents', id));
   if (t == null) return null;
-  const a = { id, type: '', description: '', model: '', effort: '', name: '', started: 0, since: '', runStart: 0 };
+  const a = { id, type: '', description: '', model: '', effort: '', name: '', started: 0, since: '', runStart: 0, session: '', set: null };
   for (const line of t.split('\n')) {
     const i = line.indexOf('=');
     if (i < 0) continue;
@@ -331,6 +333,8 @@ export function loadAgent(stateDir, id) {
     else if (k === 'started') a.started = num(v);
     else if (k === 'since') a.since = v;
     else if (k === 'run_start') a.runStart = num(v);
+    else if (k === 'session') a.session = v;
+    else if (k === 'set') a.set = v;
   }
   return a;
 }
@@ -342,7 +346,10 @@ function readRuns(stateDir) {
   for (const line of t.split('\n')) {
     if (!line) continue;
     const f = line.split('\t');
-    out.push({ start: num(f[0]), end: num(f[1]), id: f[2] || '', type: f[3] || '', task: f[4] || '', kind: f[5] || 'first', status: f[6] || '' });
+    out.push({
+      start: num(f[0]), end: num(f[1]), id: f[2] || '', type: f[3] || '', task: f[4] || '', kind: f[5] || 'first', status: f[6] || '',
+      session: f.length > 7 ? f[7] || '' : null, set: f.length > 8 ? f[8] || '' : null,
+    });
   }
   return out;
 }
@@ -359,34 +366,51 @@ function readSleeps(stateDir) {
   return out;
 }
 
-// Which sessions still have their Claude Code process (bin/crew keeps each one's pid in
-// claude/<session>). A session without a recorded pid (an older crew, or none found) counts as
-// running while its transcript was written in the last hour. lastSeen: the newest transcript
-// write, the best guess of when a crew whose processes are all gone stopped.
+// ps's elapsed time ([[dd-]hh:]mm:ss) in seconds; null when it is not one.
+export function etimeSecs(t) {
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(trim(t));
+  return m ? ((Number(m[1] || 0) * 24 + Number(m[2] || 0)) * 60 + Number(m[3])) * 60 + Number(m[4]) : null;
+}
+
+// Which sessions still have their Claude Code process (bin/crew keeps each one's pid and start
+// time in claude/<session>; a pid whose process started at another time was reused). A session
+// without a recorded pid (an older crew, or none found) counts as running while its transcript
+// was written in the last hour. seen: each transcript's last write. lastSeen: the newest, the
+// best guess of when a crew whose processes are all gone stopped.
 export function claudeSessions(stateDir, now = Math.floor(Date.now() / 1000)) {
   const pids = new Map();
+  const starts = new Map();
   for (const sess of listDir(path.join(stateDir, 'claude'))) {
-    const pid = trim(read(path.join(stateDir, 'claude', sess)) || '');
+    const [pid, start] = trim(read(path.join(stateDir, 'claude', sess)) || '').split(/\s+/);
     if (isInt(pid)) pids.set(sess, Number(pid));
+    if (isInt(start)) starts.set(sess, Number(start));
   }
   const alive = new Set();
   if (pids.size) {
-    const out = run('ps', ['-o', 'pid=,args=', '-p', [...pids.values()].join(',')]);
-    const live = new Set();
+    // bin/crew records when the process started: a later Claude Code that reused the pid is not it.
+    const out = run('ps', ['-o', 'pid=,etime=,args=', '-p', [...new Set(pids.values())].join(',')]);
+    const wall = Math.floor(Date.now() / 1000);
+    const live = new Map();
     for (const line of out.split('\n')) {
-      const m = /^\s*(\d+)\s+(.*)$/.exec(line);
-      if (m && /claude/.test(m[2])) live.add(Number(m[1]));
+      const m = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(line);
+      if (m && /claude/.test(m[3])) live.set(Number(m[1]), wall - (etimeSecs(m[2]) ?? 0));
     }
-    for (const [sess, pid] of pids) if (live.has(pid)) alive.add(sess);
+    for (const [sess, pid] of pids) {
+      if (!live.has(pid)) continue;
+      if (starts.has(sess) && Math.abs(live.get(pid) - starts.get(sess)) > 3) continue;
+      alive.add(sess);
+    }
   }
   let lastSeen = 0;
   let unknownLive = false;
   const transcriptOf = new Map();
+  const seen = new Map();
   for (const sess of listDir(path.join(stateDir, 'transcripts'))) {
     const tp = trim(read(path.join(stateDir, 'transcripts', sess)) || '');
     if (!tp) continue;
     transcriptOf.set(sess, tp);
     const m = Math.floor((stat(tp)?.mtimeMs ?? 0) / 1000);
+    seen.set(sess, m);
     if (m > lastSeen) lastSeen = m;
     if (!pids.has(sess) && m > now - 3600) unknownLive = true;
   }
@@ -395,7 +419,13 @@ export function claudeSessions(stateDir, now = Math.floor(Date.now() / 1000)) {
     const ev = trim(read(path.join(stateDir, 'clock')) || '').split(/\s+/)[0];
     if (isInt(ev)) lastSeen = Number(ev);
   }
-  return { pids, alive, transcriptOf, lastSeen, live: alive.size > 0 || unknownLive };
+  return { pids, alive, transcriptOf, seen, lastSeen, live: alive.size > 0 || unknownLive };
+}
+
+// Whether a session's Claude Code runs: by its recorded process; without one (an older crew),
+// whether any crew Claude Code seems to.
+export function sessionAlive(sessions, sess) {
+  return sessions.pids.has(sess) ? sessions.alive.has(sess) : sessions.live;
 }
 
 // Running subagents (running/<id>, which holds the session that runs it). One whose Claude Code
@@ -415,46 +445,60 @@ function runningAgents(stateDir, runs, sessions) {
       runStart: a.runStart || a.started,
       kind: ids.has(id) ? 'resume' : 'first',
       taskNum: taskNum(a.description),
+      session: sess || a.session,
     };
-    const gone = sess && sessions.pids.has(sess) ? !sessions.alive.has(sess) : !sessions.live;
+    const gone = sess ? !sessionAlive(sessions, sess) : !sessions.live;
     if (!gone) { agents.push(agent); continue; }
     const tp = sessions.transcriptOf.get(sess);
     const own = tp ? stat(path.join(tp.replace(/\.jsonl$/, ''), 'subagents', `agent-${id}.jsonl`)) : null;
     const end = Math.floor((own?.mtimeMs ?? (tp ? stat(tp)?.mtimeMs : 0) ?? 0) / 1000) || sessions.lastSeen || agent.runStart;
-    ended.push({ start: agent.runStart, end: Math.max(agent.runStart, end), id, type: agent.type, task: agent.taskNum == null ? '' : String(agent.taskNum), kind: agent.kind, status: 'interrupted' });
+    ended.push({
+      start: agent.runStart, end: Math.max(agent.runStart, end), id, type: agent.type, task: agent.taskNum == null ? '' : String(agent.taskNum),
+      kind: agent.kind, status: 'interrupted', session: agent.session, set: a.set,
+    });
   }
   return { agents, ended };
 }
 
-// lead.tsv: the lead's state changes (epoch, working|idle|stopped), oldest first.
+// lead.tsv: the leads' state changes (epoch, working|idle|stopped, session, task set), oldest
+// first. Lines from an older crew have no session or set (null).
 function readLeadLog(stateDir) {
   const t = read(path.join(stateDir, 'lead.tsv'));
   if (!t) return [];
   const out = [];
   for (const line of t.split('\n')) {
-    const [at, st] = line.split('\t');
-    if (isInt(at) && st) out.push({ at: Number(at), state: st });
+    const f = line.split('\t');
+    if (isInt(f[0]) && f[1]) out.push({ at: Number(f[0]), state: f[1], session: f.length > 2 ? f[2] : null, set: f.length > 3 ? f[3] : null });
   }
   return out.sort((a, b) => a.at - b.at);
 }
 
-// The lead's working intervals: from each "working" to the next change; the last one runs to
-// `until` (now while Claude Code runs, else when it was last seen).
+// The leads' working intervals: per session, from each "working" to that session's next change;
+// the last one runs to `until` (a number, or a function of the session: now while its Claude
+// Code runs, else when it was last seen). Intervals of several leads may overlap.
 export function leadWorkIntervals(log, until) {
   const out = [];
-  for (let i = 0; i < log.length; i++) {
-    if (log[i].state !== 'working') continue;
-    const end = i + 1 < log.length ? log[i + 1].at : until;
-    if (end > log[i].at) out.push([log[i].at, end]);
+  const bySession = new Map();
+  for (const e of log) {
+    const k = e.session ?? '';
+    if (!bySession.has(k)) bySession.set(k, []);
+    bySession.get(k).push(e);
   }
-  return out;
+  for (const [sess, l] of bySession) {
+    for (let i = 0; i < l.length; i++) {
+      if (l[i].state !== 'working') continue;
+      const end = i + 1 < l.length ? l[i + 1].at : typeof until === 'function' ? until(sess) : until;
+      if (end > l[i].at) out.push([l[i].at, end]);
+    }
+  }
+  return out.sort((a, b) => a[0] - b[0]);
 }
 
-// bin/crew writes "<state> HH:MM <epoch>" (older versions: no epoch; it is then taken from HH:MM,
-// today or, when that is still to come, yesterday).
-export function leadState(stateDir, nrun, now = Math.floor(Date.now() / 1000), sessions = null) {
-  const t = trim(read(path.join(stateDir, 'lead')) || '');
-  const [st = '', hm = '', ep = ''] = t.split(/\s+/);
+// A lead's state. bin/crew writes "<state> HH:MM <epoch>" in leads/<session> (older versions:
+// one file, lead, for the project, without the epoch, which is then taken from HH:MM, today or,
+// when that is still to come, yesterday). `alive`: whether its Claude Code runs (null: unknown).
+export function leadStateOf(text, nrun, now, alive = null, seen = 0) {
+  const [st = '', hm = '', ep = ''] = trim(text || '').split(/\s+/);
   let at = isInt(ep) ? Number(ep) : null;
   const m = /^(\d{1,2}):(\d{2})$/.exec(hm);
   if (at == null && m) {
@@ -466,32 +510,49 @@ export function leadState(stateDir, nrun, now = Math.floor(Date.now() / 1000), s
   const since = hm || null;
   if (st === 'stopped') return { state: 'stopped', since, sinceEpoch: at, agentsFinishing: nrun };
   // No Claude Code process left: nobody is working or waiting, whatever the last state said.
-  if (sessions && !sessions.live) {
-    const seen = sessions.lastSeen || at;
-    return { state: 'closed', since: seen ? localHM(seen) : since, sinceEpoch: seen || null };
+  if (alive === false) {
+    const last = seen || at;
+    return { state: 'closed', since: last ? localHM(last) : since, sinceEpoch: last || null };
   }
   if (st === 'working') return { state: 'working', since, sinceEpoch: at };
   if (nrun > 0) return { state: 'agents', since: null, sinceEpoch: null };
   return { state: 'waiting', since, sinceEpoch: at };
 }
 
-function keepAwake(stateDir) {
+// The project's single lead file (crew before per-lead state): kept for the tests and old state.
+export function leadState(stateDir, nrun, now = Math.floor(Date.now() / 1000), sessions = null) {
+  const t = read(path.join(stateDir, 'lead'));
+  return leadStateOf(t, nrun, now, sessions ? sessions.live : null, sessions?.lastSeen || 0);
+}
+
+// Keep-awake: each lead's caffeinate (awake/<session>; an older crew kept one, keep-awake).
+// `bySession`: the sessions whose caffeinate runs. `stopped`: every lead was stopped by the founder.
+function keepAwake(stateDir, leads) {
   if (!onPath('caffeinate')) return null;
-  let on = false;
-  let watched = '';
-  let since = null;
-  const file = path.join(stateDir, 'keep-awake');
-  const t = read(file);
-  if (t != null) {
+  const files = [path.join(stateDir, 'keep-awake'), ...listDir(path.join(stateDir, 'awake')).map((x) => path.join(stateDir, 'awake', x))];
+  const recs = [];
+  for (const file of files) {
+    const t = read(file);
+    if (t == null) continue;
     const [pid, w = ''] = trim(t).split(/\s+/);
-    watched = w;
-    if (isInt(pid) && run('ps', ['-o', 'args=', '-p', pid]).includes('caffeinate')) on = true;
-    if (on) since = Math.floor((stat(file)?.mtimeMs ?? 0) / 1000) || null;
+    if (isInt(pid)) recs.push({ file, pid, watched: w, session: path.dirname(file).endsWith('awake') ? path.basename(file) : '' });
   }
-  const stopped = /^stopped/.test(trim(read(path.join(stateDir, 'lead')) || ''));
+  const running = new Set();
+  if (recs.length) {
+    for (const line of run('ps', ['-o', 'pid=,args=', '-p', recs.map((r) => r.pid).join(',')]).split('\n')) {
+      const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+      if (m && m[2].includes('caffeinate')) running.add(m[1]);
+    }
+  }
+  const on = recs.filter((r) => running.has(r.pid));
+  const since = on.length ? Math.min(...on.map((r) => Math.floor((stat(r.file)?.mtimeMs ?? 0) / 1000) || Infinity)) : null;
+  const stopped = leads.length ? leads.every((l) => l.state.state === 'stopped') : /^stopped/.test(trim(read(path.join(stateDir, 'lead')) || ''));
   let battery = false;
-  if (on) battery = (run('pmset', ['-g', 'batt']).split('\n')[0] || '').includes('Battery Power');
-  return { on, mode: on ? (watched === '12h' ? '12h' : 'claude') : null, since, battery, stopped };
+  if (on.length) battery = (run('pmset', ['-g', 'batt']).split('\n')[0] || '').includes('Battery Power');
+  return {
+    on: on.length > 0, mode: on.length ? (on.every((r) => r.watched === '12h') ? '12h' : 'claude') : null,
+    since: Number.isFinite(since) ? since : null, battery, stopped, bySession: on.map((r) => r.session).filter(Boolean),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -540,50 +601,80 @@ export function setStartEpoch(stateDir, file) {
   return birth > 0 ? birth : null;
 }
 
-function collectSets(root, crewDir) {
-  const sets = [];
-  const add = (file, where, rel, wtRoot) => {
-    const text = read(file);
-    if (text == null) return;
-    const idx = parseIndex(text);
-    const counts = { accepted: 0, review: 0, progress: 0, rework: 0, blocked: 0, pending: 0 };
-    for (const r of idx.rows) counts[r.status]++;
-    sets.push({
-      file,
-      rel,
-      where,
-      crewDir: wtRoot ? path.join(wtRoot, '.crew') : crewDir,
-      title: idx.title || rel.replace(/\/index\.md$/, ''),
-      total: idx.rows.length,
-      accepted: counts.accepted,
-      counts,
-      closed: idx.closed,
-      stage: idx.stage,
-      branch: idx.branch,
-      live: !idx.closed,
-      mtime: Math.floor((stat(file)?.mtimeMs ?? 0) / 1000),
-      rows: idx.rows,
-    });
-  };
-  for (const d of listDir(path.join(crewDir, 'tasks'))) {
-    const f = path.join(crewDir, 'tasks', d, 'index.md');
-    if (isFile(f)) add(f, '', `tasks/${d}/index.md`, null);
-  }
-  const worktrees = [];
-  for (const wt of listWorktrees(root)) {
+// The repository's checkouts: the main one first, then the linked worktrees. Builders' worktrees
+// (under a checkout's .claude/worktrees/) hold copies of a lead's set: `builder` marks them.
+export function checkouts(root) {
+  const wts = listWorktrees(root);
+  const out = [{ path: root, branch: wts.find((w) => realpath(w.path) === root)?.branch ?? '', main: true, builder: false }];
+  for (const wt of wts) {
     const p = realpath(wt.path);
     if (p === root) continue;
-    worktrees.push({ path: p, branch: wt.branch });
-    const tasks = path.join(p, '.crew', 'tasks');
-    if (!isDir(tasks)) continue;
-    for (const d of listDir(tasks)) {
-      const f = path.join(tasks, d, 'index.md');
-      const rel = `tasks/${d}/index.md`;
-      if (!isFile(f) || isFile(path.join(crewDir, rel))) continue;
-      add(f, wt.branch || path.basename(p), rel, p);
-    }
+    out.push({ path: p, branch: wt.branch, main: false, builder: p.includes(`${path.sep}.claude${path.sep}worktrees${path.sep}`) });
   }
-  return { sets, worktrees };
+  return out;
+}
+
+// The task set open in a checkout (bin/crew's set_here): an open index whose Branch: is the
+// branch checked out there, else the folder of a crew/<slug> branch; off a crew/ branch, the only
+// open index there. `cands`: that checkout's sets.
+export function openSetIn(branch, cands) {
+  const open = cands.filter((c) => c.live);
+  const hit = open.find((c) => branch && ((c.branch && c.branch.split(/\s+/)[0] === branch) || branch === `crew/${c.slug}`));
+  if (hit) return hit;
+  if (open.length === 1 && !/^crew\//.test(branch || '')) return open[0];
+  return null;
+}
+
+// Every task set, once: from the checkout where it is open (its lead's), else the main checkout's
+// copy, else the newest. `openIn`: checkout path -> the set open there.
+function collectSets(root, crewDir) {
+  const all = [];
+  const openIn = new Map();
+  const cks = checkouts(root);
+  for (const ck of cks) {
+    if (ck.builder) continue;
+    const here = [];
+    const tasks = path.join(ck.path, '.crew', 'tasks');
+    for (const d of listDir(tasks)) {
+      const file = path.join(tasks, d, 'index.md');
+      const text = isFile(file) ? read(file) : null;
+      if (text == null) continue;
+      const idx = parseIndex(text);
+      const counts = { accepted: 0, review: 0, progress: 0, rework: 0, blocked: 0, pending: 0 };
+      for (const r of idx.rows) counts[r.status]++;
+      here.push({
+        file,
+        rel: `tasks/${d}/index.md`,
+        slug: d,
+        where: ck.main ? '' : ck.branch || path.basename(ck.path),
+        checkout: ck.path,
+        crewDir: path.join(ck.path, '.crew'),
+        title: idx.title || d,
+        total: idx.rows.length,
+        accepted: counts.accepted,
+        counts,
+        closed: idx.closed,
+        stage: idx.stage,
+        branch: idx.branch,
+        live: !idx.closed,
+        mtime: Math.floor((stat(file)?.mtimeMs ?? 0) / 1000),
+        rows: idx.rows,
+        here: false,
+      });
+    }
+    const o = openSetIn(ck.branch, here);
+    if (o) { o.here = true; openIn.set(ck.path, o); }
+    all.push(...here);
+  }
+  // Copies of one set: the one open in its checkout, then the main checkout's, then the newest.
+  const rank = (c) => [Number(c.here), Number(c.where === ''), c.mtime];
+  const before = (x, y) => { const a = rank(x); const b = rank(y); for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; };
+  const bySlug = new Map();
+  for (const c of all) if (!bySlug.has(c.slug) || before(c, bySlug.get(c.slug))) bySlug.set(c.slug, c);
+  const sets = [...bySlug.values()];
+  for (const [co, o] of openIn) if (bySlug.get(o.slug) !== o) openIn.delete(co);
+  const worktrees = cks.filter((c) => !c.main).map((c) => ({ path: c.path, branch: c.branch }));
+  return { sets, worktrees, openIn, checkouts: cks };
 }
 
 // The current set: a live main-checkout index on the current branch, else the newest live
@@ -1047,11 +1138,11 @@ export function reachVia(r) {
   return null;
 }
 
-// The lead's session: of the sessions `crew session start` registered (hooks also record
-// sessions that never ran the crew), the newest transcript whose Claude Code still runs, else
-// the newest transcript.
-export function leadSession(stateDir, sessions) {
-  const reg = listDir(path.join(stateDir, 'sessions')).filter((s) => s !== 'any' && sessions.transcriptOf.has(s));
+// A lead's session: of the sessions `crew session start` registered (hooks also record sessions
+// that never ran the crew), `want`; without it, the newest transcript whose Claude Code still
+// runs, else the newest transcript.
+export function leadSession(stateDir, sessions, want = null) {
+  const reg = listDir(path.join(stateDir, 'sessions')).filter((s) => s !== 'any' && sessions.transcriptOf.has(s) && (want == null || s === want));
   if (!reg.length) return null;
   const mtime = (s) => stat(sessions.transcriptOf.get(s))?.mtimeMs ?? 0;
   const alive = (s) => (sessions.pids.has(s) ? sessions.alive.has(s) : sessions.live);
@@ -1150,15 +1241,17 @@ function pastAgents(stateDir, runs, running, limit = 60) {
       model: a?.model || 'default', effort: a?.effort || 'default',
       started: a?.started || r.start, ended: r.end, runs: count.get(id), status: r.status,
       taskNum: taskNum(a?.description || '') ?? (isInt(r.task) ? Number(r.task) : null),
+      session: a?.session || r.session || '', set: a?.set ?? r.set ?? null,
     });
   }
   return out.sort((a, b) => b.ended - a.ended).slice(0, limit);
 }
 
-// The transcript of the lead ('lead') or of a subagent (its id): the lead's from the session's
-// record; a subagent's under a recorded session's transcript (<session>/subagents/agent-<id>.jsonl).
+// The transcript of a lead ('lead:<session>'; 'lead': the newest live one) or of a subagent (its
+// id): a lead's from the session's record; a subagent's under a recorded session's transcript (<session>/subagents/agent-<id>.jsonl).
 export function transcriptFile(stateDir, who, sessions) {
   if (who === 'lead') return leadSession(stateDir, sessions)?.transcript ?? null;
+  if (/^lead:[A-Za-z0-9._-]{1,120}$/.test(who)) return leadSession(stateDir, sessions, who.slice(5))?.transcript ?? null;
   if (!/^[A-Za-z0-9_-]{1,80}$/.test(who)) return null;
   const own = trim(read(path.join(stateDir, 'running', who)) || '');
   const tps = [sessions.transcriptOf.get(own), ...sessions.transcriptOf.values()].filter(Boolean);
@@ -1299,6 +1392,67 @@ export function readTranscript(file, { from = null, before = null, max = 1500000
 }
 
 // ---------------------------------------------------------------------------
+// Leads: one per checkout (see "Leads" in bin/crew's header)
+// ---------------------------------------------------------------------------
+
+// The registered sessions, one per checkout: the newest whose Claude Code runs, else the newest.
+// A lead whose Claude Code is gone is left out when its checkout is gone, or when it had no task
+// set open and another lead is shown. Live leads first, the main checkout's first among equals.
+export function leadSessions(stateDir, sessions, root, now = Math.floor(Date.now() / 1000)) {
+  const best = new Map();
+  for (const sess of listDir(path.join(stateDir, 'sessions'))) {
+    if (sess === 'any') continue;
+    const t = read(path.join(stateDir, 'sessions', sess)) || '';
+    const co = realpath(/^checkout=(.*)$/m.exec(t)?.[1] || root);
+    const alive = sessionAlive(sessions, sess);
+    const ep = Number(trim(read(path.join(stateDir, 'leads', sess)) || '').split(/\s+/)[2]);
+    const at = Math.max(Number.isFinite(ep) ? ep : 0, sessions.seen.get(sess) || 0);
+    const r = { session: sess, checkout: co, alive, at };
+    const p = best.get(co);
+    if (!p || Number(r.alive) > Number(p.alive) || (r.alive === p.alive && r.at > p.at)) best.set(co, r);
+  }
+  return [...best.values()]
+    .filter((r) => isDir(r.checkout))
+    .sort((x, y) => Number(y.alive) - Number(x.alive) || Number(y.checkout === root) - Number(x.checkout === root) || y.at - x.at);
+}
+
+// Entries of the queues and defect logs: the backlog of every checkout, and each set's own files.
+// A request or defect number is project-wide; one entry found in two copies (a backlog seen from
+// two checkouts) keeps the copy furthest along.
+const DONE_STATES = new Set(['done', 'dropped', 'fixed', 'answered', 'closed']);
+function collectEntries(cks, sets) {
+  const rank = (e) => (DONE_STATES.has(e.state) ? 2 : e.state === 'scheduled' ? 1 : 0);
+  const req = new Map();
+  const qst = new Map();
+  const dfx = new Map();
+  const add = (map, e, set, title) => {
+    const k = `${set ?? ''}:${e.id}`;
+    const x = { ...e, set, setTitle: title };
+    if (!map.has(k) || rank(x) > rank(map.get(k))) map.set(k, x);
+  };
+  for (const s of sets) {
+    const dir = path.dirname(s.file);
+    const q = read(path.join(dir, 'queue.md')) || '';
+    for (const e of parseQueue(q, 'R')) add(req, e, s.slug, s.title);
+    for (const e of parseQueue(q, 'F')) add(qst, e, s.slug, s.title);
+    for (const e of parseDefects(read(path.join(dir, 'defects.md')) || '')) add(dfx, e, s.slug, s.title);
+  }
+  for (const ck of cks) {
+    if (ck.builder) continue;
+    const q = read(path.join(ck.path, '.crew', 'queue.md')) || '';
+    for (const e of parseQueue(q, 'R')) add(req, e, null, null);
+    for (const e of parseQueue(q, 'F')) add(qst, e, null, null);
+    for (const e of parseDefects(read(path.join(ck.path, '.crew', 'defects.md')) || '')) add(dfx, e, null, null);
+  }
+  return { requests: [...req.values()], questions: [...qst.values()], defects: [...dfx.values()] };
+}
+
+function readHandoff(file) {
+  const t = read(file);
+  return t == null ? null : { ...parseHandoff(t), path: file };
+}
+
+// ---------------------------------------------------------------------------
 // The state
 // ---------------------------------------------------------------------------
 
@@ -1315,38 +1469,36 @@ export function buildState(rootIn, opts = {}) {
   const { agents, ended } = runningAgents(stateDir, recorded, sessions);
   const runs = [...recorded, ...ended];
   const repo = { name: path.basename(root), root, ...gitInfo(root), icon: projectIcon(root) };
-  const lead = leadState(stateDir, agents.length, now, sessions);
   const leadLog = readLeadLog(stateDir);
-  const leadWork = leadWorkIntervals(leadLog, sessions.live ? now : Math.min(now, sessions.lastSeen || now));
-  const awake = keepAwake(stateDir);
+  const seenOf = (sess) => sessions.seen.get(sess) || sessions.lastSeen || now;
+  const untilOf = (sess) => (sess && sessions.pids.has(sess) ? (sessions.alive.has(sess) ? now : Math.min(now, seenOf(sess)))
+    : sessions.live ? now : Math.min(now, sessions.lastSeen || now));
 
-  const { sets, worktrees } = collectSets(root, crewDir);
+  const { sets, worktrees, openIn, checkouts: cks } = collectSets(root, crewDir);
   const cur = pickCurrent(sets, repo.branch);
+  const slugOf = (co) => openIn.get(co)?.slug ?? null;
 
-  // Queue, defects.
-  const qText = read(path.join(crewDir, 'queue.md')) || '';
-  const requests = parseQueue(qText, 'R');
-  const questions = parseQueue(qText, 'F');
-  const defects = parseDefects(read(path.join(crewDir, 'defects.md')) || '');
+  // The leads, each with the set open in its checkout.
+  const regs = leadSessions(stateDir, sessions, root, now);
+  const leadOfSet = new Map();
+  for (const r of regs) { const sl = slugOf(r.checkout); if (sl && !leadOfSet.has(sl)) leadOfSet.set(sl, r); }
+  const shown = regs.filter((r, i) => r.alive || slugOf(r.checkout) || i === 0 || !regs.some((x) => x.alive));
 
-  let current = null;
-  if (cur >= 0) {
-    const set = sets[cur];
+  // One set as the page shows it: its tasks, agents, timing and handoff.
+  const viewOf = (set) => {
     const setDir = path.dirname(set.file);
+    const mine = (x) => x.set == null || x.set === set.slug;
+    const setAgents = agents.filter(mine);
     const tasks = set.rows.map((r) => {
-      const onIt = agents.filter((a) => a.taskNum != null && a.taskNum === r.num).map((a) => a.id);
-      const shots = screenshotsFor(crewDir, r.id);
-      return {
-        ...r,
-        specPath: r.spec ? path.join(setDir, r.spec) : null,
-        agents: onIt,
-        screenshots: shots.items,
-        screenshotCount: shots.total,
-      };
+      const onIt = setAgents.filter((a) => a.taskNum != null && a.taskNum === r.num).map((a) => a.id);
+      // Screenshots are in the lead's checkout; an older crew harvested every worktree's into the main one.
+      let shots = screenshotsFor(set.crewDir, r.id);
+      if (!shots.total && set.crewDir !== crewDir) shots = screenshotsFor(crewDir, r.id);
+      return { ...r, specPath: r.spec ? path.join(setDir, r.spec) : null, agents: onIt, screenshots: shots.items, screenshotCount: shots.total };
     });
     let ct = tasks.findIndex((t) => ['progress', 'review', 'rework'].includes(t.status));
     if (ct < 0) ct = tasks.findIndex((t) => t.status === 'pending');
-
+    const lr = leadOfSet.get(set.slug);
     let timing = null;
     if (tasks.length) {
       const agentCache = new Map();
@@ -1354,48 +1506,73 @@ export function buildState(rootIn, opts = {}) {
         if (!agentCache.has(id)) agentCache.set(id, loadAgent(stateDir, id));
         return agentCache.get(id);
       };
+      const log = leadLog.filter(mine);
+      const alive = lr ? lr.alive : sessions.live;
       timing = computeTiming({
         tasks: tasks.map((t) => ({ id: t.id, num: t.num, depNums: t.deps.map((d) => Number(d.replace(/[^0-9]/g, ''))) })),
-        runs,
-        open: agents.map((a) => ({ start: a.runStart, id: a.id, type: a.type, task: a.taskNum == null ? '' : String(a.taskNum), kind: a.kind })),
+        runs: runs.filter(mine),
+        open: setAgents.map((a) => ({ start: a.runStart, id: a.id, type: a.type, task: a.taskNum == null ? '' : String(a.taskNum), kind: a.kind })),
         sleeps,
         start: setStartEpoch(stateDir, set.file),
         now,
-        done: agents.length === 0 && set.accepted === set.total,
-        closedAt: sessions.live ? null : sessions.lastSeen || null,
+        done: setAgents.length === 0 && set.accepted === set.total,
+        closedAt: alive ? null : (lr ? seenOf(lr.session) : sessions.lastSeen) || null,
         agentOf,
-        leadWork,
-        leadFrom: leadLog.length ? leadLog[0].at : null,
+        leadWork: leadWorkIntervals(log, untilOf),
+        leadFrom: log.length ? log[0].at : null,
       });
     }
-    current = {
-      file: set.file, rel: set.rel, where: set.where, title: set.title, stage: set.stage, branch: set.branch,
-      total: set.total, accepted: set.accepted, counts: set.counts,
+    return {
+      file: set.file, rel: set.rel, slug: set.slug, where: set.where, checkout: set.checkout, title: set.title, stage: set.stage, branch: set.branch,
+      total: set.total, accepted: set.accepted, counts: set.counts, lead: lr?.session ?? null,
       tasks, currentTask: ct >= 0 ? tasks[ct].id : null, timing,
+      handoff: readHandoff(path.join(setDir, 'handoff.md')),
     };
-  }
+  };
+  const open = sets.map((st, i) => ({ st, i })).filter((x) => x.st.live).map((x) => ({ i: x.i, view: viewOf(x.st) }));
+  let current = open.find((o) => o.i === cur)?.view ?? null;
+  if (!current && cur >= 0) current = viewOf(sets[cur]);
 
-  const handoffText = read(path.join(crewDir, 'handoff.md'));
+  const tasksOf = new Map(open.map((o) => [o.view.slug, o.view.tasks]));
+  const taskIdOf = (tn, set) => {
+    if (tn == null) return null;
+    const list = (set && tasksOf.get(set)) || current?.tasks || [];
+    return list.find((t) => t.num === tn)?.id ?? `T${String(tn).padStart(2, '0')}`;
+  };
+
+  const leads = shown.map((r) => {
+    const set = openIn.get(r.checkout) ?? null;
+    const nrun = agents.filter((a) => a.session === r.session).length;
+    let text = read(path.join(stateDir, 'leads', r.session));
+    if (text == null && r.checkout === root) text = read(path.join(stateDir, 'lead'));
+    const ls = { session: r.session, alive: r.alive, transcript: sessions.transcriptOf.get(r.session) ?? null };
+    const { model, effort } = leadModel(stateDir, ls, sessions);
+    const window = model ? compactWindow(r.checkout, model) : 0;
+    const ck = cks.find((c) => c.path === r.checkout);
+    return {
+      session: r.session, alive: r.alive, checkout: r.checkout, main: r.checkout === root,
+      label: r.checkout === root ? 'main checkout' : path.basename(r.checkout), branch: ck?.branch || '',
+      set: set?.slug ?? null, setTitle: set?.title ?? null,
+      state: leadStateOf(text, nrun, now, r.alive, seenOf(r.session)), agents: nrun,
+      model, effort, window, compactAt: window ? Math.max(0, window - COMPACT_MARGIN) : 0,
+      reach: r.alive ? reachVia(readReach(stateDir, r.session)) : null,
+      handoff: set ? readHandoff(path.join(path.dirname(set.file), 'handoff.md')) : readHandoff(path.join(r.checkout, '.crew', 'handoff.md')),
+    };
+  });
+  // The lead of the current set, else the first: what a page that shows one lead shows.
+  const primary = leads.find((l) => current && l.set === current.slug) ?? leads[0] ?? null;
+  const lead = primary ? primary.state : leadState(stateDir, agents.length, now, sessions);
+  const awake = keepAwake(stateDir, leads);
+  if (awake) for (const l of leads) l.awake = awake.bySession.includes(l.session);
+
+  const { requests, questions, defects } = collectEntries(cks, sets);
+  const handoff = primary?.handoff ?? readHandoff(path.join(crewDir, 'handoff.md'));
   const journal = parseJournal(read(path.join(crewDir, 'journal.md')) || '', opts.journalLimit ?? 400);
   const compactions = compactionsModel(stateDir);
   const ds = defectSummary(defects);
 
-  // The Agents tab: the lead (its model, where it compacts, whether the page can message it) and
-  // the subagents that are not running.
-  const taskIdOf = (tn) => (tn == null ? null : (current?.tasks.find((t) => t.num === tn)?.id ?? `T${String(tn).padStart(2, '0')}`));
-  const ls = leadSession(stateDir, sessions);
-  let leadInfo = null;
-  if (ls) {
-    const { model, effort } = leadModel(stateDir, ls, sessions);
-    const window = model ? compactWindow(root, model) : 0;
-    leadInfo = {
-      session: ls.session, alive: ls.alive, model, effort,
-      window, compactAt: window ? Math.max(0, window - COMPACT_MARGIN) : 0,
-      reach: ls.alive ? reachVia(readReach(stateDir, ls.session)) : null,
-    };
-  }
   const past = pastAgents(stateDir, runs, new Set(agents.map((a) => a.id)))
-    .map(({ taskNum: tn, ...a }) => ({ ...a, task: taskIdOf(tn) }));
+    .map(({ taskNum: tn, ...a }) => ({ ...a, task: taskIdOf(tn, a.set) }));
 
   const state = {
     version: MODEL_VERSION,
@@ -1404,11 +1581,12 @@ export function buildState(rootIn, opts = {}) {
     repo,
     lead,
     keepAwake: awake,
-    agents: agents.map(({ taskNum: tn, ...a }) => ({ ...a, task: taskIdOf(tn) })),
-    roster: { lead: leadInfo, past },
+    agents: agents.map(({ taskNum: tn, ...a }) => ({ ...a, task: taskIdOf(tn, a.set) })),
+    roster: { lead: primary, leads, past },
     current,
-    sets: sets.map(({ rows, crewDir: _c, ...s }, i) => ({ ...s, current: i === cur }))
-      .sort((a, b) => Number(b.current) - Number(a.current) || b.mtime - a.mtime),
+    open: open.map((o) => o.view),
+    sets: sets.map(({ rows, crewDir: _c, ...s }, i) => ({ ...s, current: i === cur, lead: leadOfSet.get(s.slug)?.session ?? null }))
+      .sort((a, b) => Number(b.current) - Number(a.current) || Number(b.live) - Number(a.live) || b.mtime - a.mtime),
     queue: {
       requests,
       questions,
@@ -1423,11 +1601,11 @@ export function buildState(rootIn, opts = {}) {
     defects: { items: defects, summary: ds },
     compactions,
     journal,
-    handoff: handoffText == null ? null : { ...parseHandoff(handoffText), path: path.join(crewDir, 'handoff.md') },
+    handoff,
     worktrees,
   };
   // Something on the page changes with time alone: refresh it once a minute.
-  state.live = agents.length > 0 || Boolean(current?.timing && !current.timing.done) || Boolean(awake?.on);
+  state.live = agents.length > 0 || state.open.some((o) => o.timing && !o.timing.done) || Boolean(awake?.on);
   return state;
 }
 

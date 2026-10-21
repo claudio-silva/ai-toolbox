@@ -7,11 +7,11 @@ Reader: the lead. Read on `/crew handoff`. The founder's flow is `/crew handoff`
    - When each one reports, only record its result (for example a finished builder becomes "T05 implemented, review not started"). Do not start the next step.
    - Only if the founder explicitly insists on handing off now: stop the running agents with `TaskStop` and record their tasks as interrupted.
 2. **Update the state:** the state file (status, decisions log), the index statuses and the queue.
-3. **Write `.crew/handoff.md`** (overwrite it) with this template:
+3. **Write the handoff** (overwrite it): the open task set's `handoff.md` (`.crew/tasks/<slug>/handoff.md`), or `.crew/handoff.md` when this checkout has no set open. `.crew/bin/crew where` names it. Template:
    ```
    # Crew handoff — <YYYY-MM-DD HH:MM>
    HEAD: <branch> @ <short sha>
-   Files: CREW <path> · state <path> · plan <path> · index <path> · queue .crew/queue.md
+   Files: CREW <path> · state <path> · plan <path> · index <path> · queue <the set's queue.md, or .crew/queue.md>
    Where we are: <milestone / task set / task, one line>
    In flight: <"nothing", or task — state, e.g. "T05 implemented, review not started">
    Next step: <the very next action>

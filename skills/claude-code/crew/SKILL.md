@@ -17,9 +17,9 @@ This skill was invoked with: `$ARGUMENTS`. If its first word is `setup`, `handof
 ## Session start
 
 1. Read the project's **`CREW.md`** (path from the pointer line in `CLAUDE.md` or `AGENTS.md`; default `docs/CREW.md`). It overrides this skill.
-2. Run `.crew/bin/crew session start ${CLAUDE_SESSION_ID}` from the project root. It registers this session for the hooks, keeps the computer awake while Claude Code runs, and starts the founder's dashboard. If it prints `Open the dashboard at <url>`, start your reply with that line; if it prints nothing about the dashboard, one was already running and you say nothing.
+2. Run `.crew/bin/crew session start ${CLAUDE_SESSION_ID}` from this checkout's root. It registers this session as the checkout's lead for the hooks, keeps the computer awake while Claude Code runs, starts the founder's dashboard, and names this checkout's task set and its files. If it prints `Open the dashboard at <url>`, start your reply with that line; if it prints nothing about the dashboard, one was already running and you say nothing. Exit 4: another session leads this checkout; relay its message to the founder and do no crew work until they choose.
 3. If `.crew/` does not exist, skip step 2, offer `/crew setup`, and work with the defaults until then (no journal, no queue, no dashboard).
-4. If `.crew/handoff.md` exists and the founder did not run `/crew resume`, mention it.
+4. If it printed a `Handoff:` line and the founder did not run `/crew resume`, mention it.
 
 ## The work loop
 
@@ -36,7 +36,7 @@ At any time: a founder message while work is in flight → "Founder requests" be
 Apply this to every founder message while work is in flight, unprompted, before anything else:
 
 1. **Classify.** A clarification: answer it. An operational instruction ("stop", "do X first", `/crew stop`): do it now. Anything that changes what gets built (a change, a fix, a feature, feedback, an answer that overrides a default you took), even phrased as a question or buried in a list of remarks: a **request**. Five remarks are five requests.
-2. **Queue every request first:** `.crew/bin/crew request "<the founder's words>" --affects "<tasks, plan sections>" --slot "<after T<NN> | end of set | milestone <N>>"`, with `--urgent` when the founder says so or it is a data-loss or security problem. It writes `.crew/queue.md` and journals.
+2. **Queue every request first:** `.crew/bin/crew request "<the founder's words>" --affects "<tasks, plan sections>" --slot "<after T<NN> | end of set | milestone <N>>"`, with `--urgent` when the founder says so or it is a data-loss or security problem. It writes the open task set's queue (`--backlog`: `.crew/queue.md`, for later work) and journals.
 3. **Acknowledge in 3 lines:** what you understood; what it affects and costs; its R number and slot.
 4. **Never add a request to a running agent, and never edit a plan, spec or index entry an agent is working from.** Drain the queue only at task-acceptance boundaries: `.crew/bin/crew request R<n> --status scheduled` when it becomes a task (the spec carries `Requests: R<n>`), `--status done` when that work is accepted, `--status dropped --note "<why>"` otherwise.
 5. **A request that invalidates running work** (its output would be discarded): stop those agents now, queue it `--urgent`, and before reverting accepted work tell the founder what would be lost and get confirmation.
@@ -57,7 +57,7 @@ Go down the list and take the first match:
    - Next, a **debugger** (sonnet, high).
    - After 3 failed hypotheses, a fix-A-breaks-B loop, or a cross-subsystem cause, a **debugger with `model: opus`, effort xhigh**, given a synthesized brief of what was tried.
    - If it is still stuck, question the task itself (is it mis-specified, or is its premise false?) and re-plan or ask the founder.
-7. **Every landing** goes to a **reviewer** with fresh context. Trivial docs or config changes may skip review; say so. A first review is complete and re-reviews check only the fixes; leaf findings are deferred to `.crew/defects.md` (`reference/execution.md`).
+7. **Every landing** goes to a **reviewer** with fresh context. Trivial docs or config changes may skip review; say so. A first review is complete and re-reviews check only the fixes; leaf findings are deferred with `crew defect` (`reference/execution.md`).
 8. **UI changes** need screenshots in the report. You look at the key ones (Quality).
 
 **Parallelism.** Run independent tasks in parallel only by the protocol in `reference/execution.md`.

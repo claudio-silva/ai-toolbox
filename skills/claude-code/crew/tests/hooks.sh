@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Fixture tests for .crew/bin/crew and the dashboard model (.crew/dashboard/model.mjs, read
 # through `server.mjs state`): compaction hooks, request queue, in-flight reminder,
-# index-addition check, defect log, timing and sleep, keep-awake, stop state.
+# index-addition check, defect log, timing and sleep, keep-awake, stop state, and several leads
+# (one per checkout: the conflict, take-over, per-set files, the backlog).
 # Run from the skill directory: bash tests/hooks.sh
 # Needs jq, git and Node.js 20+. Writes only under a temporary directory; caffeinate and sysctl
 # are stubs; the dashboard server is never started (CREW_DASHBOARD=0).
@@ -10,12 +11,15 @@ HERE=$(cd "$(dirname "$0")/.." && pwd -P)
 T=$(mktemp -d "${TMPDIR:-/tmp}/crew-test.XXXXXX")
 cleanup() {
   local pid
-  if [ -f "$T/project/.crew/tmp/journal-state/keep-awake" ]; then
-    read -r pid _ < "$T/project/.crew/tmp/journal-state/keep-awake"; kill "$pid" 2>/dev/null
-  fi
+  local f
+  for f in "$T/project/.crew/tmp/journal-state/keep-awake" "$T/project/.crew/tmp/journal-state/awake/"*; do
+    [ -f "$f" ] || continue
+    read -r pid _ < "$f"; kill "$pid" 2>/dev/null
+  done
   pid=$(jq -r '.pid // empty' "$T/project/.crew/tmp/dashboard.json" 2>/dev/null)
   [ -n "$pid" ] && kill "$pid" 2>/dev/null
   if [ -n "${CREW_CLAUDE_PID:-}" ]; then kill "$CREW_CLAUDE_PID" 2>/dev/null; wait "$CREW_CLAUDE_PID" 2>/dev/null; fi
+  for pid in ${MORE_CLAUDES:-}; do kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; done
   rm -rf "$T"
 }
 trap cleanup EXIT
@@ -37,6 +41,9 @@ printf '24000000\n179643921385406 %s\n' $((24000000 * 5000)) > "$T/sysctl.out"  
 export PATH="$T/stubs:$PATH"
 # Claude Code: a process whose command line says claude, standing in for the one the session runs in.
 claude_stub() { bash -c 'exec -a claude-stub sleep 600' & CREW_CLAUDE_PID=$!; export CREW_CLAUDE_PID; }
+# another_claude: one more Claude Code (its pid in REPLY), for a second lead.
+MORE_CLAUDES=""
+another_claude() { bash -c 'exec -a claude-stub sleep 600' & REPLY=$!; MORE_CLAUDES="$MORE_CLAUDES $REPLY"; }
 claude_stub
 unset CREW_KEEP_AWAKE PASEO_AGENT_ID PASEO_CLI CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN
 export CREW_DASHBOARD=0
@@ -204,33 +211,45 @@ check "model: lead row with turns since" "lead (opus · high) | 267k → 14k | 5
   "$(model '.compactions.rows[] | select(.kind == "lead") | "\(.label) | \(.pre | k) → \(.post | k) | \(.durationMs / 1000 | span) | \(.trigger) | \(.turns)"')"
 
 # ---- 6. requests ----
+# A task set is open (autosave): requests go to its queue; the project's backlog is .crew/queue.md.
 rm -f "$P/.crew/tmp/journal-state/running/"*
+Q="$P/.crew/tasks/autosave/queue.md"
 out=$("$CREW" request "Autosave every 10 s, not only on blur" --affects "T07, T08" --slot "after T07")
 check "request: entry printed" "- [R1] $(date '+%Y-%m-%d') · Autosave every 10 s, not only on blur · affects: T07, T08 · slot: after T07 · status: queued" "$out"
-check "request: journaled" "lead · Queued R1: Autosave every 10 s, not only on blur, slot: after T07" "$(tail -n 1 "$P/.crew/journal.md")"
+check "request: journaled, with its set" "lead · Queued R1 (set autosave): Autosave every 10 s, not only on blur, slot: after T07" "$(tail -n 1 "$P/.crew/journal.md")"
+check "request: in the open set's queue" "- [R1] " "$(cat "$Q")"
+check_not "request: not in the backlog" "- [R1] " "$(grep -E '^- \[R' "$P/.crew/queue.md")"
 "$CREW" request "Rename Save to Guardar" --urgent >/dev/null
 "$CREW" request "Export to EPUB" --slot "milestone 3" >/dev/null
-check "request: urgent goes first" "- [R2] " "$(grep -m 1 -E '^- \[R' "$P/.crew/queue.md")"
-check "request: urgent slot" "slot: now (urgent) · status: queued" "$(grep -E '^- \[R2\]' "$P/.crew/queue.md")"
+check "request: urgent goes first" "- [R2] " "$(grep -m 1 -E '^- \[R' "$Q")"
+check "request: urgent slot" "slot: now (urgent) · status: queued" "$(grep -E '^- \[R2\]' "$Q")"
 out=$("$CREW" request "Dry run only" --dry-run)
 check "request: dry run prints R4" "- [R4] " "$out"
-check_not "request: dry run writes nothing" "Dry run only" "$(cat "$P/.crew/queue.md")"
+check_not "request: dry run writes nothing" "Dry run only" "$(cat "$Q")"
 out=$("$CREW" request R1 --status scheduled --note "as T09")
 check "request: transition rewrites the line" "status: scheduled" "$out"
 check "request: transition journaled" "Scheduled R1 (Autosave every 10 s, not only on blur) as T09" "$(tail -n 1 "$P/.crew/journal.md")"
 "$CREW" request R2 --status done >/dev/null
-check "request: done" "[R2] " "$(grep 'status: done' "$P/.crew/queue.md")"
+check "request: done" "[R2] " "$(grep 'status: done' "$Q")"
 out=$("$CREW" request R9 --status done 2>&1); rc=$?
 check "request: unknown id fails" "no entry R9" "$out"
-check "queue keeps the questions section" "## Questions for the founder" "$(cat "$P/.crew/queue.md")"
-rq=$(grep -c -E '^- \[R[0-9]+\]' "$P/.crew/queue.md")
+check "queue keeps the questions section" "## Questions for the founder" "$(cat "$Q")"
+rq=$(grep -c -E '^- \[R[0-9]+\]' "$Q")
 check "queue has three entries" "3" "$rq"
 "$CREW" request "Dark mode" --slot "milestone 3" >/dev/null
-check "model: requests and their states" "R2 done · R1 scheduled · R3 queued · R4 queued" \
+out=$("$CREW" request "Print preview" --backlog)
+check "request: --backlog numbers on, project-wide" "- [R5] " "$out"
+check "request: --backlog writes the project's queue" "- [R5] " "$(cat "$P/.crew/queue.md")"
+check "request: --backlog journaled" "Queued R5 (backlog)" "$(tail -n 1 "$P/.crew/journal.md")"
+"$CREW" request R5 --status dropped >/dev/null
+check "request: a transition finds a backlog entry" "status: dropped" "$(grep -F '[R5]' "$P/.crew/queue.md")"
+check "model: requests and their states" "R2 done · R1 scheduled · R3 queued · R4 queued · R5 dropped" \
   "$(model '.queue.requests | map("\(.id) \(.state)") | join(" · ")')"
+check "model: where each request is kept" "R1 autosave · R5 backlog" \
+  "$(model '.queue.requests | map(select(.id == "R1" or .id == "R5")) | map("\(.id) \(.set // "backlog")") | join(" · ")')"
 check "model: request columns" "R1 | Autosave every 10 s, not only on blur | T07, T08 | after T07 | scheduled" \
   "$(model '.queue.requests[] | select(.id == "R1") | "\(.id) | \(.text) | \(.affects) | \(.slot) | \(.state)"')"
-check "model: request counts" "queued 2 · scheduled 1 · done 1 · dropped 0" \
+check "model: request counts" "queued 2 · scheduled 1 · done 1 · dropped 1" \
   "$(model '.queue.counts | "queued \(.queued) · scheduled \(.scheduled) · done \(.done) · dropped \(.dropped)"')"
 
 # ---- 7. in-flight reminder ----
@@ -247,18 +266,19 @@ hook file-changed "{$J_BASE,\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\"
 printf '# T09 — Guardar\n\n**Flags:** none · **Depends on:** —\n' > "$P/.crew/tasks/autosave/09-guardar.md"
 printf '| T09 | pending | Guardar button | — | — | `09-guardar.md` |\n' >> "$P/.crew/tasks/autosave/index.md"
 out=$(hook file-changed "{$J_BASE,\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$P/.crew/tasks/autosave/index.md\"}}")
-check "index addition: flagged to the lead" "T09 added to tasks/autosave/index.md without a Requests: line" "$out"
+check "index addition: flagged to the lead" "T09 added to .crew/tasks/autosave/index.md without a Requests: line" "$out"
 check "index addition: additionalContext JSON" "\"hookEventName\":\"PostToolUse\"" "$out"
 check "index addition: journaled" "system · T09 added to" "$(tail -n 1 "$P/.crew/journal.md")"
 out=$(hook file-changed "{$J_BASE,\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$P/.crew/tasks/autosave/index.md\"}}")
 check_not "index addition: flagged once" "T09 added" "$out"
 
 # ---- 9. defects ----
+DF="$P/.crew/tasks/autosave/defects.md"
 out=$("$CREW" defect "Ribbon icon sits 2 px low" --where "ribbon (app/src/ribbon.tsx)" --from "T07 review")
 check "defect: entry printed" "- [D1] $(date '+%Y-%m-%d') · Ribbon icon sits 2 px low · where: ribbon (app/src/ribbon.tsx) · from: T07 review · severity: low · slot: end of set · status: deferred" "$out"
-check "defect: after the format comment" "-->
+check "defect: in the open set's log, under its heading" "## Defects
 
-- [D1]" "$(cat "$P/.crew/defects.md")"
+- [D1]" "$(cat "$DF")"
 check "defect: journaled" "lead · Deferred D1 (low): Ribbon icon sits 2 px low, where: ribbon (app/src/ribbon.tsx)" "$(tail -n 1 "$P/.crew/journal.md")"
 out=$("$CREW" defect "Text lost on reload" --where editor --severity high 2>&1); rc=$?
 check "defect: high severity refused" "never deferred" "$out"
@@ -272,11 +292,11 @@ check "defect: --promote only with scheduled" "goes with --status scheduled" "$o
 out=$("$CREW" defect D1 --promote --note "it broke T09's ribbon screenshot check")
 check "defect: promoted" "status: scheduled · promoted" "$out"
 check "defect: promotion journaled" "Promoted D1 (Ribbon icon sits 2 px low): it broke T09's ribbon screenshot check" "$(tail -n 1 "$P/.crew/journal.md")"
-check "defect: note kept on the line, last" "· promoted · note: it broke T09's ribbon screenshot check" "$(grep -F '[D1]' "$P/.crew/defects.md")"
+check "defect: note kept on the line, last" "· promoted · note: it broke T09's ribbon screenshot check" "$(grep -F '[D1]' "$DF")"
 "$CREW" defect D2 --status scheduled --note 'as T10 \ & co' >/dev/null
-check "defect: note taken literally" "· status: scheduled · note: as T10 \\ & co" "$(grep -F '[D2]' "$P/.crew/defects.md")"
+check "defect: note taken literally" "· status: scheduled · note: as T10 \\ & co" "$(grep -F '[D2]' "$DF")"
 "$CREW" defect D2 --status fixed >/dev/null
-check "defect: older note kept by a transition without one" "· status: fixed · note: as T10 \\ & co" "$(grep -F '[D2]' "$P/.crew/defects.md")"
+check "defect: older note kept by a transition without one" "· status: fixed · note: as T10 \\ & co" "$(grep -F '[D2]' "$DF")"
 "$CREW" defect D2 --status fixed --note "in T10" >/dev/null
 check "defect: fixed journaled" "Fixed D2 (Offline save shows a raw error code): in T10" "$(tail -n 1 "$P/.crew/journal.md")"
 check "model: defect note" "D2 fixed · in T10" "$(model '.defects.items[] | select(.id == "D2") | "\(.id) \(.state) · \(.note)"')"
@@ -348,7 +368,7 @@ cp "$T/index.keep" "$P/.crew/tasks/autosave/index.md"
 
 # ---- 11. keep awake, stop ----
 check "keep awake: on after session start" "on=true" "$(model '.keepAwake | "on=\(.on)"')"
-read -r kpid _ < "$S/keep-awake"
+read -r kpid _ < "$S/awake/$SID"
 "$CREW" session stop >/dev/null
 sleep 0.2
 kill -0 "$kpid" 2>/dev/null && ko "keep awake: stopped with the crew" "pid $kpid still running" || ok "keep awake: stopped with the crew"
@@ -400,6 +420,66 @@ check "session start: records the orphaned run as interrupted" "	orph1	builder	"
 [ ! -e "$S/running/orph1" ] && ok "session start: clears the orphaned run" || ko "session start: clears the orphaned run" "running/orph1 still there"
 check "session start: journals it" "interrupted" "$(grep '← builder' "$P/.crew/journal.md" | tail -n 1)"
 check "session start: records the new process" "$CREW_CLAUDE_PID" "$(cat "$S/claude/$SID")"
+
+# ---- 11d. several leads: one per checkout ----
+# A second session in the same checkout is refused; it may take over, not while the first runs
+# agents. A session in another checkout (a worktree) leads the task set open there, with its own
+# queue and defect log; numbers stay project-wide.
+another_claude; C2=$REPLY
+out=$(CREW_CLAUDE_PID=$C2 "$CREW" session start sess-0002); rc=$?
+[ "$rc" -eq 4 ] && ok "second lead, same checkout: exit 4" || ko "second lead, same checkout: exit 4" "rc=$rc"
+check "second lead, same checkout: names the lead and the choices" "another session already leads the main checkout" "$out"
+check "second lead, same checkout: offers the take-over" "session start sess-0002 --take-over" "$out"
+[ ! -e "$S/sessions/sess-0002" ] && ok "second lead, same checkout: not registered" || ko "second lead, same checkout: not registered" "sessions/sess-0002 exists"
+hook agent-id "{$J_BASE,\"agent_id\":\"busy1\",\"agent_type\":\"builder\"}" >/dev/null
+out=$(CREW_CLAUDE_PID=$C2 "$CREW" session start sess-0002 --take-over); rc=$?
+[ "$rc" -eq 4 ] && ok "take-over: refused while the lead runs agents" || ko "take-over: refused while the lead runs agents" "rc=$rc"
+check "take-over: says why" "runs 1 subagent(s)" "$out"
+rm -f "$S/running/busy1"
+out=$(CREW_CLAUDE_PID=$C2 "$CREW" session start sess-0002 --take-over); rc=$?
+check "take-over: registered" "Crew session registered: sess-0002" "$out"
+check "take-over: journaled" "Took over the lead of this checkout from session $SID" "$(cat "$P/.crew/journal.md")"
+[ -e "$S/superseded/$SID" ] && ok "take-over: the old lead is superseded" || ko "take-over: the old lead is superseded" "no superseded/$SID"
+out=$(hook lead-busy "{$J_BASE,\"prompt\":\"carry on\"}")
+check "superseded lead: told at its next prompt" "no longer the crew's lead" "$out"
+nj=$(grep -c 'Took over' "$P/.crew/journal.md")
+out=$(CREW_CLAUDE_PID=$C2 "$CREW" session start sess-0003); rc=$?
+[ "$rc" -eq 0 ] && ok "/clear (same Claude Code, new session): no conflict" || ko "/clear (same Claude Code, new session): no conflict" "rc=$rc $out"
+check "/clear: not a take-over" "$nj" "$(grep -c 'Took over' "$P/.crew/journal.md")"
+out=$(CREW_CLAUDE_PID=$C2 "$CREW" where)
+check "where: the set this lead's files belong to" "Task set: autosave" "$out"
+check "lead log: session and set columns" "sess-0003${TAB}autosave" "$(tail -n 1 "$S/lead.tsv" | cut -f 3,4)"
+
+W="$T/wt"
+git -C "$P" worktree add -q "$W" -b crew/export 2>/dev/null
+mkdir -p "$W/.crew/tasks/export"
+printf '# Export — tasks\n\n| # | Status | Task | Flags | Depends on | Spec |\n|---|---|---|---|---|---|\n| T01 | pending | PDF export | — | — | `01-pdf.md` |\n' > "$W/.crew/tasks/export/index.md"
+another_claude; C3=$REPLY
+cd "$W"
+out=$(CREW_CLAUDE_PID=$C3 "$CREW" session start sess-0004); rc=$?
+[ "$rc" -eq 0 ] && ok "lead in a worktree: registered beside the main checkout's" || ko "lead in a worktree: registered beside the main checkout's" "rc=$rc $out"
+check "lead in a worktree: its task set" "Task set: export" "$out"
+out=$(CREW_CLAUDE_PID=$C3 "$CREW" request "Export as PDF/A")
+check "lead in a worktree: request numbers stay project-wide" "- [R6] " "$out"
+check "lead in a worktree: the request is in its set's queue" "- [R6] " "$(cat "$W/.crew/tasks/export/queue.md" 2>/dev/null)"
+out=$(CREW_CLAUDE_PID=$C3 "$CREW" defect "Margins off by 1 mm" --where "pdf export")
+check "lead in a worktree: defect numbers stay project-wide" "- [D3] " "$out"
+check "model: one lead per checkout" "2: main checkout, wt" "$(model '.roster.leads | "\(length): \(map(.label) | join(", "))"')"
+check "model: both open sets" "autosave export" "$(model '.open | map(.slug) | sort | join(" ")')"
+check "model: entries carry their set" "R6 export · D3 export" "$(model '[(.queue.requests[] | select(.id == "R6")), (.defects.items[] | select(.id == "D3"))] | map("\(.id) \(.set)") | join(" · ")')"
+hook agent-id "{\"session_id\":\"sess-0004\",\"transcript_path\":\"$MAIN\",\"cwd\":\"$W\",\"hook_event_name\":\"x\",\"agent_id\":\"wt1\",\"agent_type\":\"builder\"}" >/dev/null
+check "running: a lead sees its own agents" "wt1" "$(CREW_CLAUDE_PID=$C3 "$CREW" running)"
+check_not "running: not the other lead's" "wt1" "$(CREW_CLAUDE_PID=$C2 "$CREW" running)"
+check "running --all: every lead's, with the session" "session sess-0004" "$(CREW_CLAUDE_PID=$C2 "$CREW" running --all)"
+rm -f "$S/running/wt1"
+out=$(CREW_CLAUDE_PID=$C3 "$CREW" carry)
+check "carry: open entries move to the backlog" "Moved to the backlog" "$out"
+check "carry: the request is in the worktree's backlog" "- [R6] " "$(cat "$W/.crew/queue.md" 2>/dev/null)"
+check_not "carry: and no longer in the set's queue" "- [R6] " "$(cat "$W/.crew/tasks/export/queue.md")"
+out=$(CREW_CLAUDE_PID=$C3 "$CREW" session stop)
+check "session stop: the caller's lead only" "stopped" "$(model '.roster.leads[] | select(.session == "sess-0004") | .state.state')"
+check "session stop: the other lead carries on" "working" "$(model '.roster.leads[] | select(.session == "sess-0003") | .state.state')"
+cd "$P"
 
 # ---- 12. hooks never fail ----
 printf 'not json' | "$CREW" hook compact >/dev/null 2>&1; rc=$?

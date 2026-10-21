@@ -6,6 +6,7 @@ import { Header } from '@/components/Header'
 import { TaskSheet } from '@/components/TaskSheet'
 import { DocSheet, type Doc } from '@/components/DocSheet'
 import { EventToasts } from '@/components/EventToasts'
+import { SetSwitcher, viewOf } from '@/components/SetSwitcher'
 import { ClockBase } from '@/lib/clock'
 import { capital } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -31,6 +32,10 @@ function useHeaderHeight() {
 }
 
 const AGENT_KEY = 'crew-dashboard:agent'
+const SET_KEY = 'crew-dashboard:set'
+
+// The tabs about one task set: with several open, they show the one picked above them.
+const SET_TABS: Tab[] = ['overview', 'tasks', 'timing']
 
 export default function App() {
   const { state, conn, problem, changedAt } = useLive()
@@ -40,7 +45,7 @@ export default function App() {
   const [doc, setDoc] = useState<Doc | null>(null)
   useHeaderHeight()
 
-  // The agent shown in the Agents tab ('lead' or a subagent id), kept across reloads.
+  // The agent shown in the Agents tab ('lead:<session>' or a subagent id), kept across reloads.
   const [agent, setAgent] = useState<string>(() => {
     try { return sessionStorage.getItem(AGENT_KEY) || 'lead' } catch { return 'lead' }
   })
@@ -50,18 +55,28 @@ export default function App() {
   }, [])
   const openAgent = useCallback((id: string) => { pickAgent(id); setTab('agents') }, [pickAgent, setTab])
 
+  // The open task set the set tabs show, when there are several; kept across reloads.
+  const [focus, setFocus] = useState<string | null>(() => {
+    try { return sessionStorage.getItem(SET_KEY) } catch { return null }
+  })
+  const pickSet = useCallback((slug: string) => {
+    setFocus(slug)
+    try { sessionStorage.setItem(SET_KEY, slug) } catch { /* private mode */ }
+  }, [])
+  const view = useMemo(() => (state ? viewOf(state, focus) : null), [state, focus])
+
   useEffect(() => {
     if (!state) return
-    const cur = state.current
+    const cur = state.open.length > 1 ? null : state.current
     const done = cur ? `${cur.accepted}/${cur.total}` : ''
     document.title = `${done ? `${done} · ` : ''}${capital(state.repo.name)} · Crew`
   }, [state])
 
   const badges = useMemo(() => {
     const b: Partial<Record<Tab, { n: number | string; tone?: 'warn' | 'muted' }>> = {}
-    if (!state) return b
+    if (!state || !view) return b
     if (state.agents.length) b.agents = { n: state.agents.length }
-    if (state.current) b.tasks = { n: `${state.current.accepted}/${state.current.total}` }
+    if (view.current) b.tasks = { n: `${view.current.accepted}/${view.current.total}` }
     const q = state.queue.counts
     if (q.openQuestions) b.queue = { n: q.openQuestions, tone: 'warn' }
     else if (q.queued + q.scheduled) b.queue = { n: q.queued + q.scheduled }
@@ -71,12 +86,12 @@ export default function App() {
     if (c && c.lead.count + c.sub.count) b.compactions = { n: c.lead.count + c.sub.count }
     if (state.sets.length > 1) b.sets = { n: state.sets.length }
     return b
-  }, [state])
+  }, [state, view])
 
   return (
     <ClockBase.Provider value={state?.generatedAt ?? Math.floor(Date.now() / 1000)}>
       <div className="min-h-dvh">
-        <Header state={state} conn={conn} changedAt={changedAt} theme={theme} setTheme={setTheme} tab={tab} setTab={setTab} badges={badges} onLead={() => openAgent('lead')} />
+        <Header state={state} conn={conn} changedAt={changedAt} theme={theme} setTheme={setTheme} tab={tab} setTab={setTab} badges={badges} onLead={(session) => openAgent(`lead:${session}`)} />
 
         <main className={cn('mx-auto max-w-5xl px-3 pt-4 sm:px-5', tab === 'agents' ? 'pb-3' : 'pb-10')}>
           {problem && (
@@ -95,17 +110,18 @@ export default function App() {
             </div>
           )}
 
-          {!state ? (
+          {!state || !view ? (
             <div className="flex flex-col items-center justify-center gap-3 py-24 text-sm text-muted-foreground">
               <LoaderCircle className="size-5 animate-spin" />
               Connecting to the crew…
             </div>
           ) : (
             <div key={tab} className="animate-in fade-in-0 duration-200">
-              {tab === 'overview' && <Overview state={state} goTab={setTab} onTask={setTaskId} onDoc={setDoc} onAgent={openAgent} />}
+              {SET_TABS.includes(tab) && <SetSwitcher state={state} slug={focus} pick={pickSet} />}
+              {tab === 'overview' && <Overview state={view} goTab={setTab} onTask={setTaskId} onDoc={setDoc} onAgent={openAgent} />}
               {tab === 'agents' && <Agents state={state} sel={agent} pick={pickAgent} onTask={setTaskId} />}
-              {tab === 'tasks' && <Tasks state={state} onTask={setTaskId} onDoc={setDoc} />}
-              {tab === 'timing' && <Timing state={state} dark={dark} onTask={setTaskId} goTab={setTab} />}
+              {tab === 'tasks' && <Tasks state={view} onTask={setTaskId} onDoc={setDoc} />}
+              {tab === 'timing' && <Timing state={view} dark={dark} onTask={setTaskId} goTab={setTab} />}
               {tab === 'queue' && <Queue state={state} />}
               {tab === 'defects' && <Defects state={state} onTask={setTaskId} />}
               {tab === 'compactions' && <Compactions state={state} dark={dark} />}
@@ -115,7 +131,7 @@ export default function App() {
           )}
         </main>
 
-        {state && <TaskSheet state={state} taskId={taskId} onClose={() => setTaskId(null)} />}
+        {view && <TaskSheet state={view} taskId={taskId} onClose={() => setTaskId(null)} />}
         <DocSheet doc={doc} version={state?.generatedAt} onClose={() => setDoc(null)} />
         <EventToasts state={state} dark={dark} goTab={setTab} />
       </div>

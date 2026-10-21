@@ -36,7 +36,7 @@ Ask every foreseeable question at the start of a project, a plan, or a milestone
 
 ## Batching and default-taking
 
-Questions that arise during work go to `.crew/queue.md`, under "Questions for the founder", one line each:
+Questions that arise during work go to the task set's `queue.md` (`.crew/queue.md` with no set open), under "Questions for the founder", one line each:
 
 ```
 - [F<n>] <date> · <question> · default taken: <X or "none, T<NN> parked"> · status: open | answered

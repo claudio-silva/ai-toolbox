@@ -32,7 +32,7 @@ Queued as R3, slot: after T05. Note: the decisions log has "save on blur only" (
 
 ## The entry
 
-`.crew/bin/crew request` writes it; the format, under "Requests from the founder" in `.crew/queue.md`:
+`.crew/bin/crew request` writes it under "Requests from the founder" in the open task set's `queue.md` (`.crew/tasks/<slug>/queue.md`; with `--backlog`, or with no set open, the project's `.crew/queue.md`). R numbers are unique across the project. The format:
 
 ```
 - [R<n>] <date> · <request in the founder's words> · affects: <plan sections / tasks> · slot: <after T<NN> | end of set | milestone <N>> · status: queued | scheduled | done | dropped

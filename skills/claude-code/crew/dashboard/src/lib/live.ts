@@ -3,7 +3,7 @@
 // hello with the page's build id on every (re)connection. Nothing here polls.
 
 import { useEffect, useRef, useState } from 'react'
-import type { State } from './types'
+import { MODEL_VERSION, type State } from './types'
 import { saveScroll } from './persist'
 
 export type Conn = 'connecting' | 'live' | 'reconnecting' | 'offline'
@@ -31,7 +31,10 @@ export function useLive(): { state: State | null; conn: Conn; problem: string | 
       build.current = h.build
     })
     es.addEventListener('state', (e) => {
-      setState(JSON.parse((e as MessageEvent).data) as State)
+      const s = JSON.parse((e as MessageEvent).data) as State
+      // From the previous server, while an update restarts it: its successor sends a fresh one.
+      if (s.version !== MODEL_VERSION) return
+      setState(s)
       setChangedAt(Date.now())
       setProblem(null)
     })

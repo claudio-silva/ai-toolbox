@@ -3,7 +3,7 @@
 // Code's cross-session inbox). Transcripts are read in chunks and then followed as they grow.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Entry, State } from './types'
+import type { Entry, LeadInfo, LeadState, State } from './types'
 
 const POST = { method: 'POST', headers: { 'X-Crew': '1' } } as const
 
@@ -13,9 +13,10 @@ async function answer(r: Response) {
   return j
 }
 
-export async function sendToLead(text: string, files: string[] = []): Promise<{ via: 'paseo' | 'socket' }> {
+// To the lead of `session`.
+export async function sendToLead(session: string, text: string, files: string[] = []): Promise<{ via: 'paseo' | 'socket' }> {
   return answer(await fetch('api/lead/message', {
-    ...POST, headers: { ...POST.headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ text, files }),
+    ...POST, headers: { ...POST.headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ text, files, session }),
   }))
 }
 
@@ -25,11 +26,10 @@ export async function attachFile(f: File): Promise<string> {
   return j.path as string
 }
 
-// Why the page cannot message the lead now; null when it can.
-export function leadBlocker(s: State): string | null {
-  const l = s.roster.lead
+// Why the page cannot message a lead now; null when it can.
+export function leadBlocker(l: LeadInfo | null): string | null {
   if (!l) return 'No crew session yet: run /crew in Claude Code first.'
-  if (!l.alive) return "The crew's Claude Code session is closed: messages need it running."
+  if (!l.alive) return "This lead's Claude Code session is closed: messages need it running."
   if (!l.reach) {
     return 'This session has not recorded a way in yet: send it any message where it runs, or run /crew resume there. '
       + 'Outside Paseo, it needs Claude Code 2.1.224 or later.'
@@ -37,7 +37,29 @@ export function leadBlocker(s: State): string | null {
   return null
 }
 
-export const VIA_LABEL ={ paseo: 'through Paseo', socket: "through Claude Code's inbox" } as const
+// The Agents tab's key for a lead, and the lead a key names ('lead', from an older page: the first).
+export const leadKey = (l: LeadInfo) => `lead:${l.session}`
+export function leadOfKey(s: State, key: string): LeadInfo | null {
+  if (key === 'lead') return s.roster.lead
+  if (!key.startsWith('lead:')) return null
+  return s.roster.leads.find((l) => l.session === key.slice(5)) ?? null
+}
+
+// What to call a lead when there are several: its task set, else its checkout.
+export function leadName(s: State, l: LeadInfo): string {
+  if (s.roster.leads.length < 2) return 'Lead'
+  return `Lead · ${l.setTitle ?? l.label}`
+}
+
+export const LEAD_STATE: Record<LeadState['state'], { label: string; dot: string; pulse?: boolean }> = {
+  working: { label: 'Working', dot: 'bg-primary', pulse: true },
+  agents: { label: 'Idle, agents working', dot: 'bg-st-review' },
+  waiting: { label: 'Waiting for you', dot: 'bg-st-progress' },
+  stopped: { label: 'Stopped by you', dot: 'bg-muted-foreground/60' },
+  closed: { label: 'Claude Code closed', dot: 'bg-muted-foreground/40' },
+}
+
+export const VIA_LABEL = { paseo: 'through Paseo', socket: "through Claude Code's inbox" } as const
 
 export type TranscriptStatus = 'loading' | 'ready' | 'missing' | 'error'
 

@@ -1,12 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  Bot, Bug, ChevronDown, ChevronRight, Gauge, GitBranch, Inbox, Layers, ListChecks, LoaderCircle, Monitor, Moon, Pause, Play, PowerOff, RotateCcw, ScrollText, Shrink, Square, Sun, Timer, Wrench,
+  Bot, Bug, ChevronDown, Gauge, GitBranch, Inbox, Layers, ListChecks, Monitor, Moon, Pause, ScrollText, Shrink, Sun, Timer,
   type LucideIcon,
 } from 'lucide-react'
 import type { State } from '@/lib/types'
 import type { Conn } from '@/lib/live'
 import type { Tab, Theme } from '@/lib/persist'
-import { useClockBase } from '@/lib/clock'
 import { capital } from '@/lib/format'
 import { Duration } from './Duration'
 import { ShareButton } from './Share'
@@ -14,10 +13,7 @@ import { UpdateNotice, VersionButton } from './Update'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '@/components/ui/dialog'
-import { leadBlocker, sendToLead, VIA_LABEL } from '@/lib/lead'
-import { notify } from './EventToasts'
+import { leadName } from '@/lib/lead'
 
 export const TAB_META: Record<Tab, { label: string; icon: LucideIcon }> = {
   overview: { label: 'Overview', icon: Gauge },
@@ -31,156 +27,25 @@ export const TAB_META: Record<Tab, { label: string; icon: LucideIcon }> = {
   sets: { label: 'Sets', icon: Layers },
 }
 
-// The lead's state, on its own line under the project's name: what it is doing, then the detail
-// (how long, since when, agents). A click opens the lead's conversation.
-function LeadStatus({ state, onClick }: { state: State; onClick: () => void }) {
-  const base = useClockBase()
-  const { lead, agents } = state
-  const n = agents.length
-  const nAgents = `${n} agent${n === 1 ? '' : 's'}`
-  let icon: LucideIcon = Pause
-  let head = 'Waiting for you'
-  let tone = 'text-st-progress'
-  let pulse = false
-  let detail = ''
-  if (lead.state === 'working') {
-    icon = Play; head = 'Lead working'; tone = 'text-primary'; pulse = true
-    if (n > 0) detail = nAgents
-  } else if (lead.state === 'agents') {
-    icon = Bot; head = `${nAgents} working`; tone = 'text-st-review'; pulse = true; detail = 'lead idle'
-  } else if (lead.state === 'stopped') {
-    icon = Square; head = 'Stopped by you'; tone = 'text-muted-foreground'
-    if (n > 0) detail = `${n} finishing`
-  } else if (lead.state === 'closed') {
-    icon = PowerOff; head = 'Claude Code closed'; tone = 'text-muted-foreground'
-  }
-  const since = lead.since && lead.state !== 'agents' ? `since ${lead.since}` : ''
-  // Working: how long, ticking, first.
-  const live = lead.state === 'working' && lead.sinceEpoch != null
-  const Icon = icon
+// Only what needs the founder: a lead waiting for them. Nothing shows otherwise; the leads'
+// states are in the Overview and the Agents tab. A click opens the (first) waiting lead.
+function WaitingChip({ state, onLead }: { state: State; onLead: (session: string) => void }) {
+  const waiting = state.roster.leads.filter((l) => l.state.state === 'waiting')
+  if (!waiting.length) return null
+  const one = waiting.length === 1
+  const label = one ? (state.roster.leads.length > 1 ? `${leadName(state, waiting[0]).replace(/^Lead · /, '')}: waiting for you` : 'Lead waiting for you') : `${waiting.length} leads waiting`
+  // A phone has room for a word or two beside the project's name.
+  const short = one ? 'Waiting for you' : `${waiting.length} waiting`
   return (
     <button
-      onClick={onClick}
-      aria-label={`${[head, since, detail].filter(Boolean).join(' · ')}. Open the lead's conversation.`}
-      className="group flex min-w-0 items-center gap-2 rounded-md py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      onClick={() => onLead(waiting[0].session)}
+      aria-label={`${label}. Open ${one ? 'its' : 'the first one\'s'} conversation.`}
+      className="mr-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border border-st-progress/35 bg-st-progress/10 px-2.5 py-1 text-[11.5px] font-medium text-st-progress transition-colors hover:bg-st-progress/18 focus-visible:ring-2 focus-visible:ring-ring/50 outline-none"
     >
-      <span className={cn('grid size-3.5 shrink-0 place-items-center', tone)}>
-        {pulse ? (
-          <span className="relative flex size-2">
-            <span className="absolute inline-flex size-full animate-ping rounded-full bg-current opacity-50" />
-            <span className="relative inline-flex size-2 rounded-full bg-current" />
-          </span>
-        ) : <Icon className="size-3.5" strokeWidth={2.5} />}
-      </span>
-      {/* One line on wider screens; on a phone, the detail goes under the state. */}
-      <span className="min-w-0 truncate text-[12.5px] leading-tight">
-        <span className={cn('block truncate font-medium sm:inline', tone)}>{head}</span>
-        {(live || detail || since) && (
-          <span className="block truncate text-[11px] text-muted-foreground sm:inline sm:text-[12.5px]">
-            <span className="hidden sm:inline"> · </span>
-            {live ? <>for <Duration secs={Math.max(0, base - lead.sinceEpoch!)} live />{detail && ` · ${detail}`}</> : [since, detail].filter(Boolean).join(' · ')}
-          </span>
-        )}
-      </span>
-      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+      <Pause className="size-3 shrink-0" strokeWidth={2.75} />
+      <span className="sm:hidden">{short}</span>
+      <span className="hidden max-w-72 truncate sm:inline">{label}</span>
     </button>
-  )
-}
-
-// The session's controls, at the end of the lead's line. Each one is a message to the lead, as
-// if the founder typed the command where the session runs. Stop and Resume share a place: only
-// the one that applies shows.
-const SESSION_ACTIONS = {
-  stop: {
-    cmd: '/crew stop', label: 'Stop', title: 'Stop the crew', icon: Square,
-    body: 'Running agents finish the edit or command in hand and report; nothing new starts. The lead records where each task stands in .crew/handoff.md, and the computer may sleep again. Resume continues from there.',
-  },
-  resume: {
-    cmd: '/crew resume', label: 'Resume', title: 'Resume the crew', icon: RotateCcw,
-    body: 'The lead checks that nothing changed since the stop, then carries on with the work in flight: agents that stopped cleanly continue, the others are briefed afresh.',
-  },
-  setup: {
-    cmd: '/crew setup', label: 'Setup', title: 'Run setup again', icon: Wrench,
-    body: "Updates this project to the installed Crew: hooks, agents, the crew script and this dashboard. It merges, never overwrites, and asks only what the repository can't answer. Run it after each Crew update.",
-  },
-} as const
-type SessionAction = (typeof SESSION_ACTIONS)[keyof typeof SESSION_ACTIONS]
-
-// What an action does: the tooltip's text, and the confirmation's on a touch screen.
-function ActionText({ a, why }: { a: SessionAction; why: string | null }) {
-  return (
-    <>
-      <p className="font-medium">{a.title} <code className="font-mono font-normal opacity-70">{a.cmd}</code></p>
-      <p className="mt-1 leading-snug opacity-85">{a.body}</p>
-      <p className="mt-1.5 leading-snug opacity-60">{why ?? 'Sent to the lead as your message, like one typed in the Agents tab.'}</p>
-    </>
-  )
-}
-
-// With a mouse, a click sends the command and hovering explains it. A touch screen has no
-// hover, so a tap shows the same text first, with Confirm and Cancel.
-function SessionButton({ a, why }: { a: SessionAction; why: string | null }) {
-  const [sending, setSending] = useState(false)
-  const [confirming, setConfirming] = useState(false)
-  const off = Boolean(why) || sending
-  const send = () => {
-    setConfirming(false)
-    setSending(true)
-    sendToLead(a.cmd)
-      .then((r) => notify(`Sent ${a.cmd} to the lead ${VIA_LABEL[r.via]}.`))
-      .catch((e: Error) => notify(`${a.cmd} not sent: ${e.message}`, true))
-      .finally(() => setSending(false))
-  }
-  const click = () => {
-    if (matchMedia('(hover: none)').matches) { if (!sending) setConfirming(true); return }
-    if (!off) send()
-  }
-  const Icon = sending ? LoaderCircle : a.icon
-  return (
-    <>
-      <Tooltip delayDuration={1000}>
-        <TooltipTrigger asChild>
-          {/* aria-disabled, not disabled: a disabled button gets no hover, and the tooltip says why. */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={click}
-            aria-disabled={off || undefined}
-            aria-label={`${a.title} (${a.cmd})`}
-            className={cn('h-7 gap-1.5 px-2.5 text-[12px] has-[>svg]:px-2.5', off && 'cursor-not-allowed opacity-50 hover:bg-background')}
-          >
-            <Icon className={cn('size-3.5', sending && 'animate-spin')} />{a.label}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" align="end" sideOffset={6} className="max-w-80 text-left text-pretty">
-          <ActionText a={a} why={why} />
-        </TooltipContent>
-      </Tooltip>
-      <Dialog open={confirming} onOpenChange={setConfirming}>
-        <DialogContent showCloseButton={false} className="max-w-sm gap-5 p-5">
-          <DialogTitle className="sr-only">{a.title}</DialogTitle>
-          <DialogDescription asChild><div className="text-[13px] text-foreground"><ActionText a={a} why={why} /></div></DialogDescription>
-          <DialogFooter className="flex-row justify-end gap-2">
-            <DialogClose asChild><Button variant="outline" size="sm">{why ? 'Close' : 'Cancel'}</Button></DialogClose>
-            {!why && <Button size="sm" onClick={send}><a.icon className="size-3.5" />{a.title}</Button>}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
-  )
-}
-
-function LeadBar({ state, onLead }: { state: State; onLead: () => void }) {
-  const why = leadBlocker(state)
-  const stopped = state.lead.state === 'stopped'
-  return (
-    <div className="flex min-h-8 items-center gap-2">
-      <div className="flex min-w-0 flex-1"><LeadStatus state={state} onClick={onLead} /></div>
-      <div className="flex shrink-0 items-center gap-1.5">
-        <SessionButton a={stopped ? SESSION_ACTIONS.resume : SESSION_ACTIONS.stop} why={why} />
-        <SessionButton a={SESSION_ACTIONS.setup} why={why} />
-      </div>
-    </div>
   )
 }
 
@@ -390,7 +255,7 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
   tab: Tab
   setTab: (t: Tab) => void
   badges: Badges
-  onLead: () => void
+  onLead: (session: string) => void
 }) {
   return (
     <header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
@@ -411,13 +276,13 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
             )}
           </div>
           <div className="ml-auto flex shrink-0 items-center">
+            {state && <WaitingChip state={state} onLead={onLead} />}
             <UpdateNotice u={state?.update} />
             <ConnDot conn={conn} changedAt={changedAt} />
             <ShareButton />
             <ThemeToggle theme={theme} setTheme={setTheme} />
           </div>
         </div>
-        {state && <LeadBar state={state} onLead={onLead} />}
         <TabStrip tab={tab} setTab={setTab} badges={badges} />
       </div>
     </header>

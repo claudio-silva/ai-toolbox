@@ -410,11 +410,12 @@ function paseoSend(cli, id, text) {
   });
 }
 
-// Deliver the founder's text (and the paths of files they attached) to the lead's session.
-async function messageLead(text, files = []) {
+// Deliver the founder's text (and the paths of files they attached) to a lead's session: `session`,
+// else the newest live lead.
+async function messageLead(text, files = [], session = null) {
   const sessions = claudeSessions(STATE_DIR);
-  const ls = leadSession(STATE_DIR, sessions);
-  if (!ls) throw new Refused(409, 'No crew session yet: run /crew in Claude Code first.');
+  const ls = leadSession(STATE_DIR, sessions, session);
+  if (!ls) throw new Refused(409, session ? 'That lead is no longer registered: open the Agents tab again.' : 'No crew session yet: run /crew in Claude Code first.');
   if (!ls.alive) throw new Refused(409, "The crew's Claude Code session is closed.");
   const r = readReach(STATE_DIR, ls.session);
   const via = reachVia(r);
@@ -716,7 +717,9 @@ async function cmdServe() {
         const text = String(m?.text ?? '').trim();
         const files = Array.isArray(m?.files) ? m.files.map(String) : [];
         if (!text && !files.length) throw new Refused(400, 'Nothing to send.');
-        return messageLead(text, files);
+        const session = m?.session == null ? null : String(m.session);
+        if (session != null && !/^[A-Za-z0-9._-]{1,120}$/.test(session)) throw new Refused(400, 'Bad session.');
+        return messageLead(text, files, session);
       }).then((r) => { log(`message to the lead (${r.via})`); json(200, r); }).catch(fail);
       return;
     }
@@ -751,7 +754,7 @@ async function cmdServe() {
       return;
     }
     if (u.pathname === '/api/transcript' || u.pathname === '/api/transcript/stream') {
-      // An agent's transcript ('lead' or a subagent id), only from the transcripts bin/crew recorded.
+      // An agent's transcript ('lead:<session>', 'lead' or a subagent id), only from the transcripts bin/crew recorded.
       const file = transcriptFile(STATE_DIR, u.searchParams.get('agent') || '', claudeSessions(STATE_DIR));
       const at = (k) => (/^\d+$/.test(u.searchParams.get(k) || '') ? Number(u.searchParams.get(k)) : null);
       if (!file) { send(res, 404, 'application/json', JSON.stringify({ error: 'No transcript for this agent.' })); return; }

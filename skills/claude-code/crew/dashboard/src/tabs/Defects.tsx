@@ -3,7 +3,8 @@ import { ArrowRight, Bug, ChevronRight, Flame, History, MapPin, X } from 'lucide
 import type { Defect, State, Task } from '@/lib/types'
 import { dayLabel } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { Chip, Empty, Explain, HelpHead, Inline, Mono, Panel, Stat, StatusIcon, Terms } from '@/components/bits'
+import { Chip, Empty, Explain, HelpHead, Inline, Mono, Panel, PlaceChip, Stat, StatusIcon, Terms } from '@/components/bits'
+import { manyPlaces, placeOf, tasksOf } from '@/lib/sets'
 import { JournalRow } from '@/components/JournalRow'
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 
@@ -69,7 +70,7 @@ function noteOf(d: Defect): string {
   return d.note || statusNote
 }
 
-function DefectRow({ d, today, tasks, onTask, onOpen }: { d: Defect; today: string; tasks: Task[]; onTask: (id: string) => void; onOpen: () => void }) {
+function DefectRow({ d, today, tasks, onTask, onOpen, place }: { d: Defect; today: string; tasks: Task[]; onTask: (id: string) => void; onOpen: () => void; place: boolean }) {
   const closed = d.state === 'fixed' || d.state === 'dropped'
   const note = noteOf(d)
   return (
@@ -87,6 +88,7 @@ function DefectRow({ d, today, tasks, onTask, onOpen }: { d: Defect; today: stri
         <StatePill state={d.state} />
       </div>
       <div className="flex flex-wrap items-center gap-1 pl-8">
+        {place && <PlaceChip place={placeOf(d)} />}
         {d.severity && <Severity s={d.severity} />}
         {d.promoted && <Promoted />}
         {d.where && <Where><Inline text={d.where} /></Where>}
@@ -176,7 +178,7 @@ function DefectSheet({ state, d, onClose, onOpen, onTask }: {
 }
 
 function DefectBody({ state, d, onOpen, onTask }: { state: State; d: Defect; onOpen: (id: string) => void; onTask: (id: string) => void }) {
-  const tasks = state.current?.tasks ?? []
+  const tasks = tasksOf(state, d.set)
   const note = noteOf(d)
   const found = d.from ? taskLink(d.from, tasks) : undefined
   const fixing = note ? taskLink(note, tasks) : undefined
@@ -254,13 +256,14 @@ function DefectBody({ state, d, onOpen, onTask }: { state: State; d: Defect; onO
 
 // When the open defects will be dealt with: the set's deferred ones at its end.
 function DueLine({ state, open }: { state: State; open: Defect[] }) {
-  const cur = state.current
+  // With several open sets, "this set" would be ambiguous.
+  const cur = state.open.length > 1 ? null : state.current
   const atEnd = open.filter((d) => d.state === 'deferred' && (!d.slot || d.slot === 'end of set')).length
   const scheduled = open.filter((d) => d.state === 'scheduled').length
   if (!atEnd && !scheduled) return null
   const left = cur ? cur.total - cur.accepted : 0
   const parts: string[] = []
-  if (atEnd) parts.push(`${atEnd} due at the end of this set${cur && left > 0 ? `, after ${left} more task${left === 1 ? '' : 's'}` : ''}`)
+  if (atEnd) parts.push(`${atEnd} due at the end of ${state.open.length > 1 ? 'their' : 'this'} set${cur && left > 0 ? `, after ${left} more task${left === 1 ? '' : 's'}` : ''}`)
   if (scheduled) parts.push(`${scheduled} being fixed now`)
   return <p className="pb-1 text-[12px] text-muted-foreground">{parts.join(' · ')}. A deferred defect is fixed sooner only if it gets in the way (promoted).</p>
 }
@@ -275,10 +278,10 @@ export function Defects({ state, onTask }: { state: State; onTask: (id: string) 
       </Empty>
     )
   }
-  const tasks = state.current?.tasks ?? []
+  const place = manyPlaces(state)
   const open = items.filter((d) => d.state !== 'fixed' && d.state !== 'dropped')
   const closed = items.filter((d) => d.state === 'fixed' || d.state === 'dropped')
-  const row = (d: Defect) => <DefectRow key={d.id} d={d} today={state.today} tasks={tasks} onTask={onTask} onOpen={() => setShown(d.id)} />
+  const row = (d: Defect) => <DefectRow key={`${d.set}:${d.id}`} d={d} today={state.today} tasks={tasksOf(state, d.set)} onTask={onTask} onOpen={() => setShown(d.id)} place={place} />
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-2.5">

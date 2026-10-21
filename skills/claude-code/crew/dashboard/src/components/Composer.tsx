@@ -76,7 +76,7 @@ export function Composer({ lead, used, why }: { lead: LeadInfo; used: number | n
     setBusy(true)
     setNote(null)
     try {
-      const r = await sendToLead(text.trim(), files.map((f) => f.path!))
+      const r = await sendToLead(lead.session, text.trim(), files.map((f) => f.path!))
       setText('')
       setFiles([])
       requestAnimationFrame(grow)

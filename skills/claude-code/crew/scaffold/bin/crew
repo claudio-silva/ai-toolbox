@@ -6,28 +6,45 @@
 #
 # Modes
 #   crew journal <text...>              Log a lead action: "- HH:MM · lead · <text>".
-#   crew request "<text>" [--affects <x>] [--slot <y>] [--urgent] [--dry-run]
-#                                       Queue a founder request as the next R<n> in
-#                                       .crew/queue.md and journal it.
+#   crew request "<text>" [--affects <x>] [--slot <y>] [--urgent] [--backlog] [--dry-run]
+#                                       Queue a founder request as the next R<n> (numbers are
+#                                       project-wide) in the queue of the task set open in this
+#                                       checkout (.crew/tasks/<slug>/queue.md), or in the backlog
+#                                       (.crew/queue.md) when none is open or with --backlog, and
+#                                       journal it.
 #   crew request R<n> --status queued|scheduled|done|dropped [--slot <y>] [--affects <x>] [--note <t>]
 #                                       Move a request along; journals the transition.
-#   crew defect "<symptom>" --where <surface> [--from <x>] [--severity low|medium] [--slot <y>] [--dry-run]
-#                                       Defer a leaf defect as the next D<n> in .crew/defects.md,
-#                                       and journal it.
+#   crew defect "<symptom>" --where <surface> [--from <x>] [--severity low|medium] [--slot <y>] [--backlog] [--dry-run]
+#                                       Defer a leaf defect as the next D<n> in the set's defect log
+#                                       (.crew/tasks/<slug>/defects.md; else .crew/defects.md), and
+#                                       journal it.
 #   crew defect D<n> --status deferred|scheduled|fixed|dropped [--promote] [--slot <y>] [--note <t>]
 #                                       Move a defect along; --promote marks one that bit other
 #                                       work (status scheduled). The note stays on the line
 #                                       ("note: as T13"). Journals the transition.
-#   crew session start [<session-id>]   Register a crew session (empty id: wildcard "any"),
-#                                       record its Claude Code process, close the runs of
-#                                       subagents whose process has ended, mark the lead as
-#                                       working, keep the computer awake while Claude Code runs (macOS
-#                                       caffeinate; CREW_KEEP_AWAKE=0 turns it off) and start the
-#                                       dashboard. Prints "Open the dashboard at <url>" when this
-#                                       session started it, here or through its SessionStart hook.
-#   crew session stop                   Mark the crew as stopped by the founder (/crew stop) and
-#                                       let the computer sleep again.
-#   crew running                        List running subagents (kept by the hooks).
+#   crew carry                          Closing a set: move its open requests, questions and
+#                                       defects to the backlog (.crew/queue.md, .crew/defects.md).
+#   crew where                          This checkout: its branch, the task set open in it, the
+#                                       files of that set (queue, defects, handoff) and the other
+#                                       leads and open sets.
+#   crew session start [<session-id>] [--take-over]
+#                                       Register this session as the lead of its checkout (empty
+#                                       id: wildcard "any"), record its Claude Code process, close
+#                                       the runs of subagents whose process has ended, mark the
+#                                       lead as working, keep the computer awake while Claude Code
+#                                       runs (macOS caffeinate; CREW_KEEP_AWAKE=0 turns it off),
+#                                       start the dashboard and print `crew where`. Prints "Open
+#                                       the dashboard at <url>" when this session started it, here
+#                                       or through its SessionStart hook. Exit status 4, and
+#                                       nothing registered, when another session's Claude Code
+#                                       still leads this checkout; --take-over makes this session
+#                                       the lead instead (refused while that one has agents
+#                                       running).
+#   crew session stop [<session-id>]    Mark this session's crew as stopped by the founder
+#                                       (/crew stop) and let the computer sleep again, as far as
+#                                       this session is concerned.
+#   crew running [--all]                List this session's running subagents (kept by the hooks);
+#                                       --all: every session's.
 #   crew status                         Settle pending compaction records, sample the clock,
 #                                       make sure the dashboard runs and print its URL.
 #   crew dashboard [start|stop|restart|url]
@@ -66,8 +83,9 @@
 #     would block the tool call, and from a Stop hook would keep the lead from stopping.
 #     A hook that fails a guard prints nothing and changes no file.
 #   - Hook modes need jq. Everything else works without it.
-#   - All files live in the main checkout of the repository (root resolution below), so
-#     hooks running in worktrees write one journal and one state per repository.
+#   - The journal and the state under tmp/ live in the main checkout of the repository (root
+#     resolution below), so hooks running in worktrees write one journal and one state per
+#     repository. A task set's files live in the checkout where its branch is checked out.
 #   - Hooks never read a whole transcript: tail, grep and jq on bounded ranges only.
 #   - Set CREW_DEBUG=1 to see stderr from hook modes.
 #
@@ -87,11 +105,13 @@
 # Timing and sleep (read by the dashboard's Timing tab)
 #   - Every subagent run (a start or a resume, to its stop) is one line in
 #     tmp/journal-state/runs.tsv: start, end, agent id, type, task number (from the
-#     description's leading T<NN>), first|resume, status keyword.
-#   - The lead's state changes (working at a prompt, idle at its Stop, stopped) are lines in
-#     tmp/journal-state/lead.tsv: epoch, state. Time with the lead working and no subagent
-#     running is the lead's own time.
-#   - Each session's Claude Code process id is kept in tmp/journal-state/claude/<session>, and
+#     description's leading T<NN>), first|resume, status keyword, the lead's session, the task
+#     set (its folder name; empty when none).
+#   - The leads' state changes (working at a prompt, idle at its Stop, stopped) are lines in
+#     tmp/journal-state/lead.tsv: epoch, state, session, task set. Time with a lead working and
+#     no subagent running is the lead's own time.
+#   - Each session's Claude Code process id and its start time are kept in
+#     tmp/journal-state/claude/<session>, and
 #     each running subagent's session in running/<id>. Subagents run inside that process: when
 #     it is gone (Claude Code quit or crashed), its subagents are no longer running. The next
 #     `crew session start`, or the session's next SessionStart in a new process, records their
@@ -101,6 +121,16 @@
 #     between two samples is time asleep; 2 min or more is journaled and kept in
 #     tmp/journal-state/sleep.tsv. Runs start and end at crew events, so each sleep interval
 #     lies wholly inside or wholly outside any run. Elsewhere sleep is not measured.
+#
+# Leads (one per checkout)
+#   - A lead is a session that ran `crew session start`; sessions/<session> holds its checkout
+#     (the main checkout or a linked worktree). A task set's branch can be checked out in one
+#     place only, so one lead per checkout is also one lead per set. Another session starting in
+#     a checkout whose lead's Claude Code still runs is refused unless it takes over; the session
+#     it replaces (and any whose Claude Code is gone) moves to superseded/<session>, and its next
+#     prompt tells it it is no longer the lead.
+#   - Per lead: leads/<session> (its state: working, idle or stopped, with when), awake/<session>
+#     (its caffeinate). Each subagent's agents/<id> record names its session and task set.
 #
 # The dashboard
 #   - This script records state (journal, runs, sleeps, agents, the lead, compactions);
@@ -155,7 +185,6 @@ set_paths() {
   TMP_DIR="$CREW_DIR/tmp"
   STATE="$TMP_DIR/journal-state"
   JOURNAL="$CREW_DIR/journal.md"
-  DEFECTS="$CREW_DIR/defects.md"
   LOCK="$TMP_DIR/journal.lock"
   RUNS="$STATE/runs.tsv"
   SLEEPS="$STATE/sleep.tsv"
@@ -164,7 +193,8 @@ set_paths() {
 ensure_dirs() {
   mkdir -p "$TMP_DIR" "$CREW_DIR/task-data" "$STATE/sessions" "$STATE/pending" \
     "$STATE/agents" "$STATE/running" "$STATE/transcripts" "$STATE/lead-model" \
-    "$STATE/compact/scan" "$STATE/index-rows" "$STATE/set-start" "$STATE/claude" 2>/dev/null
+    "$STATE/compact/scan" "$STATE/index-rows" "$STATE/set-start" "$STATE/claude" \
+    "$STATE/leads" "$STATE/awake" "$STATE/superseded" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -372,12 +402,14 @@ clock_sample() {
   journal_append "system" "The computer slept $REPLY between $from and $to (crew events stop while it sleeps)"
 }
 
-# keep_awake_stop: end the caffeinate this crew started, if it is still running.
+# keep_awake_stop SESSION: end the caffeinate that SESSION started, if it is still running.
+# Without SESSION: the one an older crew kept for the whole project (tmp/journal-state/keep-awake).
 keep_awake_stop() {
-  local pid _rest
-  [ -f "$STATE/keep-awake" ] || return 0
-  read -r pid _rest < "$STATE/keep-awake" 2>/dev/null
-  rm -f "$STATE/keep-awake"
+  local pid _rest f="$STATE/keep-awake"
+  if [ -n "${1:-}" ]; then safe_name "$1"; f="$STATE/awake/$REPLY"; fi
+  [ -f "$f" ] || return 0
+  read -r pid _rest < "$f" 2>/dev/null
+  rm -f "$f"
   case "$pid" in ''|*[!0-9]*) return 0 ;; esac
   case $(ps -o args= -p "$pid" 2>/dev/null) in *caffeinate*) kill "$pid" 2>/dev/null ;; esac
   return 0
@@ -401,20 +433,49 @@ claude_pid() {
   done
 }
 
-# claude_alive PID: the process runs and is Claude Code (not a reused pid).
+# claude_alive PID [START]: the process runs and is Claude Code; with START (the epoch it
+# started, as recorded), the same process, not a later one that reused its pid.
 claude_alive() {
   case "$1" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$1" 2>/dev/null || return 1
-  case $(ps -o args= -p "$1" 2>/dev/null) in *claude*) return 0 ;; esac
-  return 1
+  case $(ps -o args= -p "$1" 2>/dev/null) in *claude*) ;; *) return 1 ;; esac
+  case "${2:-}" in ''|*[!0-9]*) return 0 ;; esac
+  proc_start "$1"
+  case "$REPLY" in ''|*[!0-9]*) return 0 ;; esac
+  [ $((REPLY - $2)) -le 3 ] && [ $(($2 - REPLY)) -le 3 ]
 }
 
-# keep_awake_start: hold a caffeinate assertion (-i: no idle sleep; -s: no system sleep on AC
-# power) for as long as the Claude Code process that runs this session lives; 12 hours when it
+# proc_start PID -> REPLY: the epoch at which the process started (from its elapsed time,
+# [[dd-]hh:]mm:ss, so to the second); "" when unknown.
+proc_start() {
+  local e
+  REPLY=""
+  e=$(ps -o etime= -p "$1" 2>/dev/null | tr -d ' ')
+  [ -n "$e" ] || return 0
+  REPLY=$(printf '%s\n' "$e" | awk -v now="$(date +%s)" '{
+    d = 0; t = $0; i = index(t, "-")
+    if (i) { d = substr(t, 1, i - 1); t = substr(t, i + 1) }
+    n = split(t, p, ":"); s = 0
+    for (k = 1; k <= n; k++) s = s * 60 + p[k]
+    print now - (d * 86400 + s) }')
+  case "$REPLY" in ''|*[!0-9]*) REPLY="" ;; esac
+}
+
+# session_alive SESSION: the Claude Code process recorded for SESSION still runs.
+session_alive() {
+  local pid start
+  safe_name "$1"
+  read -r pid start < "$STATE/claude/$REPLY" 2>/dev/null
+  claude_alive "$pid" "$start"
+}
+
+# keep_awake_start SESSION: hold a caffeinate assertion (-i: no idle sleep; -s: no system sleep
+# on AC power) for as long as the Claude Code process that runs SESSION lives; 12 hours when it
 # cannot be found. Closing the lid on battery still sleeps a Mac. Writes "<caffeinate pid>
-# <watched pid | 12h>" to $STATE/keep-awake.
+# <watched pid | 12h>" to $STATE/awake/<SESSION>.
 keep_awake_start() {
   local target
+  keep_awake_stop "$1"
   keep_awake_stop
   [ "${CREW_KEEP_AWAKE:-1}" != 0 ] || return 0
   command -v caffeinate >/dev/null 2>&1 || return 0
@@ -424,20 +485,23 @@ keep_awake_start() {
   else
     nohup caffeinate -i -s -t 43200 >/dev/null 2>&1 &
   fi
-  printf '%s %s\n' "$!" "${target:-12h}" > "$STATE/keep-awake"
+  safe_name "$1"
+  printf '%s %s\n' "$!" "${target:-12h}" > "$STATE/awake/$REPLY"
 }
 
 # note_claude SESSION: record the Claude Code process running SESSION in $STATE/claude/<SESSION>,
 # so the dashboard can tell a crew that stopped with it from one at work. When the session had
 # another process before (a restart or --resume), the subagents it was running ended with it.
 note_claude() {
-  local f="$STATE/claude/$1" old=""
+  local f="$STATE/claude/$1" old="" _rest pid
   [ -n "$1" ] || return 0
   claude_pid
-  [ -n "$REPLY" ] || return 0
-  old=$(cat "$f" 2>/dev/null)
-  [ "$old" != "$REPLY" ] || return 0
-  printf '%s\n' "$REPLY" > "$f"
+  pid=$REPLY
+  [ -n "$pid" ] || return 0
+  read -r old _rest < "$f" 2>/dev/null
+  [ "$old" != "$pid" ] || return 0
+  proc_start "$pid"
+  printf '%s %s\n' "$pid" "$REPLY" > "$f"
   [ -z "$old" ] || reap_orphans "$1"
 }
 
@@ -477,9 +541,9 @@ reap_orphans() {
     if [ -n "${1:-}" ]; then
       [ "$sess" = "$1" ] || continue
     else
-      pid=$(cat "$STATE/claude/$sess" 2>/dev/null)
+      pid=""; read -r pid _ < "$STATE/claude/$sess" 2>/dev/null
       [ -n "$pid" ] || continue
-      claude_alive "$pid" && continue
+      session_alive "$sess" && continue
     fi
     load_agent "$id" || A_TYPE=unknown
     start=${A_RUN_START:-$A_STARTED}
@@ -499,14 +563,140 @@ reap_orphans() {
   done
 }
 
-# lead_log STATE: append "<epoch>\t<working|idle|stopped>" to lead.tsv when the lead's state
-# changes, for the dashboard's lead time.
-lead_log() {
-  local last
+# lead_set STATE SESSION: record the lead's state in leads/<SESSION> ("<state> HH:MM <epoch>"),
+# and, when it changed, append "<epoch>\t<state>\t<session>\t<set>" to lead.tsv for the
+# dashboard's lead time. "stopped" (crew session stop) sticks until `crew session start` runs
+# again (/crew resume): the hooks pass "keep-stopped" to respect it.
+lead_set() {
+  local f prev="" st=$1
+  safe_name "$2"; f="$STATE/leads/$REPLY"
+  read -r prev _ < "$f" 2>/dev/null
+  if [ "${3:-}" = keep-stopped ] && [ "$prev" = stopped ]; then return 0; fi
   now_parts
-  last=$(tail -n 1 "$STATE/lead.tsv" 2>/dev/null)
-  [ "${last#*$TAB}" != "$1" ] || return 0
-  printf '%s\t%s\n' "$NOW_EPOCH" "$1" >> "$STATE/lead.tsv"
+  printf '%s %s %s\n' "$st" "$NOW_HM" "$NOW_EPOCH" > "$f"
+  [ "$prev" != "$st" ] || return 0
+  session_set "$2"
+  printf '%s\t%s\t%s\t%s\n' "$NOW_EPOCH" "$st" "$2" "$SET_SLUG" >> "$STATE/lead.tsv"
+}
+
+# ---------------------------------------------------------------------------
+# Checkouts, task sets and leads (see "Leads" in the header)
+# ---------------------------------------------------------------------------
+
+# checkout_of DIR -> REPLY: the top of the checkout (the main one or a linked worktree) that
+# contains DIR, as a physical path; ROOT when DIR is in none.
+checkout_of() {
+  local d
+  d=$(git -C "${1:-.}" rev-parse --show-toplevel 2>/dev/null)
+  if [ -n "$d" ] && d=$(cd "$d" 2>/dev/null && pwd -P); then REPLY=$d; else REPLY=$ROOT; fi
+}
+
+# session_checkout SESSION -> REPLY: the checkout SESSION leads (from sessions/<SESSION>; ROOT for
+# a session registered by an older crew, or the wildcard).
+session_checkout() {
+  local line
+  safe_name "$1"
+  line=$(grep -m 1 '^checkout=' "$STATE/sessions/$REPLY" 2>/dev/null)
+  REPLY=${line#checkout=}
+  [ -n "$REPLY" ] && [ -d "$REPLY" ] || REPLY=$ROOT
+}
+
+# set_here CHECKOUT -> SET_SLUG and SET_DIR (absolute; both empty when none): the task set open
+# in CHECKOUT. An open index (no Closed: line) whose Branch: is the branch checked out there, else
+# the folder of a crew/<slug> branch; off a crew/ branch, the only open index there.
+set_here() {
+  local co=$1 br f rec closed branch d open="" n=0
+  SET_SLUG=""; SET_DIR=""
+  br=$(git -C "$co" symbolic-ref --short -q HEAD 2>/dev/null)
+  for f in "$co"/.crew/tasks/*/index.md; do
+    [ -f "$f" ] || continue
+    rec=$(parse_index summary "$f" 2>/dev/null)
+    IFS=$US read -r _ _ _ closed _ branch <<< "$rec"
+    [ -z "$closed" ] || continue
+    d=${f%/index.md}
+    if [ -n "$br" ] && { [ "${branch%% *}" = "$br" ] || [ "$br" = "crew/${d##*/}" ]; }; then
+      SET_DIR=$d; break
+    fi
+    n=$((n + 1)); open=$d
+  done
+  if [ -z "$SET_DIR" ] && [ "$n" = 1 ]; then
+    case $br in crew/*) ;; *) SET_DIR=$open ;; esac
+  fi
+  [ -z "$SET_DIR" ] || SET_SLUG=${SET_DIR##*/}
+}
+
+# session_set SESSION -> SET_SLUG, SET_DIR: the task set open in the checkout SESSION leads.
+session_set() {
+  session_checkout "$1"
+  set_here "$REPLY"
+}
+
+# caller_session -> REPLY: the registered session whose Claude Code runs this command (the
+# process up the tree is the one recorded for it; after /clear one process has had several
+# sessions: the newest registration wins); "" when none.
+caller_session() {
+  local pid f s best="" bt=-1 t p
+  claude_pid; pid=$REPLY; REPLY=""
+  [ -n "$pid" ] || return 0
+  for f in "$STATE/claude"/*; do
+    [ -f "$f" ] || continue
+    s=${f##*/}
+    [ -e "$STATE/sessions/$s" ] || continue
+    p=""; read -r p _ < "$f" 2>/dev/null
+    [ "$p" = "$pid" ] || continue
+    t=$(file_mtime "$STATE/sessions/$s"); case $t in ''|*[!0-9]*) t=0 ;; esac
+    if [ "$t" -gt "$bt" ]; then bt=$t; best=$s; fi
+  done
+  REPLY=$best
+}
+
+# session_agents SESSION -> REPLY: how many subagents SESSION runs now.
+session_agents() {
+  local f n=0
+  for f in "$STATE/running"/*; do
+    [ -f "$f" ] || continue
+    [ "$(cat "$f" 2>/dev/null)" = "$1" ] && n=$((n + 1))
+  done
+  REPLY=$n
+}
+
+# other_lead CHECKOUT SESSION -> REPLY: another registered session that leads CHECKOUT and whose
+# Claude Code still runs, not in this command's process (after /clear, the same process starts a
+# new session: that one is not another lead); "" when none.
+other_lead() {
+  local f s co pid mine
+  claude_pid; mine=$REPLY
+  for f in "$STATE/sessions"/*; do
+    [ -f "$f" ] || continue
+    s=${f##*/}
+    [ "$s" != any ] && [ "$s" != "$2" ] || continue
+    session_checkout "$s"; co=$REPLY
+    [ "$co" = "$1" ] || continue
+    pid=""; read -r pid _ < "$STATE/claude/$s" 2>/dev/null
+    [ -n "$pid" ] && [ "$pid" != "$mine" ] || continue
+    session_alive "$s" || continue
+    REPLY=$s; return 0
+  done
+  REPLY=""
+}
+
+# supersede SESSION BY: SESSION no longer leads: its registration moves to superseded/ (its next
+# prompt is told who took over) and its keep-awake ends.
+supersede() {
+  safe_name "$1"
+  [ -e "$STATE/sessions/$REPLY" ] || return 0
+  now_parts
+  printf '%s %s %s\n' "$2" "$NOW_HM" "$NOW_EPOCH" > "$STATE/superseded/$REPLY"
+  rm -f "$STATE/sessions/$REPLY"
+  keep_awake_stop "$1"
+}
+
+# lead_line SESSION -> REPLY: "working since 14:03", "stopped since 09:12" (from leads/<SESSION>).
+lead_line() {
+  local st hm
+  safe_name "$1"
+  read -r st hm _ < "$STATE/leads/$REPLY" 2>/dev/null
+  REPLY="${st:-registered}${hm:+ since $hm}"
 }
 
 # ---------------------------------------------------------------------------
@@ -529,11 +719,13 @@ agent_frontmatter() {
     }' "$f" 2>/dev/null
 }
 
-# load_agent ID: sets A_TYPE A_DESC A_MODEL A_EFFORT A_NAME A_SINCE A_STARTED A_RUN_START from
-# agents/<id> (A_RUN_START: the start of its current run, a resume included; the last line wins).
+# load_agent ID: sets A_TYPE A_DESC A_MODEL A_EFFORT A_NAME A_SINCE A_STARTED A_RUN_START
+# A_SESSION A_SET from agents/<id> (A_RUN_START: the start of its current run, a resume
+# included; the last line wins).
 load_agent() {
   local line
   A_TYPE=""; A_DESC=""; A_MODEL=""; A_EFFORT=""; A_NAME=""; A_SINCE=""; A_STARTED=""; A_RUN_START=""
+  A_SESSION=""; A_SET=""
   [ -f "$STATE/agents/$1" ] || return 1
   while IFS= read -r line; do
     case $line in
@@ -545,6 +737,8 @@ load_agent() {
       name=*) A_NAME=${line#name=} ;;
       since=*) A_SINCE=${line#since=} ;;
       started=*) A_STARTED=${line#started=} ;;
+      session=*) A_SESSION=${line#session=} ;;
+      set=*) A_SET=${line#set=} ;;
     esac
   done < "$STATE/agents/$1"
   return 0
@@ -665,7 +859,15 @@ last_context() {
   case $REPLY in ''|*[!0-9]*) REPLY=0 ;; esac
 }
 
-running_any() { ls "$STATE/running"/* >/dev/null 2>&1; }
+# running_any SESSION: SESSION runs at least one subagent now.
+running_any() {
+  local f
+  for f in "$STATE/running"/*; do
+    [ -f "$f" ] || continue
+    [ "$(cat "$f" 2>/dev/null)" = "$1" ] && return 0
+  done
+  return 1
+}
 
 # guess_compacting_agent: the compaction hooks do not say which agent is compacting (see the
 # header). Pick the transcript whose newest API response carried the largest context: that
@@ -674,7 +876,7 @@ guess_compacting_agent() {
   local f id best=0 second=0 best_kind=lead best_id="" c dir
   G_KIND=lead; G_ID=""; G_LABEL=lead; G_MODEL=""
   lead_model "$J_SESSION"; G_LABEL=$LM_LABEL; G_MODEL=$LM_MODEL
-  running_any || return 0
+  running_any "$J_SESSION" || return 0
   [ -n "$J_TRANSCRIPT" ] && [ -f "$J_TRANSCRIPT" ] || { G_KIND=unknown; return 0; }
   dir="${J_TRANSCRIPT%.jsonl}/subagents"
   last_context "$J_TRANSCRIPT"; best=$REPLY
@@ -692,10 +894,11 @@ guess_compacting_agent() {
   if [ "$G_KIND" = sub ]; then describe_agent "$G_ID" "$dir"; G_LABEL=$D_LABEL; G_MODEL=$D_MODEL; fi
 }
 
-# live_indexes: prints the main-checkout index files without a Closed: line.
+# live_indexes [CHECKOUT]: prints the index files without a Closed: line in CHECKOUT (default:
+# the main checkout).
 live_indexes() {
   local f rec closed
-  for f in "$CREW_DIR"/tasks/*/index.md; do
+  for f in "${1:-$ROOT}"/.crew/tasks/*/index.md; do
     [ -f "$f" ] || continue
     rec=$(parse_index summary "$f" 2>/dev/null)
     IFS=$US read -r _ _ _ closed _ _ <<< "$rec"
@@ -703,7 +906,7 @@ live_indexes() {
   done
 }
 
-# in_flight_rows -> REPLY: "T07 in progress, T08 in review" over the live indexes; "" when none.
+# in_flight_rows INDEX -> REPLY: "T07 in progress, T08 in review" in that index; "" when none.
 in_flight_rows() {
   local f id key
   REPLY=""
@@ -717,51 +920,57 @@ in_flight_rows() {
 $(parse_index rows "$f" 2>/dev/null)
 EOF
   done <<EOF
-$(live_indexes)
+${1:-}
 EOF
 }
 
 # spec_path_for AGENT_ID -> REPLY: the spec of the task named by the agent's description
-# ("T07 …"), relative to the project root; "" when unknown.
+# ("T07 …") in its task set, relative to its lead's checkout; "" when unknown.
 spec_path_for() {
-  local f id spec tnum re='^[Tt]0*([0-9]+)([^0-9]|$)' want
+  local f id spec tnum re='^[Tt]0*([0-9]+)([^0-9]|$)' want co idx
   REPLY=""
   [ -n "$1" ] || return 0
   safe_name "$1"
   load_agent "$REPLY" || return 0
   [[ $A_DESC =~ $re ]] || return 0
   want=${BASH_REMATCH[1]}
+  session_checkout "${A_SESSION:-$J_SESSION}"; co=$REPLY
+  if [ -n "$A_SET" ] && [ -f "$co/.crew/tasks/$A_SET/index.md" ]; then idx="$co/.crew/tasks/$A_SET/index.md"
+  else idx=$(live_indexes "$co"); fi
+  REPLY=""
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     while IFS=$US read -r id _ _ _ _ spec; do
       tnum=$(printf '%s' "$id" | tr -cd '0-9' | sed 's/^0*//')
       if [ "$tnum" = "$want" ] && [ -n "$spec" ]; then
         spec=${spec//\`/}
-        REPLY="${f%/index.md}/$spec"; REPLY=${REPLY#"$ROOT"/}
+        REPLY="${f%/index.md}/$spec"; REPLY=${REPLY#"$co"/}
         return 0
       fi
     done <<EOF
 $(parse_index rows "$f" 2>/dev/null)
 EOF
   done <<EOF
-$(live_indexes)
+$idx
 EOF
 }
 
 # compact_instructions KIND ID: custom compaction instructions for the summarizer (PreCompact
 # stdout). Phrased for the role when it is known, for both roles when it is not.
 compact_instructions() {
-  local lead sub agents="" f id idx
+  local lead sub agents="" f id idx co
   if [ "$1" != sub ]; then
     for f in "$STATE/running"/*; do
       [ -e "$f" ] || continue
+      [ "$(cat "$f" 2>/dev/null)" = "$J_SESSION" ] || continue
       id=${f##*/}
       load_agent "$id" || continue
       agents="${agents:+$agents; }${A_NAME:-$A_TYPE} [$id]: ${A_DESC:-?}"
     done
-    idx=$(live_indexes | sed "s#^$ROOT/##" | tr '\n' ' ')
+    session_set "$J_SESSION"; co=$REPLY
+    idx=${SET_DIR:+${SET_DIR#"$co"/}/index.md}
   fi
-  lead="You are the lead of a crew of subagents, working under the crew skill. Keep in the summary: 1) the crew rules in force, above all that every founder request becomes a queue entry (.crew/bin/crew request) before anything else and is never added to a running agent; 2) the active task set and each task's status${idx:+ (index: ${idx% })}; 3) every live subagent with its name, id, task and what you are waiting for from it${agents:+ (now: $agents)}; 4) founder requests or questions not yet in .crew/queue.md, and decisions not yet in the decisions log; 5) the exact next step. Keep file paths verbatim."
+  lead="You are the lead of a crew of subagents, working under the crew skill. Keep in the summary: 1) the crew rules in force, above all that every founder request becomes a queue entry (.crew/bin/crew request) before anything else and is never added to a running agent; 2) the active task set and each task's status${idx:+ (index: $idx)}; 3) every live subagent with its name, id, task and what you are waiting for from it${agents:+ (now: $agents)}; 4) founder requests or questions not yet in the queue, and decisions not yet in the decisions log; 5) the exact next step. Keep file paths verbatim."
   sub="You are a subagent of a crew. Keep in the summary: your task id and the spec path, each acceptance criterion with whether it is verified and the evidence, every file you changed, the report format your brief requires (its first line is the status keyword), decisions and deviations so far, and your exact next step. Keep file paths verbatim."
   case $1 in
     lead) printf '%s\n' "Crew: $lead" ;;
@@ -774,7 +983,7 @@ compact_instructions() {
 # conditional so that nothing already in context is re-read.
 compact_reminder() {
   local lead sub
-  lead="If any of these are no longer in your context, read them: CREW.md (path in the CLAUDE.md or AGENTS.md pointer), .crew/queue.md, the active index under .crew/tasks/, and the state file. Run ListAgents (or \`.crew/bin/crew running\`) if you are not sure which subagents are live. If the crew skill's rules are no longer in your context, invoke the crew skill again. Founder messages are still governed by the request rules: queue first (\`.crew/bin/crew request\`), never add scope to a running agent."
+  lead="If any of these are no longer in your context, read them: CREW.md (path in the CLAUDE.md or AGENTS.md pointer), the queue, your task set's index, and the state file (\`.crew/bin/crew where\` names the set's files). Run ListAgents (or \`.crew/bin/crew running\`) if you are not sure which subagents are live. If the crew skill's rules are no longer in your context, invoke the crew skill again. Founder messages are still governed by the request rules: queue first (\`.crew/bin/crew request\`), never add scope to a running agent."
   sub="If your task spec or brief is no longer in your context, re-read it${2:+ (spec: $2)}, then continue from your last verified step and report in the format your brief asked for."
   case $1 in
     lead) printf '%s\n' "Crew: context was compacted. $lead" ;;
@@ -945,8 +1154,9 @@ EOF
 check_index_additions() {
   local path=$1 rel key stored now id spec dir flagged="" line
   REPLY=""
-  rel=${path#"$ROOT"/.crew/}
-  safe_name "$rel"; key=$REPLY
+  rel=.crew/${path##*/.crew/}
+  # Keyed by the path from the main checkout: each worktree's copy of an index has its own rows.
+  safe_name "${path#"$ROOT"/.crew/}"; key=$REPLY
   now=$(parse_index rows "$path" 2>/dev/null | cut -d"$US" -f1,6)
   stored=$(cat "$STATE/index-rows/$key" 2>/dev/null)
   if [ -n "$stored" ] && [ -z "$J_AGENT_TYPE" ]; then
@@ -1118,15 +1328,18 @@ task_num() {
   if [[ $1 =~ $re ]]; then REPLY=${BASH_REMATCH[1]}; fi
 }
 
-# record_run ID START TYPE DESC STATUS: append one finished run to runs.tsv (see the header).
-record_run() {  # ID START TYPE DESC STATUS [END, default now]
+# record_run ID START TYPE DESC STATUS [END]: append one finished run to runs.tsv (see the
+# header), ending at END (default now). The session and the set are the agent's, from the
+# load_agent just before (A_SESSION, A_SET).
+record_run() {
   local kind=first end
   case "$2" in ''|*[!0-9]*) return 0 ;; esac
   now_parts
   end=${6:-$NOW_EPOCH}
   if [ -f "$RUNS" ] && awk -F'\t' -v id="$1" '$3 == id { f = 1 } END { exit !f }' "$RUNS"; then kind=resume; fi
   task_num "$4"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$2" "$end" "$1" "${3:-unknown}" "$REPLY" "$kind" "$5" >> "$RUNS"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$2" "$end" "$1" "${3:-unknown}" "$REPLY" "$kind" "$5" \
+    "${A_SESSION:-}" "${A_SET:-}" >> "$RUNS"
 }
 
 hook_agent_start() {
@@ -1196,8 +1409,10 @@ hook_agent_id() {
   [ -n "$model" ] || model=$(agent_frontmatter "$J_AGENT_TYPE" model)
   [ -n "$effort" ] || effort=$(agent_frontmatter "$J_AGENT_TYPE" effort)
   oneline "$J_AGENT_TYPE"
+  local type=$REPLY
+  session_set "$J_SESSION"
   {
-    printf 'type=%s\n' "$REPLY"
+    printf 'type=%s\n' "$type"
     printf 'description=%s\n' "$desc"
     printf 'model=%s\n' "${model:-default}"
     printf 'effort=%s\n' "${effort:-default}"
@@ -1205,6 +1420,8 @@ hook_agent_id() {
     printf 'started=%s\n' "$NOW_EPOCH"
     printf 'since=%s\n' "$NOW_HM"
     printf 'run_start=%s\n' "$NOW_EPOCH"
+    printf 'session=%s\n' "$sess"
+    printf 'set=%s\n' "$SET_SLUG"
   } > "$STATE/agents/$id"
   printf '%s\n' "$sess" > "$STATE/running/$id"
 }
@@ -1237,7 +1454,7 @@ hook_file_changed() {
   [ "$base" = index.md ] || return 0
   dir=$(dirname "$path")
   pdir=$(cd "$dir" 2>/dev/null && pwd -P) || return 0
-  case "$pdir/" in "$ROOT/.crew/"*) ;; *) return 0 ;; esac
+  case "$pdir/" in */.crew/tasks/*) ;; *) return 0 ;; esac
   ensure_dirs
   lock_take
   check_index_additions "$pdir/$base"
@@ -1247,24 +1464,33 @@ hook_file_changed() {
 }
 
 hook_lead() {  # $1 = working | idle
+  local sess
   [ -z "$J_AGENT_TYPE" ] || return 0
   ensure_dirs
-  safe_name "$J_SESSION"
-  note_reach "$REPLY"
+  safe_name "$J_SESSION"; sess=$REPLY
+  note_reach "$sess"
   lock_take
-  now_parts
-  # "stopped" (crew session stop) sticks until `crew session start` runs again (/crew resume).
-  case $(cat "$STATE/lead" 2>/dev/null) in
-    stopped*) ;;
-    *) printf '%s %s %s\n' "$1" "$NOW_HM" "$NOW_EPOCH" > "$STATE/lead"; lead_log "$1" ;;
-  esac
+  lead_set "$1" "$sess" keep-stopped
   [ "$1" = working ] || return 0
   # UserPromptSubmit: while work is in flight, one line keeps founder requests out of running agents.
-  in_flight_rows
-  local flight=$REPLY n=0
-  if running_any; then n=$(ls "$STATE/running" | wc -l | tr -d ' '); fi
+  session_set "$sess"
+  in_flight_rows "${SET_DIR:+$SET_DIR/index.md}"
+  local flight=$REPLY n
+  session_agents "$sess"; n=$REPLY
   [ -n "$flight" ] || [ "$n" -gt 0 ] || return 0
   printf '%s\n' "Crew: work is in flight (${flight:-no index row in progress}${flight:+; }${n} agent(s) running). Queue any request in this message first (.crew/bin/crew request \"<text>\"), then act on it; never add it to a running agent or edit a spec an agent is working from."
+}
+
+# UserPromptSubmit in a session another took the lead from: say so, every time (the founder may
+# have forgotten this session was the lead). True when it did.
+hook_superseded() {
+  local by hm
+  [ -n "$J_SESSION" ] || return 1
+  safe_name "$J_SESSION"
+  [ -f "$STATE/superseded/$REPLY" ] && [ ! -e "$STATE/sessions/$REPLY" ] || return 1
+  read -r by hm _ < "$STATE/superseded/$REPLY" 2>/dev/null
+  printf '%s\n' "Crew: this session is no longer the crew's lead: session ${by:-another} took over this checkout at ${hm:-?}. Do no crew work here (no subagents, crew files or commits for the task set). If the founder asks for crew work, tell them; running /crew here asks to take the lead back."
+  return 0
 }
 
 # SessionStart startup|resume|clear|fork: remember the lead's model (and effort when given) for
@@ -1306,14 +1532,14 @@ hook_compact() {
     case $pe in *[!0-9]*|'') pe=0 ;; esac
     if [ $((NOW_EPOCH - pe)) -le 600 ]; then kind=$pk; id=$pid; fi
   fi
-  if [ "$kind" = unknown ] && ! running_any; then kind=lead; fi
+  if [ "$kind" = unknown ] && ! running_any "$J_SESSION"; then kind=lead; fi
   # The compacting agent's model differs from the lead's: a subagent for sure.
   lead_model "$J_SESSION"
   if [ -n "$J_HOOK_MODEL" ] && [ -n "$LM_ALIAS" ]; then
     model_alias "$J_HOOK_MODEL"; alias=$REPLY
     if [ -n "$alias" ] && [ "$alias" != "$LM_ALIAS" ] && [ "$kind" != sub ]; then kind=sub; id=""; fi
   fi
-  if [ "$kind" = lead ] && [ -z "$LM_MODEL" ] && [ -n "$J_HOOK_MODEL" ] && ! running_any; then
+  if [ "$kind" = lead ] && [ -z "$LM_MODEL" ] && [ -n "$J_HOOK_MODEL" ] && ! running_any "$J_SESSION"; then
     safe_name "$J_SESSION"
     printf '%s %s\n' "$J_HOOK_MODEL" "$J_EFFORT_LVL" > "$STATE/lead-model/$REPLY" 2>/dev/null
   fi
@@ -1337,6 +1563,7 @@ run_hook() {
   fi
   read_hook_json || return 0
   if [ "$mode" = session-start ]; then hook_session_start; return 0; fi
+  if [ "$mode" = lead-busy ] && [ -z "$J_AGENT_TYPE" ]; then hook_superseded && return 0; fi
   # Guard 2: a registered crew session (or the wildcard).
   session_registered "$J_SESSION" || return 0
   WRITER_CWD=$PWD
@@ -1382,8 +1609,127 @@ queue_field() {
   REPLY=${REPLY//|/\/}
 }
 
+# Where this command's queue and defect log are: QF_HERE (the caller's checkout), QF_SET (the
+# task set open there, or ""), QF_QUEUE and QF_DEFECTS (the set's files; the backlog's,
+# .crew/queue.md and .crew/defects.md, when no set is open or with BACKLOG=1), QF_BQUEUE and
+# QF_BDEFECTS (the backlog's).
+queue_files() {
+  checkout_of "$PWD"; QF_HERE=$REPLY
+  set_here "$QF_HERE"
+  QF_SET=$SET_SLUG
+  QF_BQUEUE="$QF_HERE/.crew/queue.md"; QF_BDEFECTS="$QF_HERE/.crew/defects.md"
+  if [ -n "$SET_DIR" ] && [ "${1:-0}" = 0 ]; then
+    QF_QUEUE="$SET_DIR/queue.md"; QF_DEFECTS="$SET_DIR/defects.md"
+  else
+    QF_QUEUE=$QF_BQUEUE; QF_DEFECTS=$QF_BDEFECTS
+  fi
+}
+
+# new_queue FILE [SLUG]: create a queue file (a task set's when SLUG is given).
+new_queue() {
+  [ -f "$1" ] && return 0
+  mkdir -p "$(dirname "$1")" 2>/dev/null
+  if [ -n "${2:-}" ]; then
+    printf '# Crew queue — %s\n\nFounder requests and questions for task set %s; the backlog for later work is .crew/queue.md.\n\n## Requests from the founder\n\n## Questions for the founder\n' "$2" "$2" > "$1"
+  else
+    printf '# Crew queue\n\n## Requests from the founder\n\n## Questions for the founder\n' > "$1"
+  fi
+}
+
+# new_defects FILE [SLUG]: create a defect log (a task set's when SLUG is given).
+new_defects() {
+  [ -f "$1" ] && return 0
+  mkdir -p "$(dirname "$1")" 2>/dev/null
+  if [ -n "${2:-}" ]; then
+    printf '# Crew defects — %s\n\nLeaf defects deferred from the reviews and QA of task set %s (`reference/execution.md` in the crew skill, "Findings: fix now or defer"); the backlog for later work is .crew/defects.md. Kept by `.crew/bin/crew defect`.\n\n## Defects\n' "$2" "$2" > "$1"
+  else
+    printf '# Crew defects\n\nLeaf defects deferred from reviews and QA (`reference/execution.md` in the crew skill, "Findings: fix now or defer"). Kept by `.crew/bin/crew defect`.\n\n## Defects\n' > "$1"
+  fi
+}
+
+# entry_file ID FILE... -> REPLY: the first FILE with the entry "- [ID]"; "" when none has it.
+entry_file() {
+  local id=$1 f
+  shift
+  REPLY=""
+  for f in "$@"; do
+    [ -f "$f" ] || continue
+    if grep -q -E "^[[:space:]]*- \[$id\]" "$f"; then REPLY=$f; return 0; fi
+  done
+}
+
+# next_number R|D [DRY] -> REPLY: the next request or defect number, project-wide: one more than
+# the highest in any queue or defect log (the backlog's and every task set's, in every checkout)
+# and than the last one given (tmp/journal-state/last-R, last-D: a set whose branch is checked out
+# nowhere still holds its numbers). With DRY=1 nothing is recorded.
+next_number() {
+  local k=$1 name n max wt
+  case $k in R) name=queue.md ;; *) name=defects.md ;; esac
+  max=$(cat "$STATE/last-$k" 2>/dev/null); case $max in ''|*[!0-9]*) max=0 ;; esac
+  while IFS= read -r wt; do
+    [ -n "$wt" ] && [ -d "$wt/.crew" ] || continue
+    n=$(cat "$wt/.crew/$name" "$wt"/.crew/tasks/*/"$name" 2>/dev/null | grep -E "^[[:space:]]*- \[$k[0-9]+\]" |
+      grep -o -E "\[$k[0-9]+\]" | tr -cd '0-9\n' | sort -n | tail -n 1)
+    case $n in ''|*[!0-9]*) n=0 ;; esac
+    [ "$n" -le "$max" ] || max=$n
+  done <<EOF
+$ROOT
+${QF_HERE:-}
+$(list_worktrees | cut -d"$US" -f1)
+EOF
+  REPLY=$((max + 1))
+  [ "${2:-0}" = 1 ] || printf '%s\n' "$REPLY" > "$STATE/last-$k"
+}
+
+# queue_insert FILE SECTION ENTRY URGENT: put ENTRY in the "## SECTION" of a queue file (created
+# when missing): urgent entries first in the section, others after its last entry; an empty
+# section gets it after its heading (and after the format comment, when present).
+queue_insert() {
+  local tmp="$1.new"
+  awk -v entry="$3" -v urgent="$4" -v head="## $2" '
+    { line[NR] = $0 }
+    END {
+      sec = 0; send = NR; first = 0; last = 0
+      for (i = 1; i <= NR; i++) {
+        if (!sec) { if (index(line[i], head) == 1) sec = i; continue }
+        if (line[i] ~ /^## /) { send = i - 1; break }
+        if (line[i] ~ /^[ \t]*- \[[A-Z][0-9]+\]/) { if (!first) first = i; last = i }
+      }
+      if (!sec) {
+        for (i = 1; i <= NR; i++) print line[i]
+        print ""; print head; print ""; print entry
+        exit
+      }
+      if (urgent && first) { at = first - 1; before = 0 }
+      else if (last) { at = last; before = 0 }
+      else {
+        at = sec
+        while (at < send && line[at + 1] ~ /^<!--/) { at++; while (at < send && line[at] !~ /-->/) at++ }
+        if (at < send && line[at + 1] ~ /^[ \t]*$/) at++
+        before = 1
+      }
+      for (i = 1; i <= NR; i++) {
+        print line[i]
+        if (i == at) {
+          if (before && line[i] !~ /^[ \t]*$/) print ""
+          print entry
+          if (before && (i == NR || line[i + 1] !~ /^[ \t]*$/)) print ""
+        }
+      }
+      if (at == 0) { print entry }
+    }' "$1" > "$tmp" && mv -f "$tmp" "$1"
+}
+
+# defects_append FILE ENTRY: add ENTRY at the end of a defect log.
+defects_append() {
+  local last
+  last=$(tail -n 1 "$1")
+  case $last in ''|'- [D'*) ;; *) printf '\n' >> "$1" ;; esac
+  printf '%s\n' "$2" >> "$1"
+}
+
 cmd_request() {
-  local text="" affects="" slot="" status="" note="" urgent=0 dry=0 queue="$CREW_DIR/queue.md" n entry tmp line verb
+  local text="" affects="" slot="" status="" note="" urgent=0 dry=0 backlog=0 queue n entry tmp line verb where=""
   while [ $# -gt 0 ]; do
     case $1 in
       --affects) affects=${2:-}; shift ;;
@@ -1391,6 +1737,7 @@ cmd_request() {
       --status) status=${2:-}; shift ;;
       --note) note=${2:-}; shift ;;
       --urgent) urgent=1 ;;
+      --backlog) backlog=1 ;;
       --dry-run) dry=1 ;;
       --*) printf 'crew request: unknown option %s\n' "$1" >&2; return 1 ;;
       *) text="${text:+$text }$1" ;;
@@ -1401,15 +1748,15 @@ cmd_request() {
   settle_compactions
   clock_sample
   ensure_dirs
+  lock_take
   now_parts
-  if [ ! -f "$queue" ]; then
-    printf '# Crew queue\n\n## Requests from the founder\n\n## Questions for the founder\n' > "$queue"
-  fi
+  queue_files "$backlog"
   case $text in
     R[0-9]*)
       # A transition: crew request R<n> --status <status> [--slot …] [--affects …] [--note …]
       case $status in queued|scheduled|done|dropped) ;; *) printf 'usage: crew request R<n> --status queued|scheduled|done|dropped [--slot <y>] [--affects <x>] [--note <text>]\n' >&2; return 1 ;; esac
-      grep -q -E "^[[:space:]]*- \[$text\]" "$queue" || { printf 'crew request: no entry %s in %s\n' "$text" "$queue" >&2; return 1; }
+      entry_file "$text" "$QF_QUEUE" "$QF_BQUEUE"; queue=$REPLY
+      [ -n "$queue" ] || { printf 'crew request: no entry %s in %s\n' "$text" "${QF_QUEUE#"$QF_HERE"/}${QF_SET:+ or ${QF_BQUEUE#"$QF_HERE"/}}" >&2; return 1; }
       queue_field "$slot"; slot=$REPLY
       queue_field "$affects"; affects=$REPLY
       tmp="$queue.new"
@@ -1439,63 +1786,31 @@ cmd_request() {
       printf '%s\n' "$line"
       return 0 ;;
   esac
-  [ -n "$text" ] || { printf 'usage: crew request "<request in the founder'"'"'s words>" [--affects <x>] [--slot <y>] [--urgent] [--dry-run]\n' >&2; return 1; }
+  [ -n "$text" ] || { printf 'usage: crew request "<request in the founder'"'"'s words>" [--affects <x>] [--slot <y>] [--urgent] [--backlog] [--dry-run]\n' >&2; return 1; }
   [ -z "$status" ] || { printf 'crew request: --status applies to an existing R<n>\n' >&2; return 1; }
-  # Next number: real entries only (the scaffold's format comment holds an example id).
-  n=$(grep -E '^[[:space:]]*- \[R[0-9]+\]' "$queue" | grep -o -E '\[R[0-9]+\]' | tr -cd '0-9\n' | sort -n | tail -n 1)
-  n=$((${n:-0} + 1))
+  queue=$QF_QUEUE
+  if [ "$queue" = "$QF_BQUEUE" ]; then new_queue "$queue"; else new_queue "$queue" "$QF_SET"; fi
+  next_number R "$dry"; n=$REPLY
   queue_field "$text"; text=$REPLY
   queue_field "$affects"; affects=$REPLY
   queue_field "$slot"; slot=$REPLY
   if [ -z "$slot" ]; then if [ "$urgent" = 1 ]; then slot="now (urgent)"; else slot="tbd"; fi; fi
   entry="- [R$n] $NOW_DAY · $text · affects: ${affects:-—} · slot: $slot · status: queued"
   if [ "$dry" = 1 ]; then printf '%s\n' "$entry"; return 0; fi
-  tmp="$queue.new"
-  # Urgent entries go first in the section, others after the last entry; an empty section gets
-  # the entry after its heading (and after the format comment, when present).
-  awk -v entry="$entry" -v urgent="$urgent" '
-    { line[NR] = $0 }
-    END {
-      sec = 0; send = NR; first = 0; last = 0
-      for (i = 1; i <= NR; i++) {
-        if (!sec) { if (line[i] ~ /^## Requests from the founder/) sec = i; continue }
-        if (line[i] ~ /^## /) { send = i - 1; break }
-        if (line[i] ~ /^[ \t]*- \[R[0-9]+\]/) { if (!first) first = i; last = i }
-      }
-      if (!sec) {
-        for (i = 1; i <= NR; i++) print line[i]
-        print ""; print "## Requests from the founder"; print ""; print entry
-        exit
-      }
-      if (urgent && first) { at = first - 1; before = 0 }
-      else if (last) { at = last; before = 0 }
-      else {
-        at = sec
-        while (at < send && line[at + 1] ~ /^<!--/) { at++; while (at < send && line[at] !~ /-->/) at++ }
-        if (at < send && line[at + 1] ~ /^[ \t]*$/) at++
-        before = 1
-      }
-      for (i = 1; i <= NR; i++) {
-        print line[i]
-        if (i == at) {
-          if (before && line[i] !~ /^[ \t]*$/) print ""
-          print entry
-          if (before && (i == NR || line[i + 1] !~ /^[ \t]*$/)) print ""
-        }
-      }
-      if (at == 0) { print entry }
-    }' "$queue" > "$tmp" && mv -f "$tmp" "$queue"
-  journal_append "lead" "Queued R$n: $text${slot:+, slot: $slot}"
+  queue_insert "$queue" "Requests from the founder" "$entry" "$urgent"
+  [ "$queue" = "$QF_BQUEUE" ] || where=" (set $QF_SET)"
+  [ "$queue" != "$QF_BQUEUE" ] || [ -z "$QF_SET" ] || where=" (backlog)"
+  journal_append "lead" "Queued R$n$where: $text${slot:+, slot: $slot}"
   printf '%s\n' "$entry"
 }
 
 defect_usage() {
-  printf '%s\n' 'usage: crew defect "<symptom>" --where <surface or files> [--from <T07 review>] [--severity low|medium] [--slot <y>] [--dry-run]' \
+  printf '%s\n' 'usage: crew defect "<symptom>" --where <surface or files> [--from <T07 review>] [--severity low|medium] [--slot <y>] [--backlog] [--dry-run]' \
     '       crew defect D<n> --status deferred|scheduled|fixed|dropped [--promote] [--slot <y>] [--note <text>]' >&2
 }
 
 cmd_defect() {
-  local text="" where="" from="" severity="" slot="" status="" note="" promote=0 dry=0 n entry tmp line verb last
+  local text="" where="" from="" severity="" slot="" status="" note="" promote=0 dry=0 backlog=0 n entry tmp line verb log
   while [ $# -gt 0 ]; do
     case $1 in
       --where) where=${2:-}; shift ;;
@@ -1505,6 +1820,7 @@ cmd_defect() {
       --status) status=${2:-}; shift ;;
       --note) note=${2:-}; shift ;;
       --promote) promote=1 ;;
+      --backlog) backlog=1 ;;
       --dry-run) dry=1 ;;
       --*) printf 'crew defect: unknown option %s\n' "$1" >&2; return 1 ;;
       *) text="${text:+$text }$1" ;;
@@ -1515,10 +1831,9 @@ cmd_defect() {
   settle_compactions
   clock_sample
   ensure_dirs
+  lock_take
   now_parts
-  if [ ! -f "$DEFECTS" ]; then
-    printf '# Crew defects\n\nLeaf defects deferred from reviews and QA (`reference/execution.md` in the crew skill, "Findings: fix now or defer"). Kept by `.crew/bin/crew defect`.\n\n## Defects\n' > "$DEFECTS"
-  fi
+  queue_files "$backlog"
   case $text in
     D[0-9]*)
       # A transition: crew defect D<n> --status <status> [--promote] [--slot …] [--note …]
@@ -1527,10 +1842,11 @@ cmd_defect() {
       if [ "$promote" = 1 ] && [ "$status" != scheduled ]; then
         printf 'crew defect: --promote goes with --status scheduled (a promoted defect is fixed now)\n' >&2; return 1
       fi
-      grep -q -E "^[[:space:]]*- \[$text\]" "$DEFECTS" || { printf 'crew defect: no entry %s in %s\n' "$text" "$DEFECTS" >&2; return 1; }
+      entry_file "$text" "$QF_DEFECTS" "$QF_BDEFECTS"; log=$REPLY
+      [ -n "$log" ] || { printf 'crew defect: no entry %s in %s\n' "$text" "${QF_DEFECTS#"$QF_HERE"/}${QF_SET:+ or ${QF_BDEFECTS#"$QF_HERE"/}}" >&2; return 1; }
       queue_field "$slot"; slot=$REPLY
       queue_field "$note"; note=$REPLY
-      tmp="$DEFECTS.new"
+      tmp="$log.new"
       # The note stays last on the line ("note: as T13"), and an older one stays until replaced.
       # It reaches awk through the environment: -v would read backslashes as escapes.
       CREW_NOTE=$note awk -v id="$text" -v st="$status" -v slot="$slot" -v prom="$promote" '
@@ -1547,8 +1863,8 @@ cmd_defect() {
           if (note != "") $0 = $0 " · note: " note
           done = 1
         }
-        { print }' "$DEFECTS" > "$tmp" && mv -f "$tmp" "$DEFECTS"
-      line=$(grep -m 1 -E "^[[:space:]]*- \[$text\]" "$DEFECTS")
+        { print }' "$log" > "$tmp" && mv -f "$tmp" "$log"
+      line=$(grep -m 1 -E "^[[:space:]]*- \[$text\]" "$log")
       entry=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*- \[D[0-9]+\] [^·]*· //; s/ · where:.*$//')
       trunc "$entry" 60; entry=$REPLY
       if [ "$promote" = 1 ]; then verb="Promoted $text ($entry)${note:+: $note}"
@@ -1575,9 +1891,9 @@ cmd_defect() {
     *) printf 'crew defect: --severity is low or medium\n' >&2; return 1 ;;
   esac
   [ -n "$where" ] || { printf 'crew defect: --where is required (the surface or files), so briefs can match the defect to the tasks that touch it\n' >&2; return 1; }
-  # Next number: real entries only (the scaffold's format comment holds an example id).
-  n=$(grep -E '^[[:space:]]*- \[D[0-9]+\]' "$DEFECTS" | grep -o -E '\[D[0-9]+\]' | tr -cd '0-9\n' | sort -n | tail -n 1)
-  n=$((${n:-0} + 1))
+  log=$QF_DEFECTS
+  if [ "$log" = "$QF_BDEFECTS" ]; then new_defects "$log"; else new_defects "$log" "$QF_SET"; fi
+  next_number D "$dry"; n=$REPLY
   queue_field "$text"; text=$REPLY
   queue_field "$where"; where=$REPLY
   queue_field "$from"; from=$REPLY
@@ -1585,58 +1901,243 @@ cmd_defect() {
   [ -n "$slot" ] || slot="end of set"
   entry="- [D$n] $NOW_DAY · $text · where: $where${from:+ · from: $from} · severity: $severity · slot: $slot · status: deferred"
   if [ "$dry" = 1 ]; then printf '%s\n' "$entry"; return 0; fi
-  last=$(tail -n 1 "$DEFECTS")
-  case $last in ''|'- [D'*) ;; *) printf '\n' >> "$DEFECTS" ;; esac
-  printf '%s\n' "$entry" >> "$DEFECTS"
+  defects_append "$log" "$entry"
   journal_append "lead" "Deferred D$n ($severity): $text, where: $where"
   printf '%s\n' "$entry"
 }
 
-cmd_session() {
-  local sid=${2:-}
+# crew carry: closing a set, move its open entries to the backlog of this checkout (which the set's
+# merge then brings to the base branch): requests queued or scheduled, questions open, defects
+# deferred or scheduled.
+cmd_carry() {
+  local q d moved="" line id tmp ids="" f
+  WRITER_CWD=$PWD
   ensure_dirs
-  case ${1:-} in
+  lock_take
+  queue_files 0
+  [ -n "$QF_SET" ] || { printf 'crew carry: no task set is open in this checkout\n' >&2; return 1; }
+  q=$QF_QUEUE; d=$QF_DEFECTS
+  if [ -f "$q" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      id=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*- \[([A-Z][0-9]+)\].*/\1/')
+      new_queue "$QF_BQUEUE"
+      case $id in
+        R*) queue_insert "$QF_BQUEUE" "Requests from the founder" "$line" 0 ;;
+        *) queue_insert "$QF_BQUEUE" "Questions for the founder" "$line" 0 ;;
+      esac
+      moved="${moved:+$moved, }$id"; ids="$ids|$id"
+    done <<EOF
+$(grep -E '^[[:space:]]*- \[R[0-9]+\].*· status: (queued|scheduled)|^[[:space:]]*- \[F[0-9]+\].*· status: open' "$q")
+EOF
+  fi
+  if [ -f "$d" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      id=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*- \[(D[0-9]+)\].*/\1/')
+      new_defects "$QF_BDEFECTS"
+      defects_append "$QF_BDEFECTS" "$line"
+      moved="${moved:+$moved, }$id"; ids="$ids|$id"
+    done <<EOF
+$(grep -E '^[[:space:]]*- \[D[0-9]+\].*· status: (deferred|scheduled)' "$d")
+EOF
+  fi
+  if [ -z "$moved" ]; then printf 'Nothing open in task set %s.\n' "$QF_SET"; return 0; fi
+  for f in "$q" "$d"; do
+    [ -f "$f" ] || continue
+    tmp="$f.new"
+    awk -v ids="${ids#|}" 'BEGIN { n = split(ids, a, "|"); for (i = 1; i <= n; i++) skip["[" a[i] "]"] = 1 }
+      { if (match($0, /^[ \t]*- \[[A-Z][0-9]+\]/)) { k = substr($0, RSTART, RLENGTH); sub(/^[ \t]*- /, "", k); if (k in skip) next } print }' "$f" > "$tmp" && mv -f "$tmp" "$f"
+  done
+  journal_append "lead" "Carried the open entries of task set $QF_SET to the backlog: $moved"
+  printf 'Moved to the backlog (.crew/queue.md, .crew/defects.md): %s\n' "$moved"
+}
+
+# where_lines CHECKOUT [SESSION]: what `crew where` prints for CHECKOUT; SESSION is left out of the
+# other leads.
+where_lines() {
+  local co=$1 me=${2:-} br kind f s co2 br2 others="" sets="" wt
+  br=$(git -C "$co" symbolic-ref --short -q HEAD 2>/dev/null)
+  [ -n "$br" ] || br="detached at $(git -C "$co" rev-parse --short HEAD 2>/dev/null)"
+  if [ "$co" = "$ROOT" ]; then kind="main checkout"; else kind="worktree"; fi
+  printf 'Checkout: %s (%s), branch %s\n' "$co" "$kind" "$br"
+  set_here "$co"
+  if [ -n "$SET_DIR" ]; then
+    f=${SET_DIR#"$co"/}
+    printf 'Task set: %s; its files: %s/index.md, queue.md, defects.md, handoff.md. Backlog: .crew/queue.md, .crew/defects.md\n' "$SET_SLUG" "$f"
+    f="$SET_DIR/handoff.md"
+  else
+    printf 'Task set: none open in this checkout. Queue .crew/queue.md, defects .crew/defects.md, handoff .crew/handoff.md\n'
+    f="$co/.crew/handoff.md"
+  fi
+  [ ! -f "$f" ] || printf 'Handoff: %s (%s)\n' "${f#"$co"/}" "$(sed -n '1s/^# Crew handoff[^0-9]*//p' "$f" | tr -d '\r')"
+  for f in "$STATE/sessions"/*; do
+    [ -f "$f" ] || continue
+    s=${f##*/}
+    [ "$s" != any ] && [ "$s" != "$me" ] || continue
+    session_alive "$s" || continue
+    session_checkout "$s"; co2=$REPLY
+    br2=$(git -C "$co2" symbolic-ref --short -q HEAD 2>/dev/null)
+    set_here "$co2"
+    lead_line "$s"
+    others="${others:+$others; }session $s in $co2 (${br2:-detached}${SET_SLUG:+, task set $SET_SLUG}), $REPLY"
+  done
+  [ -z "$others" ] || printf 'Other leads: %s\n' "$others"
+  while IFS= read -r wt; do
+    [ -n "$wt" ] && [ "$wt" != "$co" ] || continue
+    case $wt in */.claude/worktrees/*) continue ;; esac
+    set_here "$wt"
+    [ -n "$SET_SLUG" ] || continue
+    sets="${sets:+$sets; }$SET_SLUG in $wt"
+  done <<EOF
+$(list_worktrees | cut -d"$US" -f1)
+EOF
+  [ -z "$sets" ] || printf 'Open task sets in other checkouts: %s\n' "$sets"
+}
+
+cmd_where() {
+  checkout_of "$PWD"
+  local co=$REPLY
+  caller_session
+  where_lines "$co" "$REPLY"
+}
+
+# conflict_message OTHER CHECKOUT SESSION AGENTS TAKE: why `crew session start` registered nothing.
+conflict_message() {
+  local other=$1 co=$2 sid=$3 n=$4 label since="" pid start
+  if [ "$co" = "$ROOT" ]; then label="the main checkout ($co)"; else label="this worktree ($co)"; fi
+  safe_name "$other"
+  read -r pid start < "$STATE/claude/$REPLY" 2>/dev/null
+  case $start in ''|*[!0-9]*) ;; *) epoch_to_hm "$start"; since=$REPLY; epoch_to_day "$start"; now_parts; [ "$REPLY" = "$NOW_DAY" ] || since="$REPLY $since" ;; esac
+  lead_line "$other"
+  if [ "$5" = 1 ]; then
+    printf '%s\n' "Not registered: session $other still leads $label and runs $n subagent(s). Stop them in that session first (/crew stop there, or its Stop button on the dashboard), then take over again."
+    return 0
+  fi
+  printf '%s\n' "Not registered: another session already leads $label." \
+    "  Session $other: Claude Code running${since:+ since $since}; lead $REPLY${n:+, $n subagent(s) running}." \
+    "Two leads in one checkout would work on the same task set and files. Ask the founder which they want:" \
+    "  1. Take over: .crew/bin/crew session start $sid --take-over (that session is told it no longer leads; refused while it runs subagents)." \
+    "  2. Another task set beside it, from a separate checkout: a git worktree (git worktree add <path> -b crew/<slug>), with Claude Code started there and /crew." \
+    "  3. Neither: this session does no crew work."
+}
+
+# replace_leads CHECKOUT SESSION: SESSION now leads CHECKOUT; every other session registered there
+# is superseded (a lead taken over, one whose Claude Code is gone, an earlier session of the same
+# process after /clear). Journals a take-over.
+replace_leads() {
+  local f s co mine pid
+  claude_pid; mine=$REPLY
+  for f in "$STATE/sessions"/*; do
+    [ -f "$f" ] || continue
+    s=${f##*/}
+    [ "$s" != any ] && [ "$s" != "$2" ] || continue
+    session_checkout "$s"; co=$REPLY
+    [ "$co" = "$1" ] || continue
+    pid=""; read -r pid _ < "$STATE/claude/$s" 2>/dev/null
+    if [ -n "$pid" ] && [ "$pid" != "$mine" ] && session_alive "$s"; then
+      journal_append "lead" "Took over the lead of this checkout from session $s"
+    fi
+    supersede "$s" "$2"
+  done
+}
+
+# only_lead -> REPLY: the one registered session whose Claude Code runs (else the only registered
+# session); "" when there are several or none.
+only_lead() {
+  local f s live="" all="" nl=0 na=0
+  for f in "$STATE/sessions"/*; do
+    [ -f "$f" ] || continue
+    s=${f##*/}
+    [ "$s" != any ] || continue
+    na=$((na + 1)); all=$s
+    if session_alive "$s"; then nl=$((nl + 1)); live=$s; fi
+  done
+  REPLY=""
+  if [ "$nl" = 1 ]; then REPLY=$live; elif [ "$nl" = 0 ] && [ "$na" = 1 ]; then REPLY=$all; fi
+}
+
+cmd_session() {
+  local sub=${1:-} sid="" take=0 a co other n
+  [ $# -gt 0 ] && shift
+  for a in "$@"; do
+    case $a in
+      --take-over) take=1 ;;
+      -*) printf 'usage: crew session start [<session-id>] [--take-over] | crew session stop [<session-id>]\n' >&2; return 1 ;;
+      *) sid=$a ;;
+    esac
+  done
+  ensure_dirs
+  case $sub in
     start)
       lock_take
       if [ -n "$sid" ]; then safe_name "$sid"; sid=$REPLY; else sid=any; fi
-      touch "$STATE/sessions/$sid"
+      checkout_of "$PWD"; co=$REPLY
+      if [ "$sid" != any ]; then
+        other_lead "$co" "$sid"; other=$REPLY
+        if [ -n "$other" ]; then
+          session_agents "$other"; n=$REPLY
+          if [ "$take" = 0 ] || [ "$n" -gt 0 ]; then
+            [ "$n" -gt 0 ] || n=""
+            conflict_message "$other" "$co" "$sid" "$n" "$take"
+            lock_release
+            return 4
+          fi
+        fi
+      fi
+      printf 'checkout=%s\n' "$co" > "$STATE/sessions/$sid"
+      rm -f "$STATE/superseded/$sid"
+      WRITER_CWD=$PWD
       clock_sample
       note_claude "$sid"
       note_reach "$sid"
+      [ "$sid" = any ] || replace_leads "$co" "$sid"
       reap_orphans
-      keep_awake_start
+      keep_awake_start "$sid"
       # Prune registrations (and per-session notes) older than 30 days.
-      find "$STATE/sessions" "$STATE/lead-model" "$STATE/transcripts" "$STATE/claude" "$STATE/reach" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
-      # The lead is at work: it is running this command (this also clears "stopped").
-      now_parts
-      printf 'working %s %s\n' "$NOW_HM" "$NOW_EPOCH" > "$STATE/lead"
-      lead_log working
+      find "$STATE/sessions" "$STATE/lead-model" "$STATE/transcripts" "$STATE/claude" "$STATE/reach" \
+        "$STATE/leads" "$STATE/superseded" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
+      # The lead is at work: it is running this command (this also clears "stopped"). The single
+      # lead file of older crews goes: leads/<session> replaces it.
+      lead_set working "$sid"
+      rm -f "$STATE/lead"
       lock_release
       settle_compactions
       lock_release
       printf 'Crew session registered: %s\n' "$sid"
+      where_lines "$co" "$sid"
       dashboard_announce "$sid" ;;
     stop)
+      if [ -z "$sid" ]; then caller_session; sid=$REPLY; fi
+      if [ -z "$sid" ]; then only_lead; sid=$REPLY; fi
+      if [ -z "$sid" ]; then
+        printf 'crew session stop: which session? Give its id (several leads are registered, and none runs this command)\n' >&2
+        return 1
+      fi
+      safe_name "$sid"; sid=$REPLY
       lock_take
-      now_parts
       # Sticky until the next `crew session start`; the hooks leave it alone.
-      printf 'stopped %s %s\n' "$NOW_HM" "$NOW_EPOCH" > "$STATE/lead"
-      lead_log stopped
-      keep_awake_stop
+      lead_set stopped "$sid"
+      keep_awake_stop "$sid"
       lock_release
       printf 'Crew marked as stopped at %s\n' "$NOW_HM" ;;
-    *) printf 'usage: crew session start [<session-id>] | crew session stop\n' >&2; return 1 ;;
+    *) printf 'usage: crew session start [<session-id>] [--take-over] | crew session stop [<session-id>]\n' >&2; return 1 ;;
   esac
 }
 
 cmd_running() {
-  local f id n=0
+  local f id n=0 all=0 me="" sess tail
+  [ "${1:-}" = --all ] && all=1
+  if [ "$all" = 0 ]; then caller_session; me=$REPLY; [ -n "$me" ] || all=1; fi
   for f in "$STATE/running"/*; do
     [ -e "$f" ] || continue
+    sess=$(cat "$f" 2>/dev/null)
+    [ "$all" = 1 ] || [ "$sess" = "$me" ] || continue
     id=${f##*/}
     load_agent "$id" || A_TYPE=unknown
-    printf '%s · %s (%s · %s) · %s · since %s\n' "$id" "$A_TYPE" "${A_MODEL:-default}" \
-      "${A_EFFORT:-default}" "${A_DESC:-(no description)}" "${A_SINCE:-?}"
+    tail=""; [ -n "$me" ] || tail=" · session ${sess:-?}"
+    printf '%s · %s (%s · %s) · %s · since %s%s\n' "$id" "$A_TYPE" "${A_MODEL:-default}" \
+      "${A_EFFORT:-default}" "${A_DESC:-(no description)}" "${A_SINCE:-?}" "$tail"
     n=$((n + 1))
   done
   [ "$n" -gt 0 ] || printf 'No subagent running.\n'
@@ -1855,7 +2356,7 @@ EOF
   return "$rc"
 }
 
-# Copy <wt>/.crew/task-data/ into the main checkout: merge per-task dirs, newer file wins.
+# Copy <wt>/.crew/task-data/ into the lead's checkout: merge per-task dirs, newer file wins.
 # shellcheck disable=SC2317  # invoked indirectly through step()
 harvest_task_data() {  # src dest
   local rel n=0
@@ -1927,9 +2428,11 @@ EOF
   printf 'crew worktree teardown%s: %s (branch %s)\n' "$([ "$DRY" = 1 ] && printf ' (dry run)')" "$listed" "${branch:-none}"
 
   # 1. Harvest task data and worktree-local journal lines (D-G6).
+  # Into the checkout this runs in: the lead's (the main one, or the worktree it leads from).
+  checkout_of "$PWD"
   if [ -d "$abs/.crew/task-data" ]; then
-    step "copy .crew/task-data/ into the main checkout (newer file wins)" \
-      harvest_task_data "$abs/.crew/task-data" "$CREW_DIR/task-data" || rc=1
+    step "copy .crew/task-data/ into this checkout (newer file wins)" \
+      harvest_task_data "$abs/.crew/task-data" "$REPLY/.crew/task-data" || rc=1
   else
     printf '  no task data in the worktree\n'
   fi
@@ -2006,7 +2509,9 @@ case ${1:-} in
   request) shift; cmd_request "$@"; rc=$? ;;
   defect) shift; cmd_defect "$@"; rc=$? ;;
   session) shift; cmd_session "$@"; rc=$? ;;
-  running) cmd_running; rc=$? ;;
+  running) shift; cmd_running "$@"; rc=$? ;;
+  where) cmd_where; rc=$? ;;
+  carry) cmd_carry; rc=$? ;;
   status) cmd_status; rc=$? ;;
   dashboard) shift; cmd_dashboard "$@"; rc=$? ;;
   worktree) shift; cmd_worktree "$@"; rc=$? ;;

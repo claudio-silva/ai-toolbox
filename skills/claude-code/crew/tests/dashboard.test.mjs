@@ -237,6 +237,9 @@ test('server: pushes the new state when a crew file changes; guards Host, key an
   // This computer by a local name, on any port (an SSH tunnel); anything else needs the key.
   assert.equal((await get(`${url}api/state`, { Host: 'evil.example:80' })).status, 403);
   assert.equal((await get(`${url}api/state`, { Host: 'localhost:8080' })).status, 200);
+  // A tunnel's agent connects from here and may say localhost: its forwarding headers give it away.
+  assert.equal((await get(`${url}api/state`, { Host: 'localhost', 'X-Forwarded-For': '203.0.113.9' })).status, 403);
+  assert.equal((await get(`${url}api/state`, { 'Cf-Connecting-IP': '203.0.113.9' })).status, 403);
   const key = fs.readFileSync(path.join(crew, 'tmp', 'dashboard.key'), 'utf8').trim();
   assert.match(key, /^[\w-]{16}$/);
   assert.equal((await get(`${url}api/state?key=wrong`, { Host: 'evil.example:80' })).status, 403);

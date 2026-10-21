@@ -272,6 +272,11 @@ const NO_KEY = `<!doctype html><meta charset="utf-8"><meta name="viewport" conte
 
 const inside = (file, dir) => file === dir || file.startsWith(dir + path.sep);
 const loopback = (addr) => /^(127\.|::1$|::ffff:127\.)/.test(addr || '');
+// Headers a proxy or a tunnel adds (cloudflared, ngrok, Dev Tunnels, Tailscale Serve, Paseo's
+// service proxy): such a request only looks local, since the agent runs here, and may rewrite
+// Host to localhost. An SSH tunnel adds none, and stays local.
+const PROXIED = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip', 'cf-connecting-ip', 'true-client-ip', 'tailscale-user-login'];
+const proxied = (req) => PROXIED.some((h) => req.headers[h] !== undefined);
 const LOCAL_NAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
 function cookie(req, name) {
   for (const part of String(req.headers.cookie || '').split(';')) {
@@ -444,12 +449,12 @@ async function cmdServe() {
   };
 
   const server = http.createServer((req, res) => {
-    // This computer, by a local name (on any port, for an SSH tunnel): no DNS-rebinding page can
-    // read the project. Anyone else, another device or a proxy: with the key, which a page on
-    // another site cannot know; it comes in the URL once and is then kept in a cookie per port.
+    // This computer, by a local name (on any port, for an SSH tunnel) and not through a proxy: no
+    // DNS-rebinding page can read the project. Anyone else, another device or a proxy: with the
+    // key, which a page on another site cannot know; it comes in the URL once, then a cookie.
     const name = String(req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
     const u = new URL(req.url || '/', 'http://localhost');
-    if (!(loopback(req.socket.remoteAddress) && LOCAL_NAMES.has(name))) {
+    if (!(loopback(req.socket.remoteAddress) && LOCAL_NAMES.has(name) && !proxied(req))) {
       const jar = `crew_key_${port}`;
       const given = u.searchParams.get('key');
       if (given && sameKey(given, key)) {

@@ -304,10 +304,10 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
               </span>
             )}
           </div>
-          <div className="flex min-w-[7.5rem] flex-1">{state && <LeadStatus state={state} />}</div>
+          <div className="flex min-w-[7.5rem] flex-1 justify-center">{state && <LeadStatus state={state} />}</div>
           <div className="flex shrink-0 items-center">
-            <ShareButton />
             <ConnDot conn={conn} changedAt={changedAt} />
+            <ShareButton />
             <ThemeToggle theme={theme} setTheme={setTheme} />
           </div>
         </div>

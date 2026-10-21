@@ -214,7 +214,7 @@ Compaction is the last resort. Crew keeps contexts from growing in the first pla
 
 ### Tuning compaction for your project
 
-When a context reaches its model's *compaction window*, Claude Code summarises it and carries on. Each compaction costs one summarising request and makes every later request cheaper. A window that's too small compacts too often: the summaries cost more than they save, and agents lose detail and read files again. A window that's too large makes every request pay for context that's no longer needed. The right size depends on your project: the size of its code, of its tasks, and of what the agents must read.
+When a context nears its model's *compaction window*, Claude Code summarises it and carries on. It compacts about 33K tokens before the window is full, to leave room for the summary: a 200K window compacts at about 167K. Each compaction costs one summarising request and makes every later request cheaper. A window that's too small compacts too often: the summaries cost more than they save, and agents lose detail and read files again. A window that's too large makes every request pay for context that's no longer needed. The right size depends on your project: the size of its code, of its tasks, and of what the agents must read.
 
 **The Compactions tab tells you whether your windows fit.** It lists every compaction, the lead's and the agents', with the context size before and after, what the summary cost, what it has saved since, and the net.
 
@@ -226,12 +226,12 @@ When a context reaches its model's *compaction window*, Claude Code summarises i
 
 **Setting the windows.** A window belongs to a model, and it applies to the lead and to every crew agent running on that model. Set them in a settings file, which the CLI and the desktop app both read (Claude Code v2.1.288 or later). These are the recommended starting points, to adjust from what the Compactions tab shows:
 
-| Model | Crew roles | Window |
-| --- | --- | --- |
-| Haiku | Scout, worker, scripted QA | 100K |
-| Sonnet | Builder, debugger, QA | 200K |
-| Opus | Lead, planner, reviewer, hard debugging | 300K |
-| Fable | Advisor | 400K |
+| Model | Crew roles | Window | Compacts at about |
+| --- | --- | --- | --- |
+| Haiku | Scout, worker, scripted QA | 100K | 67K |
+| Sonnet | Builder, debugger, QA | 200K | 167K |
+| Opus | Lead, planner, reviewer, hard debugging | 300K | 267K |
+| Fable | Advisor | 400K | 367K |
 
 ```json
 {
@@ -250,7 +250,7 @@ When a context reaches its model's *compaction window*, Claude Code summarises i
 | `.claude/settings.json` in the project | Everyone working on the project (committed) |
 | `.claude/settings.local.json` in the project | You, in this project only; it wins over the other two |
 
-Values are in tokens, from 100,000 to 1,000,000, and never above the model's own context size. Restart Claude Code after editing a settings file.
+Values are in tokens, from 100,000 to 1,000,000, and never above the model's own context size. Remember the 33K margin: to compact at about 250K, set 283,000. Restart Claude Code after editing a settings file.
 
 Other ways to set them:
 

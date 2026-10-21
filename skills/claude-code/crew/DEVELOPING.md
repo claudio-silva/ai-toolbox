@@ -22,7 +22,34 @@ npm run dev                   # the page with hot reload, against a running dash
 npm run build                 # typecheck, then write scaffold/dashboard/app/
 ```
 
-Commit the built `scaffold/dashboard/app/` with the source change: it is what projects install. `tests/` and `dashboard/` are not installed (`aitools.json`).
+Commit the built `scaffold/dashboard/app/` with the source change: it is what projects install. `tests/`, `dashboard/`, `bin/` and the docs for developers are not installed (`aitools.json`).
+
+To see the dashboard's update notice without a release, run `.crew/bin/crew dashboard updates --simulate` in a project (the latest release counts as new; `--reset` ends it). `CREW_RELEASES_URL` points the check at another copy of `RELEASES.md`, e.g. a local server.
+
+## Releasing
+
+A release is one or more commits, described for users in `RELEASES.md` and tagged. The dashboards of projects on an older version show the notice within a day of the push.
+
+1. Commit the work (the tree must be clean here), with the built page if the dashboard changed, and run the tests.
+2. Run `bin/release patch` (or `minor`, `major`, or an exact version). While Crew is alpha, use `minor` when a release changes commands, files in `.crew/` or what setup does, and `patch` otherwise.
+3. The script collects the commits since the previous release and asks Haiku (`claude -p`, from an empty directory so no project settings load) for notes rewritten for users: a few themes, what users can now do and why it matters, and an **After updating** line only when users must do more than run `/crew setup`. Accept, edit (`$EDITOR`), regenerate, or quit.
+4. On accept it adds the entry to the top of `RELEASES.md`, commits it (`crew: release X.Y.Z`), and creates the annotated tag `crew-vX.Y.Z` with the notes. It never pushes: it prints `git push && git push origin crew-vX.Y.Z`.
+
+`bin/release minor --dry-run` shows the commits and a draft without writing anything; `--no-ai` starts from an empty draft with the commits listed as comments. The previous release is its tag, or else the commit that added its heading to `RELEASES.md` (`git log -S`), so a missing tag or a move to another repository doesn't break the range.
+
+Keep each `RELEASES.md` heading as `## X.Y.Z — YYYY-MM-DD`: the dashboard parses it (`parseReleases` in `model.mjs`), and the top entry is the version a project runs.
+
+## Moving Crew to its own repository
+
+Crew is written to stand alone: its README, license, release notes, tests and release script live in this directory, and its links to the toolbox are absolute. To move it:
+
+1. Split the history: `git subtree split --prefix=skills/claude-code/crew -b crew-split` in ai-toolbox, then push that branch as `main` of the new repository. Tags don't follow; recreate the latest as `vX.Y.Z` on its release commit there (`bin/release` uses `v` once Crew is the repository's root).
+2. In the new repository, update:
+   - `PUBLISHED` in `scaffold/dashboard/server.mjs`: the raw `RELEASES.md` URL and the notes page (the update commands name only the skill, so they stay);
+   - the install commands in `README.md` (`aitools install @gh/<owner>/<repo> crew`, `npx skills add <owner>/<repo>`), and its issue links;
+   - the repository README link in the callout, if the toolbox no longer applies.
+   Then cut a release from the new repository.
+3. In ai-toolbox, keep `skills/claude-code/crew/RELEASES.md` for a while, with one more release whose notes say where Crew moved and how to install it from there: the dashboards of installed copies still read that URL. Replace the rest of the directory with a README pointing to the new repository, and update the toolbox README and CONTRIBUTING.
 
 ## What's inside
 
@@ -66,9 +93,9 @@ docs/CREW.md                 committed (project facts and deviations from the de
 .crew/plans/<slug>.md        committed
 .crew/tasks/<slug>/          committed (index.md and NN-<slug>.md specs)
 .crew/journal.md             gitignored (history, for the founder)
-.crew/dashboard/             gitignored (the dashboard server and page, installed by /crew setup)
+.crew/dashboard/             gitignored (the dashboard server, page and RELEASES.md, installed by /crew setup)
 .crew/task-data/<id>/        gitignored (screenshots/, reports/, logs/ per task)
-.crew/tmp/                   gitignored (lock, hook state, the dashboard's port, key and log)
+.crew/tmp/                   gitignored (lock, hook state, the dashboard's port, key, log and update check)
 .claude/worktrees/           gitignored
 ```
 
@@ -94,6 +121,7 @@ docs/CREW.md                 committed (project facts and deviations from the de
 | `scaffold/defects.md` | The empty defect log |
 | `scaffold/bin/crew` | The crew script: journal, hook handlers, the state the dashboard reads, session registration, request queue, defect log, keep awake, starting the dashboard, worktree setup and teardown |
 | `scaffold/dashboard/` | Copied to `<project>/.crew/dashboard/`: the dashboard server (`server.mjs`), the model that turns crew files into its state (`model.mjs`), and the built page (`app/`) |
+| `RELEASES.md` | What changed in each release, newest first; copied beside the dashboard by setup, and read from GitHub by every dashboard's daily update check |
 | `scaffold/templates/task.md` | Task spec template |
 | `scaffold/templates/index.md` | Task-set index template |
 | `scaffold/worktree/setup.sh` | The project's worktree setup (setup fills the marked section) |
@@ -105,5 +133,6 @@ docs/CREW.md                 committed (project facts and deviations from the de
 | `tests/skill-size.sh` | Checks that `SKILL.md`'s body fits 5,000 tokens; not installed |
 | `tests/hooks.sh` | Fixture tests for the crew script and the dashboard model (hooks, compactions, requests, defects, timing, reminders); not installed |
 | `tests/dashboard.test.mjs` | Tests for the dashboard parsers and the live server; not installed |
-| `aitools.json` | Install metadata: Claude Code only; leaves `tests/`, `dashboard/` and this file out |
+| `bin/release` | Cuts a release: notes drafted by Haiku from the commits, `RELEASES.md`, a commit and a tag; not installed |
+| `aitools.json` | Install metadata: Claude Code only; leaves out `tests/`, `dashboard/`, `bin/`, `README.md`, this file and `.gitignore` (`npx skills` ignores it and installs everything; the extra files are inert) |
 | `LICENSE` | The Apache License 2.0; installed with the skill |

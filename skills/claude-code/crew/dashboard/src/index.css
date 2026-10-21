@@ -162,6 +162,10 @@
 .prose-crew p { @apply my-2; }
 .prose-crew ul { @apply my-2 list-disc pl-5; }
 .prose-crew ol { @apply my-2 list-decimal pl-5; }
+/* Release notes in the update panel. */
+.prose-crew.prose-tight { @apply text-[12.5px] leading-normal; }
+.prose-tight p, .prose-tight ul, .prose-tight ol { @apply my-1; }
+.prose-tight li + li { @apply mt-1; }
 .prose-crew li { @apply my-0.5; }
 .prose-crew a { @apply text-primary underline underline-offset-2; }
 .prose-crew code { @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]; }

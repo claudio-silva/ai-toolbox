@@ -1143,3 +1143,40 @@ export function buildState(rootIn, opts = {}) {
 export function allowedDirs(state) {
   return [path.join(state.repo.root, '.crew'), ...state.worktrees.map((w) => path.join(w.path, '.crew'))];
 }
+
+// ---------------------------------------------------------------------------
+// Releases (RELEASES.md): for the update check in server.mjs
+// ---------------------------------------------------------------------------
+
+const RELEASE_RE = /^## +v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?) +(?:—|–|-) +(\d{4}-\d{2}-\d{2}) *$/;
+
+// "## 0.2.0 — 2026-10-21" headings, newest first, each followed by its description. Anything
+// before the first heading is the file's own introduction.
+export function parseReleases(text) {
+  const out = [];
+  let cur = null;
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = RELEASE_RE.exec(line);
+    if (m) { cur = { version: m[1], date: m[2], body: [] }; out.push(cur); continue; }
+    if (cur) {
+      if (/^# /.test(line)) { cur = null; continue; }
+      cur.body.push(line);
+    }
+  }
+  for (const r of out) r.body = r.body.join('\n').trim();
+  return out;
+}
+
+// Semantic versions: -1, 0 or 1. A pre-release sorts before its release (0.3.0-beta.1 < 0.3.0).
+export function compareVersions(a, b) {
+  const split = (v) => {
+    const [core, pre = ''] = String(v || '0.0.0').replace(/^v/, '').split('-', 2);
+    return { nums: core.split('.').map((n) => Number(n) || 0), pre };
+  };
+  const x = split(a), y = split(b);
+  for (let i = 0; i < 3; i++) if (x.nums[i] !== y.nums[i]) return x.nums[i] < y.nums[i] ? -1 : 1;
+  if (x.pre === y.pre) return 0;
+  if (!x.pre) return 1;
+  if (!y.pre) return -1;
+  return x.pre.localeCompare(y.pre, 'en', { numeric: true }) < 0 ? -1 : 1;
+}

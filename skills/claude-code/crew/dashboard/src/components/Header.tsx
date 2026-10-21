@@ -10,6 +10,7 @@ import { useClockBase } from '@/lib/clock'
 import { capital } from '@/lib/format'
 import { Duration } from './Duration'
 import { ShareButton } from './Share'
+import { UpdateNotice, VersionButton } from './Update'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -294,7 +295,7 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
           <div className="flex min-w-0 flex-col leading-tight">
             <div className="flex items-baseline gap-1.5">
               <span className="truncate text-[15px] font-semibold tracking-tight">{state ? capital(state.repo.name) : 'Crew'}</span>
-              <span className="hidden text-[11px] font-medium text-muted-foreground sm:inline">crew</span>
+              <VersionButton u={state?.update} />
             </div>
             {state && (
               <span className="flex items-center gap-1 truncate text-[11px] text-muted-foreground">
@@ -306,6 +307,7 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
           </div>
           <div className="flex min-w-[7.5rem] flex-1 justify-center">{state && <LeadStatus state={state} />}</div>
           <div className="flex shrink-0 items-center">
+            <UpdateNotice u={state?.update} />
             <ConnDot conn={conn} changedAt={changedAt} />
             <ShareButton />
             <ThemeToggle theme={theme} setTheme={setTheme} />

@@ -24,7 +24,7 @@ List every project change setup is about to make (files created, files merged, s
 
 ## 2. Scaffold `.crew/`
 
-1. Copy `<skill>/scaffold/` to `<project>/.crew/`: create missing files; for existing files, diff and merge. `.crew/bin/crew` and `.crew/templates/*` are crew-owned: take the skill's version and show the diff. `.crew/dashboard/` is crew-owned and gitignored: replace it whole, without a diff (`rm -rf .crew/dashboard && cp -R <skill>/scaffold/dashboard .crew/dashboard`); a running dashboard restarts itself on the new version.
+1. Copy `<skill>/scaffold/` to `<project>/.crew/`: create missing files; for existing files, diff and merge. `.crew/bin/crew` and `.crew/templates/*` are crew-owned: take the skill's version and show the diff. `.crew/dashboard/` is crew-owned and gitignored: replace it whole, without a diff, with the skill's release notes beside it (`rm -rf .crew/dashboard && cp -R <skill>/scaffold/dashboard .crew/dashboard && cp <skill>/RELEASES.md .crew/dashboard/`); a running dashboard restarts itself on the new version and tells the founder when a newer Crew is out.
 2. `chmod +x .crew/bin/crew .crew/worktree/*.sh`.
 3. `mkdir -p .crew/tmp .crew/task-data`. Delete `.crew/status.md` if it exists: the Markdown dashboard of earlier versions, replaced by `.crew/dashboard/`.
 4. **Fill `.crew/worktree/setup.sh`** when creating it. Fill only the section between `# --- project setup (edit freely) ---` and `# --- end ---`, from the repo:

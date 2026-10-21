@@ -19,6 +19,16 @@
 //                                            Print the model as JSON (tests, debugging).
 //   node server.mjs serve [--root <dir>] [--port <n>]
 //                                            Run in the foreground (what `start` launches).
+//   node server.mjs updates [--root <dir>] [--check] [--simulate | --reset]
+//                                            Print this copy's version and the latest release.
+//                                            --check asks now; --simulate makes the latest release
+//                                            count as new (to see the notice), --reset stops that.
+//                                            A running server shows the result at once.
+//
+// Updates: once a day (and when the page's "Check now" asks), the server reads the published
+// RELEASES.md (PUBLISHED below) and compares it with the RELEASES.md installed beside it. A newer
+// release puts a notice in the page's header, with what's new and how to update. The result is
+// kept in .crew/tmp/update.json. CREW_UPDATE_CHECK=0 turns the check off.
 //
 // How the page stays current, without polling:
 //   - fs.watch on .crew/ (recursive), on the git HEAD and branch refs, and on each linked
@@ -52,14 +62,14 @@ if (major < 20) {
   process.exit(1);
 }
 
-const { buildState, allowedDirs } = await import('./model.mjs');
+const { buildState, allowedDirs, parseReleases, compareVersions } = await import('./model.mjs');
 
 // ---------------------------------------------------------------------------
 // Arguments, paths
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const o = { cmd: 'start', root: '', port: 0, now: undefined, pretty: false, replace: false };
+  const o = { cmd: 'start', root: '', port: 0, now: undefined, pretty: false, replace: false, check: false, simulate: false, reset: false };
   const rest = [...argv];
   if (rest[0] && !rest[0].startsWith('-')) o.cmd = rest.shift();
   while (rest.length) {
@@ -69,6 +79,9 @@ function parseArgs(argv) {
     else if (a === '--now') o.now = Number(rest.shift()) || undefined;
     else if (a === '--pretty') o.pretty = true;
     else if (a === '--replace') o.replace = true;
+    else if (a === '--check') o.check = true;
+    else if (a === '--simulate') o.simulate = true;
+    else if (a === '--reset') o.reset = true;
     else { process.stderr.write(`crew dashboard: unknown argument ${a}\n`); process.exit(2); }
   }
   return o;
@@ -188,6 +201,80 @@ async function running() {
 }
 
 // ---------------------------------------------------------------------------
+// Updates: is a newer Crew released?
+// ---------------------------------------------------------------------------
+
+// Where Crew is published. Change these when the repository moves (DEVELOPING.md, "Moving Crew to
+// its own repository").
+const PUBLISHED = {
+  releases: 'https://raw.githubusercontent.com/claudio-silva/ai-toolbox/main/skills/claude-code/crew/RELEASES.md',
+  notes: 'https://github.com/claudio-silva/ai-toolbox/blob/main/skills/claude-code/crew/RELEASES.md',
+  update: [
+    { via: 'aitools', command: 'aitools update crew' },
+    { via: 'npx skills', command: 'npx skills update crew' },
+  ],
+};
+const RELEASES_URL = process.env.CREW_RELEASES_URL || PUBLISHED.releases;
+const UPDATE_CHECK = process.env.CREW_UPDATE_CHECK !== '0';
+const UPDATE_FILE = path.join(TMP, 'update.json');
+const SIMULATE_FILE = path.join(TMP, 'update-simulate');
+const HOUR = 3600 * 1000;
+const DAY = 24 * HOUR;
+
+// This copy's releases: the RELEASES.md that /crew setup installs beside this file, or the skill's
+// own when the server runs from the skill (scaffold/dashboard/).
+function localReleases() {
+  for (const f of [path.join(HERE, 'RELEASES.md'), path.join(HERE, '..', '..', 'RELEASES.md')]) {
+    try { return parseReleases(fs.readFileSync(f, 'utf8')); } catch { /* next */ }
+  }
+  return [];
+}
+
+function readUpdateFile() {
+  try { return JSON.parse(fs.readFileSync(UPDATE_FILE, 'utf8')); } catch { return {}; }
+}
+
+// Ask the published RELEASES.md. A failure keeps the releases found last time.
+async function checkUpdates() {
+  const prev = readUpdateFile();
+  const out = { checkedAt: Date.now(), releases: prev.releases || [], error: null };
+  try {
+    const r = await fetch(RELEASES_URL, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'crew-dashboard' } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const list = parseReleases(await r.text());
+    if (!list.length) throw new Error('no releases in the published RELEASES.md');
+    out.releases = list.slice(0, 40);
+  } catch (e) {
+    out.error = String(e?.message || e);
+  }
+  fs.mkdirSync(TMP, { recursive: true });
+  const tmp = `${UPDATE_FILE}.${process.pid}.new`;
+  fs.writeFileSync(tmp, JSON.stringify(out, null, 2) + '\n');
+  fs.renameSync(tmp, UPDATE_FILE);
+  return out;
+}
+
+const checkDue = (u) => !u.checkedAt || Date.now() - u.checkedAt > (u.error ? HOUR : DAY);
+
+// What the page shows. Simulating: this copy counts as the release before the latest one known,
+// so the latest shows as new (from the published list, or this copy's own when there is none).
+function updateView(checking = false) {
+  const local = localReleases();
+  const current = local[0]?.version || null;
+  const u = readUpdateFile();
+  const remote = Array.isArray(u.releases) ? u.releases : [];
+  const simulated = fs.existsSync(SIMULATE_FILE);
+  const known = simulated && !remote.length ? local : remote;
+  const base = simulated ? (known[1]?.version || '0.0.0') : current;
+  const releases = base ? known.filter((r) => compareVersions(r.version, base) > 0) : [];
+  return {
+    enabled: UPDATE_CHECK, current, latest: known[0]?.version || null, available: releases.length > 0, simulated, checking,
+    releases, checkedAt: u.checkedAt ? Math.floor(u.checkedAt / 1000) : null, error: u.error || null,
+    notes: PUBLISHED.notes, how: PUBLISHED.update,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
@@ -222,6 +309,21 @@ async function cmdUrl() {
   const cur = await running();
   if (!cur) { process.stdout.write('Dashboard: not running\n'); return 1; }
   process.stdout.write(`${shareUrl(cur)}\n`);
+  return 0;
+}
+
+async function cmdUpdates() {
+  fs.mkdirSync(TMP, { recursive: true });
+  if (opts.reset) fs.rmSync(SIMULATE_FILE, { force: true });
+  if (opts.simulate) fs.writeFileSync(SIMULATE_FILE, 'The latest release counts as new: `.crew/bin/crew dashboard updates --reset` ends it.\n');
+  if (opts.check) await checkUpdates();
+  const v = updateView();
+  const at = v.checkedAt ? new Date(v.checkedAt * 1000).toLocaleString() : 'never';
+  process.stdout.write(`This copy: ${v.current || 'unknown (no RELEASES.md beside the dashboard)'}\n`);
+  process.stdout.write(`Latest: ${v.latest || 'unknown'} (checked ${at}${v.error ? `; failed: ${v.error}` : ''})\n`);
+  if (v.available) process.stdout.write(`Update available: ${v.releases.map((r) => r.version).join(', ')}${v.simulated ? ' (simulated)' : ''}\n`);
+  else process.stdout.write(`Up to date${v.simulated ? ' (simulating, but no release is known)' : ''}\n`);
+  if (!UPDATE_CHECK) process.stdout.write('The daily check is off (CREW_UPDATE_CHECK=0).\n');
   return 0;
 }
 
@@ -310,10 +412,12 @@ async function cmdServe() {
     for (const res of clients) res.write(msg);
   };
 
+  let checking = null;
   const recompute = () => {
     let s;
     try {
       s = buildState(ROOT);
+      s.update = updateView(Boolean(checking));
     } catch (e) {
       log('model failed:', e?.stack || String(e));
       broadcast('problem', JSON.stringify({ message: String(e?.message || e) }));
@@ -397,6 +501,7 @@ async function cmdServe() {
     const f = rel.split(path.sep).join('/');
     if (f === 'app' || f.startsWith('app/')) appChanged();
     else if (f === 'server.mjs' || f === 'model.mjs') sourceChanged();
+    else if (f === 'RELEASES.md') schedule();
   };
   const onCrew = (_ev, file) => {
     const f = file ? String(file).split(path.sep).join('/') : '';
@@ -429,6 +534,16 @@ async function cmdServe() {
     for (const [key, w] of watchers) if (key.startsWith('wt:') && !want.has(key)) { w.close(); watchers.delete(key); }
     if (gitDir && !watchers.has('worktrees')) watch('worktrees', path.join(gitDir, 'worktrees'), false, schedule);
   };
+
+  // ---- updates: once a day, or when the page asks ----
+  const runCheck = (force) => {
+    if (checking) return checking;
+    if (!force && (!UPDATE_CHECK || !checkDue(readUpdateFile()))) return Promise.resolve();
+    checking = checkUpdates().catch((e) => log('update check failed:', String(e?.message || e))).finally(() => { checking = null; recompute(); });
+    recompute();
+    return checking;
+  };
+  const updateTimer = setInterval(() => runCheck(false), HOUR);
 
   // ---- HTTP ----
   const send = (res, code, type, body, extra = {}) => {
@@ -463,6 +578,12 @@ async function cmdServe() {
         send(res, 403, 'text/html; charset=utf-8', NO_KEY);
         return;
       }
+    }
+    if (u.pathname === '/api/update/check' && req.method === 'POST') {
+      // The page's "Check now". The custom header keeps other sites' pages from sending it.
+      if (req.headers['x-crew'] !== '1') { send(res, 403, 'text/plain', 'Forbidden'); return; }
+      runCheck(true).then(() => send(res, 200, 'application/json', JSON.stringify(updateView(false))));
+      return;
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') { send(res, 405, 'text/plain', 'Method not allowed'); return; }
     if (u.pathname === '/api/ping') {
@@ -530,6 +651,7 @@ async function cmdServe() {
     if (closing) return;
     closing = true;
     clearInterval(heartbeat);
+    clearInterval(updateTimer);
     clearTimeout(tick);
     for (const w of watchers.values()) w.close();
     for (const res of clients) res.end();
@@ -583,6 +705,7 @@ async function cmdServe() {
   fs.writeFileSync(INFO, JSON.stringify(info, null, 2) + '\n');
   log(`serving ${ROOT} at ${info.url}${LAN ? ` and on the network at ${shareUrl(info).replace(/key=.*/, 'key=…')}` : ''} (pid ${process.pid})`);
   recompute();
+  setTimeout(() => runCheck(false), 3000).unref();
 }
 
 // ---------------------------------------------------------------------------
@@ -594,9 +717,10 @@ switch (opts.cmd) {
   case 'restart': await cmdStop(); rc = await cmdStart(); break;
   case 'url': rc = await cmdUrl(); break;
   case 'state': rc = cmdState(); break;
+  case 'updates': rc = await cmdUpdates(); break;
   case 'serve': await cmdServe(); rc = -1; break;
   default:
-    process.stderr.write('usage: server.mjs start|stop|restart|url|state|serve [--root <dir>] [--port <n>] [--now <epoch>] [--pretty]\n');
+    process.stderr.write('usage: server.mjs start|stop|restart|url|state|serve|updates [--root <dir>] [--port <n>] [--now <epoch>] [--pretty] [--check] [--simulate] [--reset]\n');
     rc = 2;
 }
 if (rc >= 0) process.exit(rc);

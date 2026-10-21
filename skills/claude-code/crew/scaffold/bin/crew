@@ -40,6 +40,10 @@
 #                                       CREW_DASHBOARD=0 keeps session start, status and the
 #                                       SessionStart hook from starting it; CREW_DASHBOARD_LAN=0
 #                                       keeps it on 127.0.0.1.
+#   crew dashboard updates [--check] [--simulate | --reset]
+#                                       This copy's version and the latest release. --check asks
+#                                       now; --simulate makes the latest release count as new, so
+#                                       the page shows its update notice (testing); --reset ends it.
 #   crew worktree setup [<path>] [--dry-run]
 #                                       Prepare a worktree: .worktreeinclude copies,
 #                                       .crew/tmp/, .crew/task-data/, worktree.json,
@@ -1696,12 +1700,18 @@ dashboard_autostart() {
 
 cmd_dashboard() {
   local sub=${1:-start}
+  [ $# -gt 0 ] && shift
   case $sub in
-    start|stop|restart|url) ;;
-    *) printf 'usage: crew dashboard [start|stop|restart|url]\n' >&2; return 1 ;;
+    start|stop|restart|url) [ $# -eq 0 ] || { printf 'usage: crew dashboard %s\n' "$sub" >&2; return 1; } ;;
+    updates)
+      local a
+      for a in "$@"; do
+        case $a in --check|--simulate|--reset) ;; *) printf 'usage: crew dashboard updates [--check] [--simulate | --reset]\n' >&2; return 1 ;; esac
+      done ;;
+    *) printf 'usage: crew dashboard [start|stop|restart|url|updates]\n' >&2; return 1 ;;
   esac
   dashboard_node || return 1
-  node "$DASHBOARD_SERVER" "$sub" --root "$ROOT"
+  node "$DASHBOARD_SERVER" "$sub" --root "$ROOT" "$@"
 }
 
 # ---------------------------------------------------------------------------

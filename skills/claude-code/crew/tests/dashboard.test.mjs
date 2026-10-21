@@ -147,6 +147,35 @@ test('imageSize and projectIcon: square images only, the most icon-like first, d
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('parseReleases and compareVersions: the release log, newest first', () => {
+  const text = `# Crew releases
+
+Intro.
+
+## 0.2.0 — 2026-11-02
+
+- **Two.** Second.
+
+**After updating:** restart.
+
+## v0.1.0 - 2026-10-21
+
+- One.
+## not a release
+# The end
+ignored
+`;
+  const r = M.parseReleases(text);
+  assert.deepEqual(r.map((x) => `${x.version} ${x.date}`), ['0.2.0 2026-11-02', '0.1.0 2026-10-21']);
+  assert.match(r[0].body, /^- \*\*Two\.\*\* Second\.\n\n\*\*After updating:\*\* restart\.$/);
+  assert.equal(r[1].body.includes('ignored'), false);
+  assert.deepEqual(M.parseReleases('no releases here'), []);
+  assert.equal(M.compareVersions('0.10.0', '0.9.9'), 1);
+  assert.equal(M.compareVersions('1.0.0', '1.0.0'), 0);
+  assert.equal(M.compareVersions('1.0.0-beta.1', '1.0.0'), -1);
+  assert.equal(M.compareVersions('0.1.0', '0.1.1'), -1);
+});
+
 // ---- the server ----
 
 function get(url, headers = {}) {
@@ -209,7 +238,9 @@ test('server: pushes the new state when a crew file changes; guards Host, key an
   fs.writeFileSync(path.join(root, 'secret.txt'), 'not for the page');
   execFileSync('git', ['init', '-q', root]);
   const port = 48000 + Math.floor(Math.random() * 900);
-  const srv = spawn(process.execPath, [path.join(DASH, 'server.mjs'), 'serve', '--root', root, '--port', String(port)], { stdio: 'ignore' });
+  const srv = spawn(process.execPath, [path.join(DASH, 'server.mjs'), 'serve', '--root', root, '--port', String(port)], {
+    stdio: 'ignore', env: { ...process.env, CREW_UPDATE_CHECK: '0' },
+  });
   t.after(() => { srv.kill(); fs.rmSync(root, { recursive: true, force: true }); });
 
   const info = path.join(crew, 'tmp', 'dashboard.json');
@@ -272,4 +303,69 @@ test('server: pushes the new state when a crew file changes; guards Host, key an
   assert.equal(outside.status, 403);
   const dotdot = await get(`${url}files?p=${encodeURIComponent(`${crew}/../secret.txt`)}`);
   assert.notEqual(dotdot.status, 200);
+});
+
+test('updates: the daily check, "Check now", and the simulation', async (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'crew-upd-')));
+  const crew = path.join(root, '.crew');
+  const dash = path.join(crew, 'dashboard');
+  fs.mkdirSync(crew, { recursive: true });
+  fs.cpSync(DASH, dash, { recursive: true });
+  fs.writeFileSync(path.join(dash, 'RELEASES.md'), '# Crew releases\n\n## 0.1.0 — 2026-10-21\n\n- One.\n');
+  execFileSync('git', ['init', '-q', root]);
+  // The published RELEASES.md, served from here.
+  const published = '# Crew releases\n\n## 0.3.0 — 2026-11-20\n\n- Three.\n\n## 0.2.0 — 2026-11-02\n\n- Two.\n\n## 0.1.0 — 2026-10-21\n\n- One.\n';
+  const pub = http.createServer((req, res) => {
+    if (req.url === '/RELEASES.md') { res.writeHead(200); res.end(published); } else { res.writeHead(404); res.end(); }
+  });
+  await new Promise((r) => pub.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${pub.address().port}`;
+  const env = { ...process.env, CREW_RELEASES_URL: `${base}/RELEASES.md` };
+  const server = path.join(dash, 'server.mjs');
+  // Asynchronous: this process serves the published file meanwhile.
+  const cli = (args, e = env) => new Promise((resolve) => {
+    let out = '';
+    const c = spawn(process.execPath, [server, 'updates', '--root', root, ...args], { env: e });
+    c.stdout.setEncoding('utf8').on('data', (d) => { out += d; });
+    c.on('close', () => resolve(out));
+  });
+  let srv;
+  t.after(() => { srv?.kill(); pub.close(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  // Before any check, the simulation counts this copy's own latest release as new.
+  assert.match(await cli([]), /This copy: 0\.1\.0\nLatest: unknown \(checked never\)\nUp to date/);
+  assert.match(await cli(['--simulate']), /Update available: 0\.1\.0 \(simulated\)/);
+  assert.match(await cli(['--reset']), /Up to date\n/);
+  assert.match(await cli(['--check']), /Latest: 0\.3\.0 .*\nUpdate available: 0\.3\.0, 0\.2\.0\n/);
+  // A failed check says so and keeps what the last one found.
+  const failed = await cli(['--check'], { ...env, CREW_RELEASES_URL: `${base}/missing.md` });
+  assert.match(failed, /failed: HTTP 404\)\nUpdate available: 0\.3\.0, 0\.2\.0/);
+
+  const port = 48000 + Math.floor(Math.random() * 900);
+  srv = spawn(process.execPath, [server, 'serve', '--root', root, '--port', String(port)], { stdio: 'ignore', env });
+  const info = path.join(crew, 'tmp', 'dashboard.json');
+  for (let i = 0; i < 60 && !fs.existsSync(info); i++) await new Promise((r) => setTimeout(r, 100));
+  const { url } = JSON.parse(fs.readFileSync(info, 'utf8'));
+  const state = JSON.parse((await get(`${url}api/state`)).body);
+  assert.deepEqual([state.update.current, state.update.available, state.update.error], ['0.1.0', true, 'HTTP 404']);
+  assert.deepEqual(state.update.how.map((h) => h.via), ['aitools', 'npx skills']);
+
+  const post = (headers) => new Promise((resolve, reject) => {
+    const req = http.request(`${url}api/update/check`, { method: 'POST', headers }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (d) => { body += d; });
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  // Only the page can ask: another site's page can't send a custom header without a preflight.
+  assert.equal((await post({})).status, 403);
+  const checked = await post({ 'X-Crew': '1' });
+  assert.equal(checked.status, 200);
+  const v = JSON.parse(checked.body);
+  assert.deepEqual([v.error, v.latest, v.releases.map((r) => r.version)], [null, '0.3.0', ['0.3.0', '0.2.0']]);
+  assert.equal(v.releases[0].body, '- Three.');
+  assert.equal((await post({ 'X-Crew': '1', Host: 'evil.example' })).status, 403);
 });

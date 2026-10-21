@@ -190,6 +190,22 @@ export interface JournalEntry {
   status?: string
 }
 
+// A newer Crew, from the server's daily check of the published RELEASES.md.
+export interface Release { version: string; date: string; body: string }
+export interface UpdateInfo {
+  enabled: boolean
+  current: string | null
+  latest: string | null
+  available: boolean
+  simulated: boolean
+  checking: boolean
+  releases: Release[]
+  checkedAt: number | null
+  error: string | null
+  notes: string
+  how: { via: string; command: string }[]
+}
+
 export interface State {
   version: number
   generatedAt: number
@@ -226,4 +242,5 @@ export interface State {
   handoff: { written: string; where: string; next: string; path: string } | null
   worktrees: { path: string; branch: string }[]
   live: boolean
+  update?: UpdateInfo
 }

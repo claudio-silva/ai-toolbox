@@ -2,7 +2,7 @@
 
 **A software team inside Claude Code.** Crew makes your Claude Code session the lead of a small crew of specialist agents. You bring the idea. The lead plans it with you, then the crew builds it one task at a time: each task is built, reviewed independently, tested and committed. It keeps going for hours while you're away, and a live dashboard on your desktop or your phone shows what it's doing.
 
-[Why Crew](#why-crew) · [Getting started](#getting-started) · [Learn more](#learn-more) · [Commands](#commands) · [How it works](#how-it-works) · [The dashboard](#the-dashboard) · [Memory and context](#memory-and-context) · [Configuration](#configuration) · [Status: alpha](#status-alpha)
+[Why Crew](#why-crew) · [Getting started](#getting-started) · [Learn more](#learn-more) · [Commands](#commands) · [How it works](#how-it-works) · [The dashboard](#the-dashboard) · [Memory and context](#memory-and-context) · [Configuration](#configuration) · [Updating](#updating) · [Status: alpha](#status-alpha)
 
 ## Why Crew
 
@@ -25,7 +25,7 @@
 >
 > Making Crew work with another provider wouldn't be a matter of settings. It would mean redoing that tuning for other models, other prices and other agent tools.
 >
-> See the [repository README](../../../README.md) for other skills in this collection that target other providers (e.g. Codex).
+> See the [repository README](https://github.com/claudio-silva/ai-toolbox#readme) for other skills in this collection that target other providers (e.g. Codex).
 
 
 ## Getting started
@@ -53,7 +53,7 @@ npx skills add claudio-silva/ai-toolbox --skill crew -a claude-code
 /crew setup
 ```
 
-Setup lists every change it's about to make, then adds the crew's agents, hooks and files to the project ([what it adds](#what-setup-adds-to-your-project)). It asks only what it can't learn from the repository. Then **restart Claude Code** so the hooks and agents load. Run setup again after each skill update.
+Setup lists every change it's about to make, then adds the crew's agents, hooks and files to the project ([what it adds](#what-setup-adds-to-your-project)). It asks only what it can't learn from the repository. Then **restart Claude Code** so the hooks and agents load. Run setup again after each skill update ([Updating](#updating)).
 
 **4. Pick the lead's model.** Run the main session on **Opus 5.5 at High effort** (`/model`). The lead's work is judgement: plans, routing, reviews, decisions. It hands the bulk work to cheaper models.
 
@@ -187,7 +187,7 @@ The lead never runs out of room. When its context fills up, Claude Code compacts
 
 ## The dashboard
 
-A live page for following the crew, in a browser tab, a Paseo side panel or on your phone. It updates the moment something changes, with no reload, and running clocks tick in real time. It has light and dark theme support, and its header shows your project's name and icon, when it has one; click it to switch to Crew's own icon.
+A live page for following the crew, in a browser tab, a Paseo side panel or on your phone. It updates the moment something changes, with no reload, and running clocks tick in real time. It has light and dark theme support, and its header shows your project's name and icon, when it has one; click it to switch to Crew's own icon. When a newer Crew is out, an **Update** button appears in the header, with what's new and how to update.
 
 | Tab | What it shows |
 | --- | --- |
@@ -278,6 +278,7 @@ Other ways to set them:
   - `CREW_DASHBOARD=0`: don't start the dashboard.
   - `CREW_DASHBOARD_LAN=0`: keep the dashboard on this computer only.
   - `CREW_KEEP_AWAKE=0`: let the computer sleep.
+  - `CREW_UPDATE_CHECK=0`: don't check for a newer Crew.
 
 ### What setup adds to your project
 
@@ -290,6 +291,23 @@ Other ways to set them:
 | | Plans, sets of tasks, the request queue, the defect log, the handoff note, the crew script and its templates | `.crew/` |
 | **Not committed** | The journal, the dashboard, screenshots and logs per task, scratch state | `.crew/` (gitignored) |
 
+## Updating
+
+The dashboard checks once a day for a newer Crew (it reads the published [release notes](RELEASES.md), and sends nothing about you or your project). When there is one, an **Update** button appears in its header: it lists what changed since your version and how to update. The version beside the project's name opens the same panel, with a **Check now** button.
+
+To update:
+
+1. Update the skill, the way you installed it:
+
+   ```sh
+   aitools update crew
+   # or
+   npx skills update crew
+   ```
+
+2. Run `/crew setup` in each project that uses Crew. It merges the changes into the project, and a running dashboard restarts by itself on the new version.
+3. Restart Claude Code if setup says the hooks changed, and do what the release notes list under **After updating**, if anything.
+
 ## Status: alpha
 
 > [!WARNING]
@@ -297,7 +315,7 @@ Other ways to set them:
 
 An update can change the commands, the files in `.crew/` or the dashboard. To keep surprises small:
 
-- Run `/crew setup` after every update. It merges the changes into your project.
+- Run `/crew setup` after every update ([Updating](#updating)). It merges the changes into your project.
 - Update between sets of tasks, not in the middle of one.
 - [Report what breaks](https://github.com/claudio-silva/ai-toolbox/issues). It's how Crew gets out of alpha.
 
@@ -306,7 +324,7 @@ An update can change the commands, the files in `.crew/` or the dashboard. To ke
 Bug reports, ideas and pull requests are welcome.
 
 - **Report a problem or suggest an idea** by [opening an issue](https://github.com/claudio-silva/ai-toolbox/issues). For a problem, include your Claude Code version, what you asked the lead, and, if you can share them, the relevant lines of `.crew/journal.md`.
-- **Change Crew itself:** [DEVELOPING.md](DEVELOPING.md) explains how to build the dashboard, run the tests, and edit the skill without breaking its rules. The repository's [CONTRIBUTING.md](../../../CONTRIBUTING.md) covers the conventions every tool here shares.
+- **Change Crew itself:** [DEVELOPING.md](DEVELOPING.md) explains how to build the dashboard, run the tests, edit the skill without breaking its rules, and cut a release. The repository's [CONTRIBUTING.md](https://github.com/claudio-silva/ai-toolbox/blob/main/CONTRIBUTING.md) covers the conventions every tool here shares.
 - Contributions are accepted under the Apache License 2.0, like the rest of Crew.
 
 ## Author

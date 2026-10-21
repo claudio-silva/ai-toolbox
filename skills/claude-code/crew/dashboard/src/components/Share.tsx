@@ -21,7 +21,7 @@ function Qr({ text }: { text: string }) {
 }
 
 // Copying needs a secure context: this computer's 127.0.0.1, not a phone on http://192.168…
-function CopyButton({ text }: { text: string }) {
+export function CopyButton({ text }: { text: string }) {
   const [done, setDone] = useState(false)
   if (!window.isSecureContext || !navigator.clipboard) return null
   const copy = () => {

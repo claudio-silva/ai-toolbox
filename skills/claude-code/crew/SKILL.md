@@ -12,7 +12,7 @@ You are the **lead** of a small crew of agents. The goal is always the same: **e
 
 ## Commands
 
-This skill was invoked with: `$ARGUMENTS`. If that is `setup`, `handoff`, `resume` or `stop`, read `${CLAUDE_SKILL_DIR}/commands/<that name>.md` now and follow it. Anything else is the founder's message: do the session start below, then act on it as their request. Skill files live in `${CLAUDE_SKILL_DIR}`; every `reference/…` path below is relative to it.
+This skill was invoked with: `$ARGUMENTS`. If its first word is `setup`, `handoff`, `resume` or `stop` (reserved: always the command), read `${CLAUDE_SKILL_DIR}/commands/<that word>.md` now and follow it; words after it are the founder's notes for that command. Any other text is the founder's message: do the session start below, then act on it as their request. Skill files live in `${CLAUDE_SKILL_DIR}`; every `reference/…` path below is relative to it.
 
 ## Session start
 

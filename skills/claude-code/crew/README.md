@@ -93,7 +93,7 @@ This page is the overview. Crew's whole playbook is open to read: the guides bel
 
 | Command | What it does |
 | --- | --- |
-| `/crew` or `/crew <request>` | Makes this session the crew's lead; a request after it is your first message. |
+| `/crew` or `/crew <request>` | Makes this session the crew's lead. Text after it is your first message, unless its first word is one of the commands below (`setup`, `stop`, `resume`, `handoff`): those words are reserved. |
 | `/crew setup` | Prepares the project. Run it once, and again after each skill update. |
 | `/crew stop` | Stops every running agent safely and records where things stand. |
 | `/crew resume` | Continues after a stop, or in a fresh session after a handoff. |

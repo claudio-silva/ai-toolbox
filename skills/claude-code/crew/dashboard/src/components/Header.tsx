@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '@/components/ui/dialog'
 import { leadBlocker, sendToLead, VIA_LABEL } from '@/lib/lead'
 import { notify } from './EventToasts'
 
@@ -103,40 +104,69 @@ const SESSION_ACTIONS = {
     body: "Updates this project to the installed Crew: hooks, agents, the crew script and this dashboard. It merges, never overwrites, and asks only what the repository can't answer. Run it after each Crew update.",
   },
 } as const
+type SessionAction = (typeof SESSION_ACTIONS)[keyof typeof SESSION_ACTIONS]
 
-function SessionButton({ a, why }: { a: (typeof SESSION_ACTIONS)[keyof typeof SESSION_ACTIONS]; why: string | null }) {
+// What an action does: the tooltip's text, and the confirmation's on a touch screen.
+function ActionText({ a, why }: { a: SessionAction; why: string | null }) {
+  return (
+    <>
+      <p className="font-medium">{a.title} <code className="font-mono font-normal opacity-70">{a.cmd}</code></p>
+      <p className="mt-1 leading-snug opacity-85">{a.body}</p>
+      <p className="mt-1.5 leading-snug opacity-60">{why ?? 'Sent to the lead as your message, like one typed in the Agents tab.'}</p>
+    </>
+  )
+}
+
+// With a mouse, a click sends the command and hovering explains it. A touch screen has no
+// hover, so a tap shows the same text first, with Confirm and Cancel.
+function SessionButton({ a, why }: { a: SessionAction; why: string | null }) {
   const [sending, setSending] = useState(false)
+  const [confirming, setConfirming] = useState(false)
   const off = Boolean(why) || sending
-  const run = () => {
-    if (off) return
+  const send = () => {
+    setConfirming(false)
     setSending(true)
     sendToLead(a.cmd)
       .then((r) => notify(`Sent ${a.cmd} to the lead ${VIA_LABEL[r.via]}.`))
       .catch((e: Error) => notify(`${a.cmd} not sent: ${e.message}`, true))
       .finally(() => setSending(false))
   }
+  const click = () => {
+    if (matchMedia('(hover: none)').matches) { if (!sending) setConfirming(true); return }
+    if (!off) send()
+  }
   const Icon = sending ? LoaderCircle : a.icon
   return (
-    <Tooltip delayDuration={1000}>
-      <TooltipTrigger asChild>
-        {/* aria-disabled, not disabled: a disabled button gets no hover, and the tooltip says why. */}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={run}
-          aria-disabled={off || undefined}
-          aria-label={`${a.title} (${a.cmd})`}
-          className={cn('h-7 gap-1.5 px-2.5 text-[12px] has-[>svg]:px-2.5', off && 'cursor-not-allowed opacity-50 hover:bg-background')}
-        >
-          <Icon className={cn('size-3.5', sending && 'animate-spin')} />{a.label}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" align="end" sideOffset={6} className="max-w-80 text-left text-pretty">
-        <p className="font-medium">{a.title} <code className="font-mono font-normal opacity-70">{a.cmd}</code></p>
-        <p className="mt-1 leading-snug opacity-85">{a.body}</p>
-        <p className="mt-1.5 leading-snug opacity-60">{why ?? 'Sent to the lead as your message, like one typed in the Agents tab.'}</p>
-      </TooltipContent>
-    </Tooltip>
+    <>
+      <Tooltip delayDuration={1000}>
+        <TooltipTrigger asChild>
+          {/* aria-disabled, not disabled: a disabled button gets no hover, and the tooltip says why. */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={click}
+            aria-disabled={off || undefined}
+            aria-label={`${a.title} (${a.cmd})`}
+            className={cn('h-7 gap-1.5 px-2.5 text-[12px] has-[>svg]:px-2.5', off && 'cursor-not-allowed opacity-50 hover:bg-background')}
+          >
+            <Icon className={cn('size-3.5', sending && 'animate-spin')} />{a.label}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="end" sideOffset={6} className="max-w-80 text-left text-pretty">
+          <ActionText a={a} why={why} />
+        </TooltipContent>
+      </Tooltip>
+      <Dialog open={confirming} onOpenChange={setConfirming}>
+        <DialogContent showCloseButton={false} className="max-w-sm gap-5 p-5">
+          <DialogTitle className="sr-only">{a.title}</DialogTitle>
+          <DialogDescription asChild><div className="text-[13px] text-foreground"><ActionText a={a} why={why} /></div></DialogDescription>
+          <DialogFooter className="flex-row justify-end gap-2">
+            <DialogClose asChild><Button variant="outline" size="sm">{why ? 'Close' : 'Cancel'}</Button></DialogClose>
+            {!why && <Button size="sm" onClick={send}><a.icon className="size-3.5" />{a.title}</Button>}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

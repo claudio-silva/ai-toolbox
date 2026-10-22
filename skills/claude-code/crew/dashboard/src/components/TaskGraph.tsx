@@ -271,12 +271,12 @@ export function TaskGraph({ tasks, agents, current, criticalPath, onPick, zoomed
 
 const MAX_ZOOM = 4
 
-// Fit to the window: | < > |, arrows out to the edges (lucide's look; its icons for this read as
-// full screen).
+// Fit to the window: |<  >|, wider than square, arrows out to the edges (lucide's look; its
+// icons for this read as full screen).
 function FitIcon() {
   return (
-    <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 5v14M21 5v14M9.5 8.5 6 12l3.5 3.5M14.5 8.5 18 12l-3.5 3.5" />
+    <svg viewBox="0 0 32 24" className="h-4 w-[22px]" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 5v14M29 5v14M9.5 8.5 6 12l3.5 3.5M22.5 8.5 26 12l-3.5 3.5" />
     </svg>
   )
 }

@@ -243,6 +243,7 @@ export function TaskGraph({ tasks, agents, current, criticalPath, onPick, zoomed
   // Fit to the panel; below 55% the graph scrolls sideways instead of shrinking further.
   const scale = avail > 0 ? Math.max(0.55, Math.min(1, avail / width)) : 1
   const running = useMemo(() => new Set(agents.map((a) => a.task).filter(Boolean) as string[]), [agents])
+  const win = useRef<HTMLDivElement>(null)
 
   return (
     <>
@@ -252,7 +253,12 @@ export function TaskGraph({ tasks, agents, current, criticalPath, onPick, zoomed
       <DialogPrimitive.Root open={zoomed} onOpenChange={onZoom}>
         <DialogPrimitive.Portal>
           <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/40 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
-          <DialogPrimitive.Content aria-describedby={undefined} className="fixed inset-2 z-50 flex flex-col overflow-hidden rounded-xl border bg-background shadow-lg outline-none sm:inset-4">
+          <DialogPrimitive.Content
+            ref={win}
+            aria-describedby={undefined}
+            // Focus on the window, not its first button: the keys zoom at once.
+            onOpenAutoFocus={(e) => { e.preventDefault(); win.current?.focus() }}
+            className="fixed inset-2 z-50 flex flex-col overflow-hidden rounded-xl border bg-background shadow-lg outline-none sm:inset-4">
             {zoomed && (
               <ZoomView g={g} width={width} running={running} current={current} onPick={(id) => { onZoom(false); onPick(id) }} />
             )}
@@ -303,10 +309,24 @@ function ZoomView({ g, width, running, current, onPick }: {
       return { k, x: px - (px - v.x) * r, y: py - (py - v.y) * r }
     })
   }, [])
-  const zoomMid = (f: number) => {
+  const zoomMid = useCallback((f: number) => {
     const r = port.current?.getBoundingClientRect()
     if (r) zoomAt(r.width / 2, r.height / 2, f)
-  }
+  }, [zoomAt])
+
+  // + - 0 wherever the focus is in the window (Ctrl and Cmd with them stay the browser's zoom).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === '+' || e.key === '=') zoomMid(1.25)
+      else if (e.key === '-' || e.key === '_') zoomMid(1 / 1.25)
+      else if (e.key === '0') fit()
+      else return
+      e.preventDefault()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [zoomMid, fit])
 
   // The wheel, with a listener of our own: React's is passive and cannot keep the page still.
   useEffect(() => {
@@ -389,11 +409,6 @@ function ZoomView({ g, width, running, current, onPick }: {
           if (pts.current.size === 0) travel.current = 0
           pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
           setDragging(true)
-        }}
-        onKeyDown={(e) => {
-          if (e.key === '+' || e.key === '=') zoomMid(1.25)
-          else if (e.key === '-') zoomMid(1 / 1.25)
-          else if (e.key === '0') fit()
         }}
       >
         {view && (

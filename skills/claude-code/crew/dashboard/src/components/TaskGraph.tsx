@@ -4,7 +4,7 @@
 // at once. Dagre would otherwise move a task down beside the one it feeds.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Maximize, Minus, Plus, X } from 'lucide-react'
+import { Minus, Plus, X } from 'lucide-react'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import { Graph, layout } from '@dagrejs/dagre'
 import type { Agent, Task } from '@/lib/types'
@@ -396,7 +396,7 @@ function ZoomView({ g, width, running, current, onPick }: {
           <button className={btn} onClick={() => zoomMid(1 / 1.25)} title="Zoom out (−)" aria-label="Zoom out"><Minus className="size-4" /></button>
           <span className="tabular w-11 text-center text-xs text-muted-foreground">{view ? `${Math.round(view.k * 100)}%` : ''}</span>
           <button className={btn} onClick={() => zoomMid(1.25)} title="Zoom in (+)" aria-label="Zoom in"><Plus className="size-4" /></button>
-          <button className={btn} onClick={fit} title="Fit to the window (0)" aria-label="Fit to the window"><Maximize className="size-4" /></button>
+          <button className={cn(btn, 'w-auto px-2 text-xs font-medium')} onClick={fit} title="Fit the graph to the window (0)">Fit</button>
           <DialogPrimitive.Close className={btn} title="Back (Esc)" aria-label="Close"><X className="size-4" /></DialogPrimitive.Close>
         </div>
       </div>

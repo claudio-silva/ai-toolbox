@@ -117,7 +117,8 @@ function indexField(line, label) {
 }
 
 // An index: title, Closed / Stage / Branch lines, and the task table
-// (#, Status, Task, Flags, Depends on, Spec). Dependencies may be written T01, 01 or 1.
+// (#, Status, Task, Flags, Depends on, Spec). Dependencies may be written T01, 01 or 1, and as a
+// range: T01–T12, T01-T12 or T01..T12.
 export function parseIndex(text) {
   let title = '';
   let closed = '';
@@ -152,10 +153,12 @@ export function parseIndex(text) {
   }
   const rows = raw.map((r, i) => {
     const deps = [];
-    for (const m of r.deps.matchAll(/[0-9]+/g)) {
-      const k = Number(m[0]);
-      const j = raw.findIndex((x, jj) => x.num === k && jj !== i);
-      if (j >= 0) deps.push(raw[j].id);
+    for (const m of r.deps.matchAll(/([0-9]+)[ \t]*(?:[–—-]|\.\.)[ \t]*[A-Za-z]*([0-9]+)|[0-9]+/g)) {
+      const from = Number(m[1] ?? m[0]);
+      const to = m[2] ? Number(m[2]) : from;
+      for (const x of raw) {
+        if (x.num >= from && x.num <= to && x !== r && !deps.includes(x.id)) deps.push(x.id);
+      }
     }
     let flags = r.flags;
     if (flags === '—' || flags === '-' || flags.toLowerCase() === 'none') flags = '';

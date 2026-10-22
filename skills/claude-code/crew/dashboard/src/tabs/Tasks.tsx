@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Bot, FileText, ListChecks, Network } from 'lucide-react'
+import { Bot, FileText, ListChecks, Maximize2, Network } from 'lucide-react'
 import type { State, StatusKey } from '@/lib/types'
 import { rates } from '@/lib/rates'
 import { cn } from '@/lib/utils'
@@ -12,6 +12,7 @@ type Filter = 'all' | 'open' | 'accepted'
 
 export function Tasks({ state, onTask, onDoc }: { state: State; onTask: (id: string) => void; onDoc: (d: Doc) => void }) {
   const [filter, setFilter] = useState<Filter>('all')
+  const [zoomed, setZoomed] = useState(false)
   const cur = state.current
   const perTask = useMemo(() => new Map((cur?.timing?.perTask ?? []).map((p) => [p.id, p])), [cur])
   if (!cur) {
@@ -29,12 +30,17 @@ export function Tasks({ state, onTask, onDoc }: { state: State; onTask: (id: str
         icon={Network}
         bodyClassName="px-2 pb-3"
         action={
-          <button onClick={() => onDoc({ path: cur.file, title: cur.title, sub: cur.rel })} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-            <FileText className="size-3.5" /> Index
-          </button>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setZoomed(true)} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+              <Maximize2 className="size-3.5" /> Expand
+            </button>
+            <button onClick={() => onDoc({ path: cur.file, title: cur.title, sub: cur.rel })} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+              <FileText className="size-3.5" /> Index
+            </button>
+          </div>
         }
       >
-        <TaskGraph tasks={cur.tasks} agents={state.agents} current={cur.currentTask} criticalPath={critical} onPick={onTask} />
+        <TaskGraph tasks={cur.tasks} agents={state.agents} current={cur.currentTask} criticalPath={critical} onPick={onTask} zoomed={zoomed} onZoom={setZoomed} />
         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 px-2 text-[11px] text-muted-foreground">
           {critical.length > 1 && <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-4 rounded bg-primary" /> critical path so far</span>}
           <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm border border-dashed border-primary" /> current task</span>

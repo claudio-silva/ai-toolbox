@@ -39,6 +39,16 @@ test('parseIndex: rows, statuses, flags, dependencies, branch and stage', () => 
   assert.match(idx.stage, /^2 of 3/);
 });
 
+test('parseIndex: dependency ranges', () => {
+  const row = (n, deps) => `| T${String(n).padStart(2, '0')} | pending | Task ${n} | — | ${deps} | \`${n}.md\` |`;
+  const text = ['# X — tasks', '', '| # | Status | Task | Flags | Depends on | Spec |', '|---|---|---|---|---|---|',
+    ...[1, 2, 3, 4].map((n) => row(n, '—')), row(5, 'T01–T03, T04 (founder-accepted)'), row(6, 'T02-T03'), row(7, '01..02, T05')].join('\n');
+  const deps = Object.fromEntries(M.parseIndex(text).rows.map((r) => [r.id, r.deps.join(' ')]));
+  assert.equal(deps.T05, 'T01 T02 T03 T04');
+  assert.equal(deps.T06, 'T02 T03');
+  assert.equal(deps.T07, 'T01 T02 T05');
+});
+
 test('parseJournalLine: agent starts keep " · " inside the parentheses', () => {
   const e = M.parseJournalLine('2026-10-20 14:05 · lead → builder (sonnet · high) [crew/x] · T07 Autosave timer', '2026-10-20');
   assert.equal(e.kind, 'start');

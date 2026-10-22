@@ -17,7 +17,7 @@ This skill was invoked with: `$ARGUMENTS`. If its first word is `setup`, `handof
 ## Session start
 
 1. Read the project's **`CREW.md`** (path from the pointer line in `CLAUDE.md` or `AGENTS.md`; default `docs/CREW.md`). It overrides this skill.
-2. Run `.crew/bin/crew session start ${CLAUDE_SESSION_ID}` from this checkout's root. It registers this session as the checkout's lead for the hooks, keeps the computer awake while Claude Code runs, starts the founder's dashboard, and names this checkout's task set and its files. If it prints `Open the dashboard at <url>`, start your reply with that line; if it prints nothing about the dashboard, one was already running and you say nothing. Exit 4: another session leads this checkout; relay its message to the founder and do no crew work until they choose.
+2. Run `.crew/bin/crew session start ${CLAUDE_SESSION_ID}` from this checkout's root. It registers this session as the checkout's lead for the hooks, keeps the computer awake while Claude Code runs, starts the founder's dashboard, and names this checkout's task set and its files. End this reply with its last line, `Dashboard: [<url>](<url>)`, as printed. Exit 4: another session leads this checkout; relay its message to the founder and do no crew work until they choose.
 3. If `.crew/` does not exist, skip step 2, offer `/crew setup`, and work with the defaults until then (no journal, no queue, no dashboard).
 4. If it printed a `Handoff:` line and the founder did not run `/crew resume`, mention it.
 

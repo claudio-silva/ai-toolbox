@@ -67,7 +67,7 @@ Setup lists every change it's about to make, then adds the crew's agents, hooks 
 
 The lead works out the goal and the scope with you, asks its questions up front, and gets the crew going once you confirm the plan.
 
-**6. Open the dashboard.** The lead's first reply starts with *Open the dashboard at http://…* (or run `.crew/bin/crew status`). Keep it in a browser tab or a Paseo side panel. To follow along on your phone, click the QR code button in its header and scan it.
+**6. Open the dashboard.** The lead's reply to `/crew` ends with a link to it (or run `.crew/bin/crew status`). Keep it in a browser tab or a Paseo side panel. To follow along on your phone, click the QR code button in its header and scan it.
 
 **7. Walk away.** When you come back, you'll find a milestone report and a short batch of questions. Say "continue", or change course.
 

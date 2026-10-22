@@ -129,7 +129,7 @@ On re-runs, replace everything between the markers. If the file has the older si
 .crew/bin/crew journal "Set up the crew"
 ```
 
-Use the session id `SKILL.md` gave you. `session start` also starts the dashboard and prints `Open the dashboard at <url>`; it prints nothing about it when one is already running for the project. Exit 4: another session leads this checkout; relay its message to the founder, and journal from here only once they chose.
+Use the session id `SKILL.md` gave you. `session start` also starts the dashboard and ends with `Dashboard: [<url>](<url>)`: end setup's last reply with that line, as printed (a Markdown link; some chat views link a bare URL only up to its port). Exit 4: another session leads this checkout; relay its message to the founder, and journal from here only once they chose.
 
 ## 11. Verify now
 
@@ -161,7 +161,7 @@ Any failure → fix it before continuing.
 
 - What a running session picks up without a restart (measured with `tests/probe-reload.sh`, Claude Code 2.1.303 to 2.1.306, in the CLI and through the Agent SDK): hooks in `.claude/settings.json`, new or changed, from the next event; agent definitions and skills, new or changed, when their directory existed at session start. Not picked up: agents in a `.claude/agents/` that this session created, even after `/clear` (which rescans skills, not agents). `CLAUDE.md` changes are not reliably re-read; the skill carries the rules anyway.
 - Never tell the founder to restart Claude Code after a re-run: nothing setup changes needs it.
-- Give the founder the dashboard URL: it opens in any browser, and as a Paseo side panel it sits beside the conversation. The URL stays the same for this project.
+- End the reply with the `Dashboard: [<url>](<url>)` line (`.crew/bin/crew dashboard url` prints the URL again): it opens in any browser, and as a Paseo side panel it sits beside the conversation. The URL stays the same for this project.
 - When this setup created `.claude/agents/`, the crew's agents load only when Claude Code restarts; everything else works now. As the last command of this reply, run `.crew/bin/crew reload`:
   - Exit 0 (Paseo runs this session): Paseo reloads it when this reply ends, in the same conversation, and sends it a message to carry on (measured with Paseo 0.12: the new agents are there after the reload). Tell the founder in one line; if no message arrives, they choose **Reload agent** in this agent's tab menu.
   - Exit 2: relay its line. In the CLI, `/exit` then `claude --continue` keeps this conversation; in another app, a new session in the project. Until then, carry on if the founder wants, emulating the roles (below).

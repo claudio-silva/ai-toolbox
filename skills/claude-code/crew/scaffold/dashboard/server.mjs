@@ -398,11 +398,17 @@ function postToSocket(socket, token, text) {
   });
 }
 
+// Sent as the founder's, not an agent's: this server may have been started by a session Paseo
+// runs, and `paseo send` with that agent's PASEO_AGENT_ID wraps the text as a message from that
+// agent (<paseo-system kind="agent-message">), which the lead rightly does not take as the
+// founder's.
 function paseoSend(cli, id, text) {
   return new Promise((resolve, reject) => {
     const file = path.join(os.tmpdir(), `crew-message-${process.pid}-${Date.now()}.txt`);
     fs.writeFileSync(file, text, { mode: 0o600 });
-    const p = spawn(cli || 'paseo', ['send', id, '--prompt-file', file, '--behavior', 'steer', '--no-wait'], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 20000 });
+    const env = { ...process.env };
+    for (const k of ['PASEO_AGENT_ID', 'PASEO_AGENT_CWD', 'PASEO_WORKSPACE_ID']) delete env[k];
+    const p = spawn(cli || 'paseo', ['send', id, '--prompt-file', file, '--behavior', 'steer', '--no-wait'], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 20000, env });
     let err = '';
     p.stderr.on('data', (d) => { err += d; });
     p.on('error', (e) => { fs.rmSync(file, { force: true }); reject(e); });

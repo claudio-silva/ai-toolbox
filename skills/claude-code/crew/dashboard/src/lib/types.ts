@@ -69,7 +69,8 @@ export interface LeadInfo {
 // One thing in a transcript (model.mjs transcriptEntries).
 export type Entry =
   | { kind: 'user'; key: string; ts: number; text: string; via?: 'dashboard' }
-  | { kind: 'peer'; key: string; ts: number; text: string }
+  // from: who sent it (absent: another Claude session).
+  | { kind: 'peer'; key: string; ts: number; text: string; from?: string }
   | { kind: 'summary'; key: string; ts: number; text: string }
   | { kind: 'text' | 'error' | 'thinking'; key: string; ts: number; ctx: number; text: string }
   | { kind: 'tool'; key: string; ts: number; ctx: number; id: string; name: string; summary: string; detail: string }

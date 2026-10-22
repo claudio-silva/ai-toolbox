@@ -33,9 +33,9 @@
 #                                       the runs of subagents whose process has ended, mark the
 #                                       lead as working, keep the computer awake while Claude Code
 #                                       runs (macOS caffeinate; CREW_KEEP_AWAKE=0 turns it off),
-#                                       start the dashboard and print `crew where`. Prints "Open
-#                                       the dashboard at <url>" when this session started it, here
-#                                       or through its SessionStart hook. Exit status 4, and
+#                                       start the dashboard (if it is not running), print `crew
+#                                       where`, and last "Dashboard: [<url>](<url>)", a Markdown
+#                                       link for the lead's reply to end with. Exit status 4, and
 #                                       nothing registered, when another session's Claude Code
 #                                       still leads this checkout; --take-over makes this session
 #                                       the lead instead (refused while that one has agents
@@ -2119,7 +2119,7 @@ cmd_session() {
       lock_release
       printf 'Crew session registered: %s\n' "$sid"
       where_lines "$co" "$sid"
-      dashboard_announce "$sid" ;;
+      dashboard_announce ;;
     stop)
       if [ -z "$sid" ]; then caller_session; sid=$REPLY; fi
       if [ -z "$sid" ]; then only_lead; sid=$REPLY; fi
@@ -2205,40 +2205,33 @@ dashboard_ensure() {
   return 0
 }
 
-# dashboard_announce SESSION: for `crew session start`. Start the dashboard and print
-# "Open the dashboard at <url>" for the lead to pass on, but only when this session started it:
-# just now, or through its SessionStart hook (which leaves the session's name in
-# dashboard-announce). One already running (another session, the founder, an editor plugin)
-# is the founder's already: say nothing.
+# dashboard_announce: for `crew session start`. Start the dashboard unless it runs, and print
+# its URL as "Dashboard: [<url>](<url>)" for the lead's reply to end with, every time. A
+# Markdown link: some chat views (Paseo's) link a bare URL only up to its port.
 dashboard_announce() {
-  local rc out flag=$STATE/dashboard-announce mine=0
+  local rc out
   [ "${CREW_DASHBOARD:-1}" != 0 ] || return 0
-  [ "$(cat "$flag" 2>/dev/null)" = "$1" ] && mine=1
-  rm -f "$flag"
   dashboard_node || return 0
   out=$(node "$DASHBOARD_SERVER" start --root "$ROOT")
   rc=$?
   if [ "$rc" = 3 ]; then
-    [ "$mine" = 1 ] || return 0
     out=$(node "$DASHBOARD_SERVER" url --root "$ROOT") || return 0
   elif [ "$rc" != 0 ]; then
     return 0
   fi
   out=${out##*Dashboard: }
-  [ -n "$out" ] && printf 'Open the dashboard at %s\n' "$out"
+  [ -n "$out" ] && printf 'Dashboard: [%s](%s)\n' "$out" "$out"
   return 0
 }
 
 # dashboard_autostart SESSION: for the SessionStart hook. Starts the server in the background
-# when it is not running (after a reboot, say), and notes that SESSION started it so its
-# `crew session start` announces the URL. Prints nothing and never waits.
+# when it is not running (after a reboot, say). Prints nothing and never waits.
 dashboard_autostart() {
   local pid
   [ "${CREW_DASHBOARD:-1}" != 0 ] || return 0
   [ -f "$CREW_DIR/dashboard/server.mjs" ] && command -v node >/dev/null 2>&1 || return 0
   pid=$(jq -r '.pid // empty' "$TMP_DIR/dashboard.json" 2>/dev/null)
   case $pid in ''|*[!0-9]*) ;; *) kill -0 "$pid" 2>/dev/null && return 0 ;; esac
-  printf '%s\n' "${1:-}" > "$STATE/dashboard-announce"
   (node "$CREW_DIR/dashboard/server.mjs" start --root "$ROOT" </dev/null >/dev/null 2>&1 &)
 }
 

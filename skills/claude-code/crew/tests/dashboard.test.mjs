@@ -642,3 +642,12 @@ test('compactionRows: the lead session each compaction belongs to', () => {
   assert.equal(M.compactionSummary([]), null);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('transcriptEntries: a message from another Paseo agent, without its envelope', () => {
+  const text = '<paseo-system version="1" kind="agent-message" source-agent-id="a1" message-id="m1" source-agent-title="/crew setup">\nWhy T05 to T10 side by side? It&apos;s &lt;fine&gt;.\n</paseo-system>';
+  const e = M.transcriptEntries(JSON.stringify({ type: 'user', uuid: 'u1', timestamp: '2026-10-22T10:00:00Z', message: { role: 'user', content: text } }));
+  assert.equal(e.length, 1);
+  assert.equal(e[0].kind, 'peer');
+  assert.equal(e[0].from, 'the Paseo agent “/crew setup”');
+  assert.equal(e[0].text, "Why T05 to T10 side by side? It's <fine>.");
+});

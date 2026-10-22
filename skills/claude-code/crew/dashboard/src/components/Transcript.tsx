@@ -79,7 +79,7 @@ function Item({ e, results }: { e: Entry; results: Map<string, Result> }) {
     case 'peer':
       return (
         <div className="flex flex-col items-start gap-0.5 py-1.5">
-          <span className="flex items-center gap-1 pl-1 text-[10.5px] text-muted-foreground"><MessagesSquare className="size-3" /> from another Claude session</span>
+          <span className="flex items-center gap-1 pl-1 text-[10.5px] text-muted-foreground"><MessagesSquare className="size-3" /> from {e.from ?? 'another Claude session'}</span>
           <div className="max-w-[85%] rounded-2xl rounded-bl-md border px-3.5 py-2 text-[13px] break-words whitespace-pre-wrap">{e.text}</div>
         </div>
       )

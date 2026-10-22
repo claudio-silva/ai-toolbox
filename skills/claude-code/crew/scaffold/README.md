@@ -45,7 +45,7 @@ A local web page that shows what the crew is doing, for a browser tab or a Paseo
 
 It listens on every network interface, so a phone or a tablet on the same Wi-Fi (or the same Tailscale network) can open it too. The URL it prints uses this computer's local network address and carries the project's key (`http://192.168.1.20:47242/?key=…`). Other devices need that key: the page saves it in a cookie, so later visits work without it. On this computer, `http://127.0.0.1:<port>/` and `http://localhost:<port>/` need no key; neither does an SSH tunnel to a remote machine (`ssh -N -L 47242:127.0.0.1:47242 server`, any local port). A request through a proxy or a tunnel agent (cloudflared, ngrok, Tailscale Serve, Paseo's service proxy) needs the key even though it comes from this computer: its forwarding headers give it away. The header's QR code button shows that URL as a code to scan, worked out when opened, so it follows the network. The key lives in `tmp/dashboard.key`; delete it and run `bin/crew dashboard restart` to replace it. The URL never shows a public address: on a server without a private one it shows `127.0.0.1`, for a tunnel.
 
-- `bin/crew session start` prints `Open the dashboard at <url>` when this session started it, and nothing when it was already running.
+- `bin/crew session start` ends with `Dashboard: [<url>](<url>)`, and the lead ends its reply with that link.
 - `bin/crew status` prints its URL (and starts it if needed).
 - `bin/crew dashboard start|stop|restart|url` manages it; `start` prints nothing and exits 3 when one is already running for the project.
 - `CREW_DASHBOARD=0` in the environment keeps it from starting; `CREW_DASHBOARD_LAN=0` keeps it on this computer only (`127.0.0.1`, no key).

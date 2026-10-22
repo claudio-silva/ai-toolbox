@@ -387,22 +387,21 @@ check "lead state: the epoch it started at, for the page's clock" "recent" "$(mo
 [ ! -e "$P/.crew/status.md" ] && ok "dashboard: still no status.md" || ko "dashboard: still no status.md" "found .crew/status.md"
 
 # ---- 11b. the dashboard announce: a real server, on the project's own port ----
-# Only the session that started the server tells the founder its URL, once.
+# Every session start ends with the dashboard's link, whoever started the server.
 if command -v node >/dev/null 2>&1; then
   export CREW_DASHBOARD=1
   out=$("$CREW" session start "$SID")
-  check "session start: announces the dashboard it started" "Open the dashboard at http://" "$out"
+  check "session start: ends with the dashboard's link" "Dashboard: [http://" "$(printf '%s\n' "$out" | tail -n 1)"
+  check "session start: a Markdown link, the URL as its text" "](http://" "$out"
   out=$("$CREW" session start "$SID")
-  check_not "session start: silent when the dashboard already runs" "Open the dashboard" "$out"
+  check "session start: the link when the dashboard already runs" "Dashboard: [http://" "$out"
   out=$("$CREW" dashboard start); rc=$?
   [ "$rc" -eq 3 ] && [ -z "$out" ] && ok "dashboard start: exit 3 and no output when it runs" || ko "dashboard start: exit 3 and no output when it runs" "rc=$rc out=$out"
   "$CREW" dashboard stop >/dev/null
   hook session-start "{$J_BASE,\"source\":\"startup\",\"model\":\"claude-opus-5-5\",\"effort\":{\"level\":\"high\"}}" >/dev/null
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do "$CREW" dashboard url >/dev/null && break; sleep 0.3; done
   out=$("$CREW" session start "$SID")
-  check "session start: announces the dashboard its SessionStart hook started" "Open the dashboard at http://" "$out"
-  out=$("$CREW" session start "$SID")
-  check_not "session start: announces it once" "Open the dashboard" "$out"
+  check "session start: the link when its SessionStart hook started the dashboard" "Dashboard: [http://" "$out"
   "$CREW" dashboard stop >/dev/null
   export CREW_DASHBOARD=0
 fi

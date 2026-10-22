@@ -1281,6 +1281,7 @@ export function transcriptFile(stateDir, who, sessions) {
 // entry carries the context size of its request (ctx), for the context meter.
 export const FOUNDER_TAG = 'From the founder, via the Crew dashboard:';
 const PEER_HEAD = 'Another Claude session sent a message:\n';
+const unescapeXml = (t) => t.replace(/&(lt|gt|quot|apos|amp);/g, (_, e) => ({ lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' })[e]);
 const PEER_TAIL = '\n\nThis came from another Claude session';
 const cap = (s, n) => (s.length > n ? `${s.slice(0, n)}\n… (${s.length - n} more characters)` : s);
 
@@ -1322,6 +1323,13 @@ export function transcriptEntries(text) {
     if (r.type === 'user' && m) {
       const c = m.content;
       const s = blockText(c);
+      // A message from another Paseo agent: its text, and who sent it.
+      const pa = /^<paseo-system\b([^>]*)>\n?([\s\S]*?)\n?<\/paseo-system>\s*$/.exec(s.trim());
+      if (pa && /\bkind="agent-message"/.test(pa[1])) {
+        const title = /\bsource-agent-title="([^"]*)"/.exec(pa[1]);
+        out.push({ kind: 'peer', key, ts, from: title ? `the Paseo agent “${unescapeXml(title[1])}”` : 'another Paseo agent', text: cap(unescapeXml(pa[2]).trim(), 20000) });
+        continue;
+      }
       if (r.origin?.kind === 'peer' || s.startsWith(PEER_HEAD)) {
         let body = typeof r.origin?.body === 'string' ? r.origin.body : s.startsWith(PEER_HEAD) ? s.slice(PEER_HEAD.length) : s;
         const tail = body.indexOf(PEER_TAIL);

@@ -83,7 +83,10 @@ export function Journal({ state }: { state: State }) {
       ))}
       <Note>
         {count === entries.length ? `${entries.length}` : `${count} of ${entries.length}`} entries
-        {total > entries.length ? ` (the newest ${entries.length} of ${total} in .crew/journal.md)` : ''}, newest first.
+        {/* With several open sets, the page holds one set's lines (and those of no set). */}
+        {state.sets.filter((x) => x.live).length > 1
+          ? ` of this set, newest first. The journal (.crew/journal.md) has ${total} lines for every set.`
+          : `${total > entries.length ? ` (the newest ${entries.length} of ${total} in .crew/journal.md)` : ''}, newest first.`}
       </Note>
     </div>
   )

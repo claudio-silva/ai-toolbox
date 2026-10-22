@@ -628,3 +628,17 @@ test('server: messages to the lead through its inbox; attachments; transcripts',
   assert.deepEqual(added.map((e) => [e.kind, e.via]), [['user', 'dashboard']]);
   assert.match(added[0].text, /^Ship it\./);
 });
+
+test('compactionRows: the lead session each compaction belongs to', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'crew-comp-'));
+  const row = (kind, id, tp) => ['1792600000', 'x', kind, id, 'label', 'claude-sonnet-5-5', 'high', '200000', '20000', '1000', 'auto', '0.1', tp, '0', '3', '0'].join('\t');
+  fs.writeFileSync(path.join(dir, 'compactions.tsv'), [
+    row('lead', 'lead', '/p/.claude/projects/x/sess-1.jsonl'),
+    row('sub', 'ag1', '/p/.claude/projects/x/sess-2/subagents/agent-ag1.jsonl'),
+  ].join('\n') + '\n');
+  const rows = M.compactionRows(dir);
+  assert.deepEqual(rows.map((r) => r.session), ['sess-1', 'sess-2']);
+  assert.equal(M.compactionSummary(rows).summary.lead.count, 1);
+  assert.equal(M.compactionSummary([]), null);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

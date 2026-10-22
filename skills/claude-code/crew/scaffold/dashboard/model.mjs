@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process';
 
 // The shape of buildState's result. The page ignores a state of another version (one sent by
 // the previous server while a new page loads, during an update); keep lib/types.ts in step.
-export const MODEL_VERSION = 2;
+export const MODEL_VERSION = 3;
 
 const TASK_RE = /^[Tt]0*([0-9]+)([^0-9]|$)/;
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg)$/i;
@@ -922,9 +922,11 @@ export function turnsSince(file, offset) {
 // compactions.tsv columns: 1 epoch 2 iso 3 kind 4 id 5 label 6 model 7 effort 8 pre 9 post
 // 10 durationMs 11 trigger 12 cost_usd 13 transcript 14 boundary_offset 15 turns_after ("-" = open)
 // 16 agent_started_epoch
-export function compactionsModel(stateDir) {
+// The compaction log's rows. `session`: the lead's session, from the transcript's path (a
+// subagent's is under <session>/subagents/).
+export function compactionRows(stateDir) {
   const t = read(path.join(stateDir, 'compactions.tsv'));
-  if (!t) return null;
+  if (!t) return [];
   const rows = [];
   for (const line of t.split('\n')) {
     if (!line) continue;
@@ -937,12 +939,20 @@ export function compactionsModel(stateDir) {
     const rp = readPrice(f[5], pre);
     const cost = f[11] === '' || f[11] == null ? null : num(f[11]);
     const saved = rp > 0 ? (turns * (pre - post) * rp) / 1e6 : null;
+    const tp = f[12] || '';
+    const session = f[2] === 'sub' ? path.basename(path.dirname(path.dirname(tp))) : path.basename(tp, '.jsonl');
     rows.push({
       epoch: num(f[0]), kind: f[2], id: f[3], label: f[4], model: f[5], effort: f[6],
       pre, post, durationMs: num(f[9]), trigger: f[10] || 'auto', cost, turns, open,
       saved, net: cost != null && saved != null ? saved - cost : null, started: num(f[15]),
+      session, set: null,
     });
   }
+  return rows;
+}
+
+// The compactions page: the rows and what they add up to (null: none).
+export function compactionSummary(rows) {
   if (rows.length === 0) return null;
   const s = {
     lead: { count: 0, avgPre: 0, interval: null },
@@ -981,6 +991,10 @@ export function compactionsModel(stateDir) {
   if (overKnown) s.overhead = over;
   if (saveKnown) { s.saved = save; s.net = save - over; }
   return { summary: s, rows };
+}
+
+export function compactionsModel(stateDir) {
+  return compactionSummary(compactionRows(stateDir));
 }
 
 // ---------------------------------------------------------------------------
@@ -1484,6 +1498,27 @@ export function buildState(rootIn, opts = {}) {
   for (const r of regs) { const sl = slugOf(r.checkout); if (sl && !leadOfSet.has(sl)) leadOfSet.set(sl, r); }
   const shown = regs.filter((r, i) => r.alive || slugOf(r.checkout) || i === 0 || !regs.some((x) => x.alive));
 
+  // The set each lead session worked on (lead.tsv, then the leads now), each subagent's (its
+  // runs), and each checkout's branch's: a builder's worktree counts for the checkout it is in.
+  const setOfSession = new Map();
+  for (const e of leadLog) if (e.session && e.set) setOfSession.set(e.session, e.set);
+  for (const r of regs) { const sl = slugOf(r.checkout); if (sl) setOfSession.set(r.session, sl); }
+  const setOfAgent = new Map();
+  for (const x of [...runs, ...agents]) if (x.set) setOfAgent.set(x.id, x.set);
+  const setOfBranch = new Map();
+  const nest = `${path.sep}.claude${path.sep}worktrees${path.sep}`;
+  for (const ck of cks) {
+    const sl = slugOf(ck.builder ? ck.path.slice(0, ck.path.indexOf(nest)) : ck.path);
+    if (sl) setOfBranch.set(ck.main ? '' : ck.branch, sl);
+  }
+  // A line from a set's own branch (its index's Branch:, or crew/<slug>), checked out anywhere.
+  for (const st of sets) {
+    if (!st.live) continue;
+    for (const b of [st.branch?.split(/\s+/)[0], `crew/${st.slug}`]) if (b && !setOfBranch.has(b)) setOfBranch.set(b, st.slug);
+  }
+  const compRows = compactionRows(stateDir);
+  for (const r of compRows) r.set = (r.kind === 'sub' && setOfAgent.get(r.id)) || setOfSession.get(r.session) || null;
+
   // One set as the page shows it: its tasks, agents, timing and handoff.
   const viewOf = (set) => {
     const setDir = path.dirname(set.file);
@@ -1527,6 +1562,7 @@ export function buildState(rootIn, opts = {}) {
       total: set.total, accepted: set.accepted, counts: set.counts, lead: lr?.session ?? null,
       tasks, currentTask: ct >= 0 ? tasks[ct].id : null, timing,
       handoff: readHandoff(path.join(setDir, 'handoff.md')),
+      compactions: compactionSummary(compRows.filter(mine)),
     };
   };
   const open = sets.map((st, i) => ({ st, i })).filter((x) => x.st.live).map((x) => ({ i: x.i, view: viewOf(x.st) }));
@@ -1567,8 +1603,10 @@ export function buildState(rootIn, opts = {}) {
 
   const { requests, questions, defects } = collectEntries(cks, sets);
   const handoff = primary?.handoff ?? readHandoff(path.join(crewDir, 'handoff.md'));
+  // A journal line's set: by the branch of the checkout that wrote it (none: the main one's).
   const journal = parseJournal(read(path.join(crewDir, 'journal.md')) || '', opts.journalLimit ?? 400);
-  const compactions = compactionsModel(stateDir);
+  for (const e of journal.entries) e.set = setOfBranch.get(e.branch) ?? null;
+  const compactions = compactionSummary(compRows);
   const ds = defectSummary(defects);
 
   const past = pastAgents(stateDir, runs, new Set(agents.map((a) => a.id)))

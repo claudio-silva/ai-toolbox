@@ -467,6 +467,8 @@ check "lead in a worktree: defect numbers stay project-wide" "- [D3] " "$out"
 check "model: one lead per checkout" "2: main checkout, wt" "$(model '.roster.leads | "\(length): \(map(.label) | join(", "))"')"
 check "model: both open sets" "autosave export" "$(model '.open | map(.slug) | sort | join(" ")')"
 check "model: entries carry their set" "R6 export · D3 export" "$(model '[(.queue.requests[] | select(.id == "R6")), (.defects.items[] | select(.id == "D3"))] | map("\(.id) \(.set)") | join(" · ")')"
+check "model: a worktree lead's journal lines carry its set" "export" "$(model '[.journal.entries[] | select(.branch == "crew/export") | .set] | unique | join(" ")')"
+check "model: the main checkout's lines, its set" "autosave" "$(model '[.journal.entries[] | select(.branch == "") | .set] | map(. // "none") | unique | join(" ")')"
 hook agent-id "{\"session_id\":\"sess-0004\",\"transcript_path\":\"$MAIN\",\"cwd\":\"$W\",\"hook_event_name\":\"x\",\"agent_id\":\"wt1\",\"agent_type\":\"builder\"}" >/dev/null
 check "running: a lead sees its own agents" "wt1" "$(CREW_CLAUDE_PID=$C3 "$CREW" running)"
 check_not "running: not the other lead's" "wt1" "$(CREW_CLAUDE_PID=$C2 "$CREW" running)"
@@ -480,6 +482,18 @@ out=$(CREW_CLAUDE_PID=$C3 "$CREW" session stop)
 check "session stop: the caller's lead only" "stopped" "$(model '.roster.leads[] | select(.session == "sess-0004") | .state.state')"
 check "session stop: the other lead carries on" "working" "$(model '.roster.leads[] | select(.session == "sess-0003") | .state.state')"
 cd "$P"
+
+# ---- 11e. crew reload: Paseo reloads the session once its turn ends; elsewhere, the founder ----
+out=$("$CREW" reload 2>&1); rc=$?
+[ "$rc" -eq 2 ] && ok "reload outside Paseo: exit 2" || ko "reload outside Paseo: exit 2" "rc=$rc"
+check "reload outside Paseo: what the founder does" "/exit, then claude --continue" "$out"
+printf '#!/bin/sh\necho "$*" >> "%s"\n' "$T/paseo.log" > "$T/stubs/paseo-cli"; chmod +x "$T/stubs/paseo-cli"
+out=$(FAKE_PASEO_PID=$$ PASEO_AGENT_ID=agent-1 PASEO_CLI="$T/stubs/paseo-cli" "$CREW" reload); rc=$?
+[ "$rc" -eq 0 ] && ok "reload in Paseo: scheduled" || ko "reload in Paseo: scheduled" "rc=$rc $out"
+check "reload in Paseo: says when" "when this turn ends" "$out"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -q '^send' "$T/paseo.log" 2>/dev/null && break; sleep 0.1; done
+check "reload in Paseo: waits for the turn, reloads, then sends the note" \
+  "wait agent-1 --timeout 1800|agent reload agent-1|send agent-1 --prompt Paseo reloaded this session" "$(tr '\n' '|' < "$T/paseo.log" 2>/dev/null)"
 
 # ---- 12. hooks never fail ----
 printf 'not json' | "$CREW" hook compact >/dev/null 2>&1; rc=$?

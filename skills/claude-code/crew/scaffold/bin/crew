@@ -45,6 +45,11 @@
 #                                       this session is concerned.
 #   crew running [--all]                List this session's running subagents (kept by the hooks);
 #                                       --all: every session's.
+#   crew reload                         In Paseo: once this session's turn ends, reload its Claude
+#                                       Code in the same conversation (it then reads what it reads
+#                                       only at start, such as agents in a .claude/agents/ created
+#                                       during the session), and send it a message to carry on.
+#                                       Elsewhere, exit status 2 and what the founder can do.
 #   crew status                         Settle pending compaction records, sample the clock,
 #                                       make sure the dashboard runs and print its URL.
 #   crew dashboard [start|stop|restart|url]
@@ -66,9 +71,10 @@
 #                                       .crew/tmp/, .crew/task-data/, worktree.json,
 #                                       then .crew/worktree/setup.sh.
 #   crew worktree teardown <path> [--dry-run]
-#                                       Harvest task data and journal lines into the main
-#                                       checkout, run .crew/worktree/teardown.sh, remove
-#                                       the worktree and its branch.
+#                                       Harvest task data into the checkout this runs in and
+#                                       journal lines into the journal, run
+#                                       .crew/worktree/teardown.sh, remove the worktree and its
+#                                       branch.
 #   crew hook <mode>                    Claude Code hook handler; reads the hook JSON on
 #                                       stdin. Modes: agent-start (PreToolUse Agent),
 #                                       agent-resume (PreToolUse SendMessage), agent-id
@@ -510,16 +516,23 @@ note_claude() {
 # `paseo send` route); otherwise the session's cross-session inbox socket and its token (Claude
 # Code 2.1.224+). One line, tab-separated: socket, token, Paseo agent id, Paseo CLI. Owner-only:
 # the token is what lets a message reach a session that runs without permission prompts.
+# paseo_agent: this session's Paseo agent id in REPLY, empty when Paseo does not run it. A
+# Claude Code started by hand in a Paseo agent's terminal inherits that agent's id: the id is
+# this session's only when Paseo's daemon itself runs this Claude Code.
+paseo_agent() {
+  local id=${PASEO_AGENT_ID:-} parent
+  REPLY=""
+  [ -n "$id" ] || return 0
+  claude_pid
+  parent=$(ps -o ppid= -p "${REPLY:-0}" 2>/dev/null | tr -d ' ')
+  REPLY=""
+  case $(ps -o comm= -p "${parent:-0}" 2>/dev/null) in *[Pp]aseo*) REPLY=$id ;; esac
+}
+
 note_reach() {
-  local f="$STATE/reach/$1" line paseo=${PASEO_AGENT_ID:-} parent
+  local f="$STATE/reach/$1" line paseo
   [ -n "$1" ] || return 0
-  # A Claude Code started by hand in a Paseo agent's terminal inherits that agent's id: the id
-  # is this session's only when Paseo's daemon itself runs this Claude Code.
-  if [ -n "$paseo" ]; then
-    claude_pid
-    parent=$(ps -o ppid= -p "${REPLY:-0}" 2>/dev/null | tr -d ' ')
-    case $(ps -o comm= -p "${parent:-0}" 2>/dev/null) in *[Pp]aseo*) ;; *) paseo="" ;; esac
-  fi
+  paseo_agent; paseo=$REPLY
   [ -n "${CLAUDE_CODE_MESSAGING_SOCKET:-}$paseo" ] || return 0
   line="${CLAUDE_CODE_MESSAGING_SOCKET:-}$TAB${CLAUDE_CODE_MESSAGING_TOKEN:-}$TAB$paseo$TAB${paseo:+${PASEO_CLI:-}}"
   [ "$(cat "$f" 2>/dev/null)" != "$line" ] || return 0
@@ -2485,6 +2498,30 @@ cmd_worktree() {
   esac
 }
 
+# Paseo's `agent reload` restarts the agent's Claude Code with the same conversation, aborting
+# a turn in progress and killing the process tree; the agent is idle after it. So a process
+# outside that tree (reparented to launchd) waits for the turn to end, reloads, and sends the
+# message that starts the next turn. Measured with Paseo 0.12: agents in a .claude/agents/
+# created during the session are there after the reload.
+RELOAD_NOTE="Paseo reloaded this session, after /crew setup, so that Claude Code loads the crew's agents. Carry on with what you were doing; if nothing was in progress, tell the founder in one line that the crew's agents are ready."
+
+cmd_reload() {
+  local id cli
+  paseo_agent; id=$REPLY
+  if [ -z "$id" ]; then
+    printf '%s\n' "crew reload: Paseo does not run this session. The founder restarts it in the same conversation: /exit, then claude --continue (in the CLI); in another app, a new session in this project." >&2
+    return 2
+  fi
+  cli=${PASEO_CLI:-paseo}
+  if ! command -v "$cli" >/dev/null 2>&1; then
+    printf '%s\n' "crew reload: the paseo command is missing. The founder reloads this agent from its tab's menu in Paseo: Reload agent." >&2
+    return 2
+  fi
+  ( nohup sh -c '"$1" wait "$2" --timeout 1800 >/dev/null 2>&1 && "$1" agent reload "$2" >/dev/null 2>&1 && "$1" send "$2" --prompt "$3" --no-wait >/dev/null 2>&1' \
+      crew-reload "$cli" "$id" "$RELOAD_NOTE" </dev/null >/dev/null 2>&1 & )
+  printf '%s\n' "crew reload: Paseo reloads this session when this turn ends, in the same conversation, then sends it a message to carry on."
+}
+
 usage() {
   sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
 }
@@ -2510,6 +2547,7 @@ case ${1:-} in
   defect) shift; cmd_defect "$@"; rc=$? ;;
   session) shift; cmd_session "$@"; rc=$? ;;
   running) shift; cmd_running "$@"; rc=$? ;;
+  reload) cmd_reload; rc=$? ;;
   where) cmd_where; rc=$? ;;
   carry) cmd_carry; rc=$? ;;
   status) cmd_status; rc=$? ;;

@@ -342,7 +342,10 @@ function cmdState() {
 // ---------------------------------------------------------------------------
 //
 // bin/crew records each session's way in (tmp/journal-state/reach/<session>). In Paseo, `paseo
-// send` puts the message in the session as if the founder typed it in Paseo. Elsewhere, Claude
+// send` puts the message in the session as if the founder typed it in Paseo: into the running
+// turn when the lead works (steering), else as a new turn. Paseo can't steer a slash command:
+// it would interrupt the turn to run it, so a command to a working lead goes as words, asking
+// the lead to run it (with the skill, the same thing). Elsewhere, Claude
 // Code's cross-session inbox (2.1.224+): one connection to the session's socket, an auth line
 // with the session's token (without it, a session that skips permission prompts holds the
 // message), then the message; Claude Code starts a turn when the lead is idle and shows it
@@ -399,7 +402,7 @@ function paseoSend(cli, id, text) {
   return new Promise((resolve, reject) => {
     const file = path.join(os.tmpdir(), `crew-message-${process.pid}-${Date.now()}.txt`);
     fs.writeFileSync(file, text, { mode: 0o600 });
-    const p = spawn(cli || 'paseo', ['send', id, '--prompt-file', file, '--no-wait'], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 20000 });
+    const p = spawn(cli || 'paseo', ['send', id, '--prompt-file', file, '--behavior', 'steer', '--no-wait'], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 20000 });
     let err = '';
     p.stderr.on('data', (d) => { err += d; });
     p.on('error', (e) => { fs.rmSync(file, { force: true }); reject(e); });
@@ -428,8 +431,12 @@ async function messageLead(text, files = [], session = null) {
   if (paths.some((f) => !inside(f, ATTACH) || !fs.existsSync(f))) throw new Refused(400, 'An attached file is missing; attach it again.');
   const attached = paths.length ? `\n\nAttached files:\n${paths.map((f) => `- ${f}`).join('\n')}` : '';
   const body = `${text}${attached}`;
+  let working = false;
+  try { working = /^working\b/.test(fs.readFileSync(path.join(STATE_DIR, 'leads', ls.session), 'utf8')); } catch { /* no state yet */ }
   try {
-    if (via === 'paseo') await paseoSend(r.paseoCli, r.paseo, body);
+    if (via === 'paseo' && working && /^\/\S/.test(text.trim())) {
+      await paseoSend(r.paseoCli, r.paseo, `The founder, from the Crew dashboard: run ${text.trim()} now, as if they had typed it.${attached}`);
+    } else if (via === 'paseo') await paseoSend(r.paseoCli, r.paseo, body);
     else await postToSocket(r.socket, r.token, envelope(`${FOUNDER_TAG}\n\n${body}`, permissionModeOf(ls.transcript)));
   } catch (e) {
     throw new Refused(502, `Could not deliver the message: ${e?.message || e}`);

@@ -1,7 +1,7 @@
 // The model served by ../../scaffold/dashboard/model.mjs (buildState). Keep the two in step.
 
 // model.mjs's MODEL_VERSION: the page shows only states of this shape.
-export const MODEL_VERSION = 2
+export const MODEL_VERSION = 3
 
 export type StatusKey = 'accepted' | 'progress' | 'review' | 'rework' | 'blocked' | 'pending'
 export type Phase = 'build' | 'review' | 'rework' | 'other'
@@ -189,6 +189,8 @@ export interface CurrentSet {
   tasks: Task[]
   currentTask: string | null
   timing: Timing | null
+  // Its lead's and its agents' compactions.
+  compactions: Compactions | null
 }
 
 export interface Request {
@@ -247,6 +249,20 @@ export interface Compaction {
   saved: number | null
   net: number | null
   started: number
+  // The lead's session it belongs to (a subagent's: the session that started it), and its set.
+  session: string
+  set: string | null
+}
+
+export interface Compactions {
+  summary: {
+    lead: { count: number; avgPre: number; interval: number | null }
+    sub: { count: number; avgPre: number; afterStart: number | null }
+    overhead: number | null
+    saved: number | null
+    net: number | null
+  }
+  rows: Compaction[]
 }
 
 export interface JournalEntry {
@@ -262,6 +278,8 @@ export interface JournalEntry {
   model?: string
   effort?: string
   status?: string
+  // The task set open in the checkout that wrote it (null: none, or a checkout gone since).
+  set: string | null
 }
 
 // A newer Crew, from the server's daily check of the published RELEASES.md.
@@ -306,16 +324,7 @@ export interface State {
     items: Defect[]
     summary: { total: number; deferred: number; deferredMedium: number; scheduled: number; fixed: number; dropped: number; promoted: number }
   }
-  compactions: {
-    summary: {
-      lead: { count: number; avgPre: number; interval: number | null }
-      sub: { count: number; avgPre: number; afterStart: number | null }
-      overhead: number | null
-      saved: number | null
-      net: number | null
-    }
-    rows: Compaction[]
-  } | null
+  compactions: Compactions | null
   journal: { total: number; entries: JournalEntry[] }
   handoff: Handoff | null
   worktrees: { path: string; branch: string }[]

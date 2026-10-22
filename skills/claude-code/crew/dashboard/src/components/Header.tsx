@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  Bot, Bug, ChevronDown, Gauge, GitBranch, Inbox, Layers, ListChecks, Monitor, Moon, Pause, ScrollText, Shrink, Sun, Timer,
+  Bot, Bug, ChevronDown, Gauge, GitBranch, Inbox, Layers, ListChecks, Monitor, Moon, ScrollText, Shrink, Sun, Timer,
   type LucideIcon,
 } from 'lucide-react'
 import type { State } from '@/lib/types'
@@ -13,7 +13,7 @@ import { UpdateNotice, VersionButton } from './Update'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { leadName } from '@/lib/lead'
+import { SetSwitcher } from './SetSwitcher'
 
 export const TAB_META: Record<Tab, { label: string; icon: LucideIcon }> = {
   overview: { label: 'Overview', icon: Gauge },
@@ -25,28 +25,6 @@ export const TAB_META: Record<Tab, { label: string; icon: LucideIcon }> = {
   compactions: { label: 'Compactions', icon: Shrink },
   journal: { label: 'Journal', icon: ScrollText },
   sets: { label: 'Sets', icon: Layers },
-}
-
-// Only what needs the founder: a lead waiting for them. Nothing shows otherwise; the leads'
-// states are in the Overview and the Agents tab. A click opens the (first) waiting lead.
-function WaitingChip({ state, onLead }: { state: State; onLead: (session: string) => void }) {
-  const waiting = state.roster.leads.filter((l) => l.state.state === 'waiting')
-  if (!waiting.length) return null
-  const one = waiting.length === 1
-  const label = one ? (state.roster.leads.length > 1 ? `${leadName(state, waiting[0]).replace(/^Lead · /, '')}: waiting for you` : 'Lead waiting for you') : `${waiting.length} leads waiting`
-  // A phone has room for a word or two beside the project's name.
-  const short = one ? 'Waiting for you' : `${waiting.length} waiting`
-  return (
-    <button
-      onClick={() => onLead(waiting[0].session)}
-      aria-label={`${label}. Open ${one ? 'its' : 'the first one\'s'} conversation.`}
-      className="mr-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border border-st-progress/35 bg-st-progress/10 px-2.5 py-1 text-[11.5px] font-medium text-st-progress transition-colors hover:bg-st-progress/18 focus-visible:ring-2 focus-visible:ring-ring/50 outline-none"
-    >
-      <Pause className="size-3 shrink-0" strokeWidth={2.75} />
-      <span className="sm:hidden">{short}</span>
-      <span className="hidden max-w-72 truncate sm:inline">{label}</span>
-    </button>
-  )
 }
 
 function ConnDot({ conn, changedAt }: { conn: Conn; changedAt: number }) {
@@ -246,7 +224,7 @@ function TabStrip({ tab, setTab, badges }: { tab: Tab; setTab: (t: Tab) => void;
   )
 }
 
-export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, badges, onLead }: {
+export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, badges, set, pickSet }: {
   state: State | null
   conn: Conn
   changedAt: number
@@ -255,7 +233,9 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
   tab: Tab
   setTab: (t: Tab) => void
   badges: Badges
-  onLead: (session: string) => void
+  // The open set every tab shows, when there are several.
+  set: string | null
+  pickSet: (slug: string) => void
 }) {
   return (
     <header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
@@ -276,13 +256,13 @@ export function Header({ state, conn, changedAt, theme, setTheme, tab, setTab, b
             )}
           </div>
           <div className="ml-auto flex shrink-0 items-center">
-            {state && <WaitingChip state={state} onLead={onLead} />}
             <UpdateNotice u={state?.update} />
             <ConnDot conn={conn} changedAt={changedAt} />
             <ShareButton />
             <ThemeToggle theme={theme} setTheme={setTheme} />
           </div>
         </div>
+        {state && <SetSwitcher state={state} slug={set} pick={pickSet} />}
         <TabStrip tab={tab} setTab={setTab} badges={badges} />
       </div>
     </header>

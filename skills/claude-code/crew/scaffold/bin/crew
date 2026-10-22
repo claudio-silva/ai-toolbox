@@ -414,7 +414,7 @@ keep_awake_stop() {
   local pid _rest f="$STATE/keep-awake"
   if [ -n "${1:-}" ]; then safe_name "$1"; f="$STATE/awake/$REPLY"; fi
   [ -f "$f" ] || return 0
-  read -r pid _rest < "$f" 2>/dev/null
+  read -r pid _rest 2>/dev/null < "$f"
   rm -f "$f"
   case "$pid" in ''|*[!0-9]*) return 0 ;; esac
   case $(ps -o args= -p "$pid" 2>/dev/null) in *caffeinate*) kill "$pid" 2>/dev/null ;; esac
@@ -471,7 +471,7 @@ proc_start() {
 session_alive() {
   local pid start
   safe_name "$1"
-  read -r pid start < "$STATE/claude/$REPLY" 2>/dev/null
+  read -r pid start 2>/dev/null < "$STATE/claude/$REPLY"
   claude_alive "$pid" "$start"
 }
 
@@ -504,7 +504,7 @@ note_claude() {
   claude_pid
   pid=$REPLY
   [ -n "$pid" ] || return 0
-  read -r old _rest < "$f" 2>/dev/null
+  read -r old _rest 2>/dev/null < "$f"
   [ "$old" != "$pid" ] || return 0
   proc_start "$pid"
   printf '%s %s\n' "$pid" "$REPLY" > "$f"
@@ -554,7 +554,7 @@ reap_orphans() {
     if [ -n "${1:-}" ]; then
       [ "$sess" = "$1" ] || continue
     else
-      pid=""; read -r pid _ < "$STATE/claude/$sess" 2>/dev/null
+      pid=""; read -r pid _ 2>/dev/null < "$STATE/claude/$sess"
       [ -n "$pid" ] || continue
       session_alive "$sess" && continue
     fi
@@ -583,7 +583,7 @@ reap_orphans() {
 lead_set() {
   local f prev="" st=$1
   safe_name "$2"; f="$STATE/leads/$REPLY"
-  read -r prev _ < "$f" 2>/dev/null
+  read -r prev _ 2>/dev/null < "$f"
   if [ "${3:-}" = keep-stopped ] && [ "$prev" = stopped ]; then return 0; fi
   now_parts
   printf '%s %s %s\n' "$st" "$NOW_HM" "$NOW_EPOCH" > "$f"
@@ -655,7 +655,7 @@ caller_session() {
     [ -f "$f" ] || continue
     s=${f##*/}
     [ -e "$STATE/sessions/$s" ] || continue
-    p=""; read -r p _ < "$f" 2>/dev/null
+    p=""; read -r p _ 2>/dev/null < "$f"
     [ "$p" = "$pid" ] || continue
     t=$(file_mtime "$STATE/sessions/$s"); case $t in ''|*[!0-9]*) t=0 ;; esac
     if [ "$t" -gt "$bt" ]; then bt=$t; best=$s; fi
@@ -685,7 +685,7 @@ other_lead() {
     [ "$s" != any ] && [ "$s" != "$2" ] || continue
     session_checkout "$s"; co=$REPLY
     [ "$co" = "$1" ] || continue
-    pid=""; read -r pid _ < "$STATE/claude/$s" 2>/dev/null
+    pid=""; read -r pid _ 2>/dev/null < "$STATE/claude/$s"
     [ -n "$pid" ] && [ "$pid" != "$mine" ] || continue
     session_alive "$s" || continue
     REPLY=$s; return 0
@@ -708,7 +708,7 @@ supersede() {
 lead_line() {
   local st hm
   safe_name "$1"
-  read -r st hm _ < "$STATE/leads/$REPLY" 2>/dev/null
+  read -r st hm _ 2>/dev/null < "$STATE/leads/$REPLY"
   REPLY="${st:-registered}${hm:+ since $hm}"
 }
 
@@ -1501,8 +1501,8 @@ hook_superseded() {
   [ -n "$J_SESSION" ] || return 1
   safe_name "$J_SESSION"
   [ -f "$STATE/superseded/$REPLY" ] && [ ! -e "$STATE/sessions/$REPLY" ] || return 1
-  read -r by hm _ < "$STATE/superseded/$REPLY" 2>/dev/null
-  printf '%s\n' "Crew: this session is no longer the crew's lead: session ${by:-another} took over this checkout at ${hm:-?}. Do no crew work here (no subagents, crew files or commits for the task set). If the founder asks for crew work, tell them; running /crew here asks to take the lead back."
+  read -r by hm _ 2>/dev/null < "$STATE/superseded/$REPLY"
+  printf '%s\n' "Crew: this session is no longer the crew's lead: session ${by:-another} took over this checkout at ${hm:-?}. Do no crew work here (no subagents, crew files or commits for the task set). If the founder asks for crew work, tell them. If they ask for the lead back (a /crew anywhere in their message counts: it runs as a command only at the start of a message), run .crew/bin/crew session start $J_SESSION now: it offers the take-over."
   return 0
 }
 
@@ -2020,7 +2020,7 @@ conflict_message() {
   local other=$1 co=$2 sid=$3 n=$4 label since="" pid start
   if [ "$co" = "$ROOT" ]; then label="the main checkout ($co)"; else label="this worktree ($co)"; fi
   safe_name "$other"
-  read -r pid start < "$STATE/claude/$REPLY" 2>/dev/null
+  read -r pid start 2>/dev/null < "$STATE/claude/$REPLY"
   case $start in ''|*[!0-9]*) ;; *) epoch_to_hm "$start"; since=$REPLY; epoch_to_day "$start"; now_parts; [ "$REPLY" = "$NOW_DAY" ] || since="$REPLY $since" ;; esac
   lead_line "$other"
   if [ "$5" = 1 ]; then
@@ -2047,7 +2047,7 @@ replace_leads() {
     [ "$s" != any ] && [ "$s" != "$2" ] || continue
     session_checkout "$s"; co=$REPLY
     [ "$co" = "$1" ] || continue
-    pid=""; read -r pid _ < "$STATE/claude/$s" 2>/dev/null
+    pid=""; read -r pid _ 2>/dev/null < "$STATE/claude/$s"
     if [ -n "$pid" ] && [ "$pid" != "$mine" ] && session_alive "$s"; then
       journal_append "lead" "Took over the lead of this checkout from session $s"
     fi
@@ -2496,7 +2496,7 @@ cmd_worktree() {
 # outside that tree (reparented to launchd) waits for the turn to end, reloads, and sends the
 # message that starts the next turn. Measured with Paseo 0.12: agents in a .claude/agents/
 # created during the session are there after the reload.
-RELOAD_NOTE="Paseo reloaded this session, after /crew setup, so that Claude Code loads the crew's agents. Carry on with what you were doing; if nothing was in progress, tell the founder in one line that the crew's agents are ready."
+RELOAD_NOTE="This session ran crew reload, and Paseo reloaded it so that Claude Code loads the crew's agents. Carry on with what you were doing; if nothing was in progress, tell the founder in one line that the crew's agents are ready."
 
 cmd_reload() {
   local id cli

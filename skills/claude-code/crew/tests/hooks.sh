@@ -435,8 +435,10 @@ out=$(CREW_CLAUDE_PID=$C2 "$CREW" session start sess-0002 --take-over); rc=$?
 [ "$rc" -eq 4 ] && ok "take-over: refused while the lead runs agents" || ko "take-over: refused while the lead runs agents" "rc=$rc"
 check "take-over: says why" "runs 1 subagent(s)" "$out"
 rm -f "$S/running/busy1"
-out=$(CREW_CLAUDE_PID=$C2 "$CREW" session start sess-0002 --take-over); rc=$?
+out=$(CREW_CLAUDE_PID=$C2 "$CREW" session start sess-0002 --take-over 2>"$P/.crew/tmp/err"); rc=$?
 check "take-over: registered" "Crew session registered: sess-0002" "$out"
+# A session's first start reads state files it has none of yet (claude/, leads/): quietly.
+[ ! -s "$P/.crew/tmp/err" ] && ok "take-over: a new session's first start writes nothing to stderr" || ko "take-over: a new session's first start writes nothing to stderr" "$(cat "$P/.crew/tmp/err")"
 check "take-over: journaled" "Took over the lead of this checkout from session $SID" "$(cat "$P/.crew/journal.md")"
 [ -e "$S/superseded/$SID" ] && ok "take-over: the old lead is superseded" || ko "take-over: the old lead is superseded" "no superseded/$SID"
 out=$(hook lead-busy "{$J_BASE,\"prompt\":\"carry on\"}")
@@ -492,7 +494,7 @@ out=$(FAKE_PASEO_PID=$$ PASEO_AGENT_ID=agent-1 PASEO_CLI="$T/stubs/paseo-cli" "$
 check "reload in Paseo: says when" "when this turn ends" "$out"
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -q '^send' "$T/paseo.log" 2>/dev/null && break; sleep 0.1; done
 check "reload in Paseo: waits for the turn, reloads, then sends the note" \
-  "wait agent-1 --timeout 1800|agent reload agent-1|send agent-1 --prompt Paseo reloaded this session" "$(tr '\n' '|' < "$T/paseo.log" 2>/dev/null)"
+  "wait agent-1 --timeout 1800|agent reload agent-1|send agent-1 --prompt This session ran crew reload" "$(tr '\n' '|' < "$T/paseo.log" 2>/dev/null)"
 
 # ---- 12. hooks never fail ----
 printf 'not json' | "$CREW" hook compact >/dev/null 2>&1; rc=$?

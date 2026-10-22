@@ -55,6 +55,8 @@ npx skills add claudio-silva/ai-toolbox --skill crew -a claude-code
 
 Setup lists every change it's about to make, then adds the crew's agents, hooks and files to the project ([what it adds](#what-setup-adds-to-your-project)). It asks only what it can't learn from the repository. The crew is ready at once: hooks work from the next message. The one exception is a project that had no `.claude/agents/` folder before: the crew's agents load only when Claude Code restarts. In Paseo, setup reloads the agent itself once its reply ends, in the same conversation (if it doesn't, choose **Reload agent** in the agent's tab menu). In the CLI, `/exit` then `claude --continue` keeps your conversation. Until then, the lead stands in for the crew's agents. Run setup again after each skill update ([Updating](#updating)); no restart is needed then.
 
+`/crew` and its commands (`/crew setup`, `/crew resume`, …) must open the message: Claude Code runs a slash command only then. When `/crew` appears later in a message, the lead does nothing with it and tells you how to send it again.
+
 **4. Pick the lead's model.** Run the main session on **Opus 5.5 at High effort** (`/model`). The lead's work is judgement: plans, routing, reviews, decisions. It hands the bulk work to cheaper models.
 
 **5. Tell the lead what you want.** Plain words are enough:

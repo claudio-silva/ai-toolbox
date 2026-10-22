@@ -1289,7 +1289,7 @@ read_hook_json() {
   local out
   J_SESSION=""; J_CWD=""; J_TOOL=""; J_AGENT_TYPE=""; J_AGENT_ID=""; J_SUBTYPE=""; J_DESC=""
   J_MODEL=""; J_EFFORT=""; J_NAME=""; J_ISO=""; J_TO=""; J_SUMMARY=""; J_MESSAGE=""; J_FILE=""
-  J_LAST=""; J_TRANSCRIPT=""; J_SOURCE=""; J_TRIGGER=""; J_HOOK_MODEL=""; J_EFFORT_LVL=""
+  J_LAST=""; J_TRANSCRIPT=""; J_SOURCE=""; J_TRIGGER=""; J_HOOK_MODEL=""; J_EFFORT_LVL=""; J_CREW_MID=""
   out=$(printf '%s' "$INPUT" | jq -r '
     def s: if . == null then "" elif type == "string" then . else tostring end;
     ((.tool_input | objects) // {}) as $t |
@@ -1313,7 +1313,12 @@ read_hook_json() {
     @sh "J_SUMMARY=\($t.summary | s)",
     @sh "J_MESSAGE=\($t.message | s)",
     @sh "J_FILE=\($t.file_path | s)",
-    @sh "J_LAST=\(.last_assistant_message | s | split("\n")[0:5] | join("\n"))"
+    @sh "J_LAST=\(.last_assistant_message | s | split("\n")[0:5] | join("\n"))",
+    # A prompt with /crew in it, not at its start (code spans aside): the skill did not run.
+    # Messages that open with /crew, a tag (another agent'"'"'s, a command'"'"'s) or the dashboard'"'"'s own
+    # wording do not count.
+    @sh "J_CREW_MID=\(.prompt | s | if test("^\\s*(/crew|<|The founder, from the Crew dashboard:|From the founder, via the Crew dashboard:)") then ""
+      elif gsub("```[\\s\\S]*?```|`[^`\\n]*`"; "") | test("(^|[^\\w/.~-])/crew(?![\\w/-])") then "1" else "" end)"
   ' 2>/dev/null) || return 1
   [ -n "$out" ] || return 1
   eval "$out"
@@ -1502,8 +1507,14 @@ hook_superseded() {
   safe_name "$J_SESSION"
   [ -f "$STATE/superseded/$REPLY" ] && [ ! -e "$STATE/sessions/$REPLY" ] || return 1
   read -r by hm _ 2>/dev/null < "$STATE/superseded/$REPLY"
-  printf '%s\n' "Crew: this session is no longer the crew's lead: session ${by:-another} took over this checkout at ${hm:-?}. Do no crew work here (no subagents, crew files or commits for the task set). If the founder asks for crew work, tell them. If they ask for the lead back (a /crew anywhere in their message counts: it runs as a command only at the start of a message), run .crew/bin/crew session start $J_SESSION now: it offers the take-over."
+  printf '%s\n' "Crew: this session is no longer the crew's lead: session ${by:-another} took over this checkout at ${hm:-?}. Do no crew work here (no subagents, crew files or commits for the task set). If the founder asks for crew work, tell them; /crew here, at the start of a message, asks to take the lead back."
   return 0
+}
+
+# UserPromptSubmit with /crew in the middle of the prompt: Claude Code runs a slash command only
+# when it opens the message, so the skill did not run. The lead does nothing else this turn.
+hook_crew_mid() {
+  printf '%s\n' "Crew: this message has /crew in it, but not at its start, so the crew skill did not run: Claude Code runs a slash command only when it opens the message. Do not act on the message this turn (no tools, no crew work, no skill call). Reply only to tell the founder in one or two lines: send it again with /crew (or /crew setup, /crew resume, …) as the very first thing in the message, then the rest."
 }
 
 # SessionStart startup|resume|clear|fork: remember the lead's model (and effort when given) for
@@ -1576,6 +1587,7 @@ run_hook() {
   fi
   read_hook_json || return 0
   if [ "$mode" = session-start ]; then hook_session_start; return 0; fi
+  if [ "$mode" = lead-busy ] && [ -n "$J_CREW_MID" ] && [ -z "$J_AGENT_TYPE" ]; then hook_crew_mid; return 0; fi
   if [ "$mode" = lead-busy ] && [ -z "$J_AGENT_TYPE" ]; then hook_superseded && return 0; fi
   # Guard 2: a registered crew session (or the wildcard).
   session_registered "$J_SESSION" || return 0

@@ -443,6 +443,13 @@ check "take-over: journaled" "Took over the lead of this checkout from session $
 [ -e "$S/superseded/$SID" ] && ok "take-over: the old lead is superseded" || ko "take-over: the old lead is superseded" "no superseded/$SID"
 out=$(hook lead-busy "{$J_BASE,\"prompt\":\"carry on\"}")
 check "superseded lead: told at its next prompt" "no longer the crew's lead" "$out"
+# /crew runs only when it opens the message: elsewhere the skill did not run, and the lead says so.
+out=$(hook lead-busy "{$J_BASE,\"prompt\":\"O skill foi actualizado: /crew\\nfaz isto\"}")
+check "/crew mid-message: the lead only tells the founder how to run it" "but not at its start" "$out"
+for pr in '/crew setup' 'corri `/crew setup` e falhou' 'corre .crew/bin/crew status' 'The founder, from the Crew dashboard: run /crew resume now, as if they had typed it.'; do
+  out=$(hook lead-busy "$(jq -nc --arg p "$pr" --arg s "$SID" --arg t "$MAIN" --arg c "$P" '{session_id:$s,transcript_path:$t,cwd:$c,hook_event_name:"x",prompt:$p}')")
+  case $out in *"not at its start"*) ko "/crew mid-message: not for: $pr" "$out" ;; *) ok "/crew mid-message: not for: $pr" ;; esac
+done
 nj=$(grep -c 'Took over' "$P/.crew/journal.md")
 out=$(CREW_CLAUDE_PID=$C2 "$CREW" session start sess-0003); rc=$?
 [ "$rc" -eq 0 ] && ok "/clear (same Claude Code, new session): no conflict" || ko "/clear (same Claude Code, new session): no conflict" "rc=$rc $out"

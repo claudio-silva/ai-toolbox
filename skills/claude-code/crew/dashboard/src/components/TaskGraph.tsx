@@ -271,6 +271,16 @@ export function TaskGraph({ tasks, agents, current, criticalPath, onPick, zoomed
 
 const MAX_ZOOM = 4
 
+// Fit to the window: | < > |, arrows out to the edges (lucide's look; its icons for this read as
+// full screen).
+function FitIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 5v14M21 5v14M9.5 8.5 6 12l3.5 3.5M14.5 8.5 18 12l-3.5 3.5" />
+    </svg>
+  )
+}
+
 // The graph in a window of its own: it opens fitted, as large as the window allows; the wheel (or a
 // pinch) zooms where the pointer is, a drag moves it, the buttons zoom, fit and close.
 function ZoomView({ g, width, running, current, onPick }: {
@@ -396,7 +406,7 @@ function ZoomView({ g, width, running, current, onPick }: {
           <button className={btn} onClick={() => zoomMid(1 / 1.25)} title="Zoom out (−)" aria-label="Zoom out"><Minus className="size-4" /></button>
           <span className="tabular w-11 text-center text-xs text-muted-foreground">{view ? `${Math.round(view.k * 100)}%` : ''}</span>
           <button className={btn} onClick={() => zoomMid(1.25)} title="Zoom in (+)" aria-label="Zoom in"><Plus className="size-4" /></button>
-          <button className={cn(btn, 'w-auto px-2 text-xs font-medium')} onClick={fit} title="Fit the graph to the window (0)">Fit</button>
+          <button className={btn} onClick={fit} title="Fit the graph to the window (0)" aria-label="Fit the graph to the window"><FitIcon /></button>
           <DialogPrimitive.Close className={btn} title="Back (Esc)" aria-label="Close"><X className="size-4" /></DialogPrimitive.Close>
         </div>
       </div>

@@ -6,7 +6,7 @@ import type { ReactNode } from 'react'
 import { Bot, ChevronDown, Crown, LoaderCircle } from 'lucide-react'
 import type { Agent, LeadInfo, PastAgent, State } from '@/lib/types'
 import { useClockBase } from '@/lib/clock'
-import { contextOf, LEAD_STATE, leadBlocker, leadKey, leadName, leadOfKey, modelName, useTranscript } from '@/lib/lead'
+import { contextOf, LEAD_STATE, leadBlocker, leadKey, leadName, leadOfKey, modelName, shownAgent, useTranscript } from '@/lib/lead'
 import { modelShort, when } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Chip, Mono } from '@/components/bits'
@@ -203,11 +203,7 @@ function PaneHead({ state, sel, pick, onTask }: { state: State; sel: string; pic
 }
 
 export function Agents({ state, sel, pick, onTask }: { state: State; sel: string; pick: (id: string) => void; onTask: (id: string) => void }) {
-  // A lead that is gone, an agent no longer listed, or 'lead' from an older page: the first lead.
-  const first = state.roster.lead
-  const selLead = leadOfKey(state, sel)
-  const known = (selLead && sel !== 'lead') || state.agents.some((a) => a.id === sel) || state.roster.past.some((a) => a.id === sel)
-  const id = known ? sel : first ? leadKey(first) : 'lead'
+  const id = shownAgent(state, sel)
   const lead = leadOfKey(state, id)
   const isLead = id === 'lead' || id.startsWith('lead:')
   const { entries, status, more, earlier } = useTranscript(id, '')

@@ -1,5 +1,5 @@
 // A toast for every new journal line (an agent started or finished, a lead action, a system
-// note), under the header for 10 seconds; several stack downwards, newest first. Lines
+// note), at the top of the window for 10 seconds; several stack downwards, newest first. Lines
 // already in the journal when the page loads are not toasted. A lead waiting for the founder
 // gets one that stays (WaitingToasts).
 
@@ -63,9 +63,10 @@ function WaitingToast({ l, many, onOpen, onClose }: { l: LeadInfo; many: boolean
 const CLOSED_KEY = 'crew-dashboard:waiting-closed'
 
 // A toast for each lead waiting for the founder, until they close it, open the lead's
-// conversation from it, or the lead stops waiting. A closed one comes back only when that lead
-// waits again (a new `since`); the page remembers it across reloads.
-export function WaitingToasts({ state, onLead }: { state: State | null; onLead: (session: string) => void }) {
+// conversation from it (or have it open: `viewing`), or the lead stops waiting. A closed one
+// comes back only when that lead waits again (a new `since`); the page remembers it across
+// reloads.
+export function WaitingToasts({ state, viewing, onLead }: { state: State | null; viewing: string | null; onLead: (session: string) => void }) {
   const shown = useRef(new Set<string>())
   const closed = useRef<Set<string> | null>(null)
   const open = useRef(onLead)
@@ -84,6 +85,11 @@ export function WaitingToasts({ state, onLead }: { state: State | null; onLead: 
       if (l.state.state !== 'waiting') continue
       const id = `waiting:${l.session}:${l.state.sinceEpoch ?? ''}`
       now.add(id)
+      if (l.session === viewing) {
+        done.add(id)
+        if (shown.current.has(id)) toast.dismiss(id)
+        continue
+      }
       if (shown.current.has(id) || done.has(id)) continue
       shown.current.add(id)
       const close = () => toast.dismiss(id)
@@ -97,7 +103,7 @@ export function WaitingToasts({ state, onLead }: { state: State | null; onLead: 
     for (const id of [...shown.current]) if (!now.has(id)) toast.dismiss(id)
     for (const id of [...done]) if (!now.has(id)) done.delete(id)
     save()
-  }, [state])
+  }, [state, viewing])
 
   return null
 }
@@ -137,9 +143,8 @@ export function EventToasts({ state, dark, goTab }: { state: State | null; dark:
       expand
       visibleToasts={AT_ONCE + 1}
       theme={dark ? 'dark' : 'light'}
-      // Just under the header, so the tabs and the set switcher stay in reach.
-      offset={{ top: 'calc(var(--header-h, 0px) + 8px)' }}
-      mobileOffset={{ top: 'calc(var(--header-h, 0px) + 8px)', left: 12, right: 12 }}
+      offset={{ top: 10 }}
+      mobileOffset={{ top: 10, left: 12, right: 12 }}
       gap={6}
       toastOptions={{ unstyled: true, className: 'flex justify-center w-full' }}
     />

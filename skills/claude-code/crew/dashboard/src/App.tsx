@@ -7,6 +7,7 @@ import { TaskSheet } from '@/components/TaskSheet'
 import { DocSheet, type Doc } from '@/components/DocSheet'
 import { EventToasts, WaitingToasts } from '@/components/EventToasts'
 import { viewOf } from '@/lib/sets'
+import { leadOfKey, shownAgent } from '@/lib/lead'
 import { ClockBase } from '@/lib/clock'
 import { capital } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -140,7 +141,11 @@ export default function App() {
         {view && <TaskSheet state={view} taskId={taskId} onClose={() => setTaskId(null)} />}
         <DocSheet doc={doc} version={state?.generatedAt} onClose={() => setDoc(null)} />
         <EventToasts state={state} dark={dark} goTab={setTab} />
-        <WaitingToasts state={state} onLead={(session) => openAgent(`lead:${session}`)} />
+        <WaitingToasts
+          state={state}
+          viewing={tab === 'agents' && view ? leadOfKey(view, shownAgent(view, agent))?.session ?? null : null}
+          onLead={(session) => openAgent(`lead:${session}`)}
+        />
       </div>
     </ClockBase.Provider>
   )

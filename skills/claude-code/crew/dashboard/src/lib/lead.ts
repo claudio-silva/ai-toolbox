@@ -45,6 +45,13 @@ export function leadOfKey(s: State, key: string): LeadInfo | null {
   return s.roster.leads.find((l) => l.session === key.slice(5)) ?? null
 }
 
+// The agent the Agents tab shows for the key picked: a lead that is gone, an agent no longer
+// listed, or 'lead' from an older page give the first lead.
+export function shownAgent(s: State, sel: string): string {
+  const known = (leadOfKey(s, sel) && sel !== 'lead') || s.agents.some((a) => a.id === sel) || s.roster.past.some((a) => a.id === sel)
+  return known ? sel : s.roster.lead ? leadKey(s.roster.lead) : 'lead'
+}
+
 // What to call a lead when there are several: its task set, else its checkout.
 export function leadName(s: State, l: LeadInfo): string {
   if (s.roster.leads.length < 2) return 'Lead'

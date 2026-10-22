@@ -196,7 +196,7 @@ A live page for following the crew, in a browser tab, a Paseo side panel or on y
 | --- | --- |
 | **Overview** | The set's progress, the task in hand, the lead's state and its Stop, Resume and Setup buttons, running agents, questions waiting for you, requests, defects, the crew's time at work, and recent activity |
 | **Agents** | Each lead with its running subagents, then the finished ones, each with its conversation as it happens: what it was asked, what it said, its tool calls and their results. You can write to the lead from here, attach files, and see its model, effort and how full its context is |
-| **Tasks** | The dependency graph with the critical path highlighted; each task opens its spec, its agent runs and its screenshots |
+| **Tasks** | The dependency graph, one wave per row (the tasks that can run at once), with the critical path highlighted; each task opens its spec, its agent runs and its screenshots |
 | **Timing** | Where the time went (agents, the lead alone, idle, asleep), a zoomable timeline of every agent run, build, review and rework per task, and time by role |
 | **Requests** | Your open questions first, then your requests grouped by when they're due (now, after a task, at the end of the set), then the closed ones: done and dropped |
 | **Defects** | Minor issues logged for later, when each is due, and a legend for every label; each one opens its details, the tasks it touches and what the journal says about it |

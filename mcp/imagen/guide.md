@@ -96,10 +96,14 @@ Set `outputFormat=gif` on either tool, then optionally:
 
 ### SVG
 
-- `generate_image` only — **SVG edits are not supported** by the API. Produce the vector once, or edit a raster and re-generate.
+- `generate_image` only — **SVG edits are not supported** by the API, and an SVG is not accepted as a raster input to an edit. Produce the vector once, or edit a raster and re-generate.
 - Requires `outputFormat=svg` and `n=1`; `outputCompression` is not supported. `background=transparent` is.
-- `svgReasoningEffort` (`none` … `max`) tunes how much the model reasons about the vector output.
-- Best for flat, vector-friendly work: logos, icons, marks, simple illustrations.
+- **`svgModel` is required on accounts with SVG model selection enabled.** It names the model that *authors* the SVG, which is separate from `model` (the image model only renders a reference image that the author model traces). Without it the API returns `missing_required_parameter: SVG generation requires 'svg.model'`. On accounts where model selection is disabled, omit it — the server then sends no `svg` object at all.
+- The valid `svgModel` values are not published in the API docs; they depend on your account's model access.
+- `svgReasoningEffort` (`none` … `max`) tunes the author model's reasoning; supported levels depend on that model.
+- `quality` and `complexity` apply to the **reference image**, not to the vector itself.
+- Billing is split: the image model's rate for the reference image, plus the author model's rate for the SVG tokens (reported separately as `svg_usage`).
+- Best for flat, vector-friendly work: logos, icons, marks, simple illustrations. The returned document is static vector content — no scripts, external resources or embedded rasters.
 
 ### Not supported on GPT Image 2.6
 

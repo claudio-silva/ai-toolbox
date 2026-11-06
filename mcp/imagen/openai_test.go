@@ -146,7 +146,7 @@ func TestGenerateGIFAndSVGRequestShape(t *testing.T) {
 
 	if _, err := c.generate(context.Background(), genParams{
 		Model: "gpt-image-2.6-flare", Prompt: "a logo", OutputFormat: "svg", N: 1,
-		SVG: &svgOptions{Reasoning: &svgReasoning{Effort: "high"}},
+		SVG: &svgOptions{Model: "svg-author-model", Reasoning: &svgReasoning{Effort: "high"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +156,9 @@ func TestGenerateGIFAndSVGRequestShape(t *testing.T) {
 	}
 	if svg["reasoning"].(map[string]any)["effort"] != "high" {
 		t.Fatalf("svg.reasoning.effort = %v", svg["reasoning"])
+	}
+	if svg["model"] != "svg-author-model" {
+		t.Fatalf("svg.model = %v", svg["model"])
 	}
 }
 
@@ -269,6 +272,7 @@ func TestCommonArgsValidation(t *testing.T) {
 		{"svg on edits", map[string]any{"outputPath": abs, "outputFormat": "svg"}, true},
 		{"svg with n>1", map[string]any{"outputPath": abs, "outputFormat": "svg", "n": 2.0}, false},
 		{"svg effort without svg", map[string]any{"outputPath": abs, "svgReasoningEffort": "high"}, false},
+		{"svgModel without svg", map[string]any{"outputPath": abs, "svgModel": "some-model"}, false},
 		{"frameCount without gif", map[string]any{"outputPath": abs, "frameCount": 9.0}, false},
 		{"frameDurationMs without gif", map[string]any{"outputPath": abs, "frameDurationMs": 200.0}, false},
 		{"frameCount out of range", map[string]any{"outputPath": abs, "outputFormat": "gif", "frameCount": 17.0}, false},
@@ -300,10 +304,18 @@ func TestCommonArgsValidation(t *testing.T) {
 	// Transparent SVG and GIF frame controls are accepted.
 	p, _, _, err = h.commonArgs(reqWith(map[string]any{
 		"outputPath": abs, "outputFormat": "svg", "background": "transparent",
-		"svgReasoningEffort": "high",
+		"svgReasoningEffort": "high", "svgModel": "svg-author-model",
 	}), false)
-	if err != nil || p.SVG.Reasoning.Effort != "high" {
+	if err != nil || p.SVG.Reasoning.Effort != "high" || p.SVG.Model != "svg-author-model" {
 		t.Fatalf("svg args: %+v %v", p, err)
+	}
+
+	// Accounts with SVG model selection disabled must send no svg object at all.
+	p, _, _, err = h.commonArgs(reqWith(map[string]any{
+		"outputPath": abs, "outputFormat": "svg",
+	}), false)
+	if err != nil || p.SVG != nil {
+		t.Fatalf("svg object should be omitted when unset: %+v %v", p.SVG, err)
 	}
 	p, _, _, err = h.commonArgs(reqWith(map[string]any{
 		"outputPath": abs, "outputFormat": "gif", "frameCount": 16.0, "frameDurationMs": 2000.0,

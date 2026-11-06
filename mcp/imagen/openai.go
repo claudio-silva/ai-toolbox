@@ -50,7 +50,12 @@ type svgReasoning struct {
 }
 
 // svgOptions is the generations-only `svg` parameter (output_format=svg).
+// Model selects the SVG *author* model, which is separate from the top-level
+// image model (that one only renders the reference image). The API requires
+// it on accounts where SVG model selection is enabled, and requires the whole
+// object to be omitted on accounts where it is disabled.
 type svgOptions struct {
+	Model     string        `json:"model,omitempty"`
 	Reasoning *svgReasoning `json:"reasoning,omitempty"`
 }
 

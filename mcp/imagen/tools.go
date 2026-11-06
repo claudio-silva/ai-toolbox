@@ -113,10 +113,14 @@ func imageOptions(defaultModel string, isEdit bool) []mcp.ToolOption {
 		),
 	}
 	if !isEdit {
-		opts = append(opts, mcp.WithString("svgReasoningEffort",
-			mcp.Enum("none", "minimal", "low", "medium", "high", "xhigh", "max"),
-			mcp.Description("reasoning effort for SVG generation; only valid with outputFormat=svg"),
-		))
+		opts = append(opts,
+			mcp.WithString("svgModel",
+				mcp.Description("model that authors the SVG, separate from the image model (which only renders the reference image). Required with outputFormat=svg on accounts with SVG model selection enabled; omit it where it is disabled. Only valid with outputFormat=svg"),
+			),
+			mcp.WithString("svgReasoningEffort",
+				mcp.Enum("none", "minimal", "low", "medium", "high", "xhigh", "max"),
+				mcp.Description("reasoning effort for the SVG author model; supported levels depend on that model. Only valid with outputFormat=svg"),
+			))
 	}
 	return opts
 }
@@ -237,15 +241,26 @@ func (h *handlers) commonArgs(req mcp.CallToolRequest, isEdit bool) (genParams, 
 
 	// SVG generation constraints.
 	effort := req.GetString("svgReasoningEffort", "")
+	svgModel := req.GetString("svgModel", "")
 	if p.OutputFormat == "svg" {
 		if p.N != 1 {
 			return fail("outputFormat=svg requires n=1, got %d", p.N)
 		}
-		if effort != "" {
-			p.SVG = &svgOptions{Reasoning: &svgReasoning{Effort: effort}}
+		// The svg object is only sent when something is set: accounts with SVG
+		// model selection disabled must omit it entirely.
+		if svgModel != "" || effort != "" {
+			p.SVG = &svgOptions{Model: svgModel}
+			if effort != "" {
+				p.SVG.Reasoning = &svgReasoning{Effort: effort}
+			}
 		}
-	} else if effort != "" {
-		return fail("svgReasoningEffort requires outputFormat=svg, got %q", p.OutputFormat)
+	} else {
+		if effort != "" {
+			return fail("svgReasoningEffort requires outputFormat=svg, got %q", p.OutputFormat)
+		}
+		if svgModel != "" {
+			return fail("svgModel requires outputFormat=svg, got %q", p.OutputFormat)
+		}
 	}
 
 	return p, out, req.GetBool("returnInlineImage", false), nil

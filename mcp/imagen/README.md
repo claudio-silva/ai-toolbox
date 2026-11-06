@@ -10,7 +10,7 @@ Written in Go — one direct dependency ([mark3labs/mcp-go](https://github.com/m
 - **`edit_image`** — edit existing images; inputs can be local files, `https://` URLs, `data:` URIs, or OpenAI `file_id:` refs; optional `mask` or **`markup`** overlay for precise localized edits
 - **`upload_reference_image`** — upload a reference image once to the Files API and reuse it by `file_id:` across many calls
 - **`get_usage_guide`** — embedded usage + prompting guide, also delivered automatically at `initialize` via the MCP `instructions` field, so the server is self-sufficient for LLM callers
-- Full GPT Image 2.6 parameter surface: `size` (presets or custom `WxH`), `quality` (`auto` → `max`), `complexity` (`low`/`medium`/`high`), `background` (incl. `transparent`), `outputFormat` (`png`/`jpeg`/`webp`/`gif`/`svg`), `outputCompression`, `frameCount`, `frameDurationMs`, `svgReasoningEffort`, `moderation`, `n`
+- Full GPT Image 2.6 parameter surface: `size` (presets or custom `WxH`), `quality` (`auto` → `max`), `complexity` (`low`/`medium`/`high`), `background` (incl. `transparent`), `outputFormat` (`png`/`jpeg`/`webp`/`gif`/`svg`), `outputCompression`, `frameCount`, `frameDurationMs`, `svgModel`, `svgReasoningEffort`, `moderation`, `n`
 - Request-shape validation before the call, so malformed combinations fail free rather than billed
 - Images written to disk; optionally returned inline as MCP image content
 
@@ -88,6 +88,7 @@ MCP client config (Claude Desktop `claude_desktop_config.json`, Cursor `.cursor/
 | `outputCompression` | | 0–100, jpeg/webp only |
 | `frameCount` | | 2–16 (API default 9), gif only |
 | `frameDurationMs` | | 20–2000 (API default 200), gif only |
+| `svgModel` | | Model that authors the SVG (separate from the image model); required on accounts with SVG model selection enabled, svg only |
 | `svgReasoningEffort` | | `none`…`max`, svg only |
 | `moderation` | | `auto`, `low` |
 | `n` | | 1–10; `n>1` writes `name-1.ext … name-N.ext`; svg requires `n=1` |
@@ -95,7 +96,7 @@ MCP client config (Claude Desktop `claude_desktop_config.json`, Cursor `.cursor/
 
 ### `edit_image`
 
-Same parameters (minus `svgReasoningEffort`; `svg` output is not supported on edits), plus:
+Same parameters (minus `svgModel`/`svgReasoningEffort`; `svg` output is not supported on edits), plus:
 
 | Param | Required | Notes |
 | --- | --- | --- |

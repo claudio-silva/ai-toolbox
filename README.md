@@ -1,108 +1,136 @@
 # ai-toolbox
 
-Skills and MCP servers for AI coding agents — an [aitools](https://github.com/claudio-silva/ai-tools) toolbox for Codex, Cursor, Claude Code, and Devin.
+A hand-picked set of skills and MCP servers that make AI coding agents more capable, more economical and more reliable. Works with **Claude Code, Codex, Cursor and Devin**.
 
-## Install
+Every tool here exists because I needed it in real work. Each one is small, focused and installs with a single command.
 
-The recommended way to install these tools is [`aitools`](https://github.com/claudio-silva/ai-tools), the tool manager for AI coding agents. Install it (macOS) with:
+## What you get
+
+- **Creative and media work.** Generate and edit images, remove backgrounds and drive design apps, all from the conversation.
+- **Browser automation.** Give your agent a real browser to test your app end to end or to inspect and debug live pages.
+- **Multi-agent work and cost control.** Delegate to subagents and remote machines, and keep each task on the cheapest model that can handle it.
+- **Prompt engineering.** Building and optimizing prompts and skills for agents and subagents.
+- **Platform know-how.** Tested guides to the parts of agent platforms the official docs leave vague or wrong.
+- **Toolbox management.** Turn your own hand-made skills into versioned tools that install and update like the rest.
+
+## Quick start
+
+### Installation with AI-Tools
+
+This toolbox is designed to work seamlessly with my AI-Tools manager, which manages skills and MCP servers for the most popular agents (Claude Code, Codex, Cursor, and more).
+
+You only need to install [`aitools`](https://github.com/claudio-silva/ai-tools) (macOS) once; the CLI tool manager will be available thereafter:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/claudio-silva/ai-tools/main/install.sh | sh
 ```
 
-Then:
+Then point it at this toolbox and pick what you want:
 
 ```sh
-aitools use @gh/claudio-silva/ai-toolbox     # make this repo your default source
-aitools list                                 # browse the toolbox
-aitools install --all                        # install everything
+aitools use @gh/claudio-silva/ai-toolbox     # make this toolbox your default source
+aitools list                                 # browse everything
 aitools install imagen                       # install one tool
-aitools install removebg-cli -p cursor       # install for one platform only
+aitools install --all                        # or install everything
+aitools install removebg-cli -p cursor       # install for a single platform
 ```
 
-Or keep no default and name the repo per command:
+Day to day: `aitools update` brings installed tools up to date, `aitools installed` shows what you have, and `aitools about <tool>` explains any one of them.
 
-```sh
-aitools install @gh/claudio-silva/ai-toolbox removebg-cli
-aitools list @gh/claudio-silva/ai-toolbox
-```
+### Installation with Vercel's "Skills"
 
-Manage what's installed:
-
-```sh
-aitools installed            # what's installed, per platform and scope
-aitools update               # reinstall tools whose repo copy is newer
-aitools pull                 # refresh the cached snapshot of this repo
-aitools uninstall removebg-cli
-aitools about imagen
-```
-
-### With `npx skills`
-
-The skills also install with the [`skills`](https://github.com/vercel-labs/skills) CLI:
+Prefer not to install my manager? You can also use the popular [`npx skills`](https://github.com/vercel-labs/skills) CLI:
 
 ```sh
 npx skills add claudio-silva/ai-toolbox --list
 npx skills add claudio-silva/ai-toolbox --skill lite-chrome-automation
 ```
 
-What it does differently:
+**It has some limitations, though:** it ignores platform limits (choose your agent with `-a`), and it can't install MCP servers. Two Codex skills, `auto-routing` and `codex-remote`, set up their agent roles on first use and ask you to restart Codex.
 
-- It doesn't read `aitools.json`, so the platform column below isn't enforced. Pick agents with `-a` (e.g. `-a codex` for the Codex skills).
-- It copies each skill directory whole, including READMEs and files aitools leaves out.
-- `auto-routing` and `codex-remote` need agent roles in `$CODEX_HOME/agents`. The `skills` CLI leaves them inside the skill directory; on first use each skill places its roles and asks you to restart Codex.
-- MCP servers (`imagen`) are not skills; install them with aitools.
+---
 
-## MCP servers
+## MCP SERVERS
 
-| Project | Description |
-| --- | --- |
-| [imagen](mcp/imagen/) | Lightweight Go MCP server (stdio) for OpenAI **gpt-image-2.5** image generation and editing — `generate_image`, `edit_image`, embedded prompting guide; single static binary |
+---
 
-Installing `imagen` copies its shipped binary and writes the server into each platform's MCP config. Tool calls need `OPENAI_API_KEY`; install fills it from the environment, or prompts for it. Pass `--raw` to leave the `$OPENAI_API_KEY` placeholder. Restart the MCP client after installing.
+### imagen: image generation and editing for your agent
 
-## Skills
+[`imagen`](mcp/imagen/) is an MCP server that gives your agent access to OpenAI's **GPT Image 2.6**. It is a single small binary with nothing else to install, and it needs only an `OPENAI_API_KEY`.
 
-Each skill is a directory with a `SKILL.md`: under `skills/<name>/` when it works across platforms, under `skills/<platform>/<name>/` when it only serves one. An optional `aitools.json` next to it limits platforms, places extra files, or leaves files out. To add one, see [CONTRIBUTING.md](CONTRIBUTING.md).
+GPT Image 2.6 brings capabilities `imagen` exposes in full:
 
-| Skill | Platforms | Description |
-| --- | --- | --- |
-| [affinity-sdk](skills/affinity-sdk/) | all | Verified operating procedure for the official Affinity by Canva MCP |
-| [auto-routing](skills/codex/auto-routing/) | codex | Cost-aware delegation: routes work to the cheapest pinned `te_*` worker role; ships 9 role definitions |
-| [codex-remote](skills/codex/codex-remote/) | codex | Delegate bounded tasks to Codex on SSH servers via a local Luna/low relay subagent; durable job IDs, observe or dispatch-only |
-| [cua-browser-automation](skills/cua-browser-automation/) | all | Real-browser E2E testing via the `browse` wrapper over `cua-driver` — snapshot → act → verify, parallel contexts, evidence capture |
-| [cursor-plugin-development](skills/cursor/cursor-plugin-development/) | cursor | Verified guide to Cursor plugins: commands, skills, subagents, hooks — including undocumented gotchas |
-| [lite-chrome-automation](skills/lite-chrome-automation/) | all | Lightweight CDP control of dedicated Chrome instances — MAIN-world JS eval, cookies, screenshots, extension debugging |
-| [removebg-cli](skills/removebg-cli/) | all | remove.bg background removal via CLI/API with credit-aware defaults and mandatory validation |
-| [who-am-i](skills/codex/who-am-i/) | codex | Report the agent's real runtime model/effort/thread from read-only local evidence (self-contained script) |
-| [working-with-codex-subagents](skills/codex/working-with-codex-subagents/) | codex | Verified guide to Codex subagent discovery, `spawn_agent` binding, and model/effort resolution |
-| [working-with-cursor-subagents](skills/cursor/working-with-cursor-subagents/) | cursor | Verified Task-tool/model-resolution behavior for Cursor subagents |
-
-"All" is Cursor, Codex, Claude Code, and Devin. Skills may carry metadata for one environment (e.g. `agents/openai.yaml` for Codex) that the others ignore.
-
-## Layout
-
-```
-aitools.json              # repo-wide: leave each skill's README.md out of installs
-skills/
-  <name>/                 # cross-platform skills
-  codex/<name>/           # Codex-only skills
-  cursor/<name>/          # Cursor-only skills
-  claude-code/<name>/     # Claude Code-only skills
-mcp/<name>/               # MCP server: aitools.json, optional bin/<name> and payload files
-```
-
-Folders are organization only. The supported platforms come from each skill's `aitools.json`, which is what aitools enforces. aitools and `npx skills` find skills by their `SKILL.md`, and aitools finds MCP servers by their `aitools.json`. The format is specified in [ai-tools/ABOUT.md](https://github.com/claudio-silva/ai-tools/blob/main/ABOUT.md).
-
-## Developing imagen
+- **Two models for two jobs.** `sunburst` for detail, text accuracy and precise edits; `flare` when speed matters more. Both cost the same, and the built-in guide teaches your agent to pick well and never quietly downgrade production work.
+- **Animated GIFs.** Ask for a looping animation, with control over frame count and speed.
+- **SVG output.** Generate logos, icons and flat illustrations as real vector files, with transparent backgrounds.
+- **Markup-guided edits.** Circle the part of an image you want changed and say what to do; no mask painting needed.
+- **Quality and complexity as separate dials.** Tune how much detail is rendered independently of how much the model plans, up to `max` quality.
+- **Reference images.** Upload a brand asset or subject once and reuse it across many edits, with up to 16 inputs per edit.
+- **Flexible output.** Custom sizes up to 3840 pixels per edge, transparent backgrounds, PNG, JPEG, WebP, GIF and SVG.
+- **Fail-free mistakes.** Invalid parameter combinations are rejected before the call, so they are never billed.
 
 ```sh
-cd mcp/imagen
-make build      # mcp/imagen/bin/imagen
+aitools install imagen
 ```
+
+Details and parameters are in the [imagen README](mcp/imagen/README.md).
+
+---
+
+## SKILLS
+
+---
+
+Names link to each skill's own page. "All" means Claude Code, Codex, Cursor and Devin.
+
+### Managing your toolbox
+
+| Skill | Platforms | What it does for you |
+| --- | --- | --- |
+| [save-skill](skills/claude-code/save-skill/) | claude-code | Turns a skill you wrote by hand into a versioned, installable part of your own toolbox |
+
+### Browser and design
+
+| Skill | Platforms | What it does for you |
+| --- | --- | --- |
+| [cua-browser-automation](skills/cua-browser-automation/) | all | Real-browser end-to-end testing: snapshot, act, verify, with parallel sessions and saved evidence |
+| [lite-chrome-automation](skills/lite-chrome-automation/) | all | Lightweight control of a dedicated Chrome: run JavaScript in the page, set cookies, take screenshots, debug extensions |
+| [affinity-sdk](skills/affinity-sdk/) | all | A tested playbook for driving the official Affinity by Canva MCP |
+| [removebg-cli](skills/removebg-cli/) | all | Background removal through remove.bg, with credit-saving defaults and a validation check on every result |
+
+### Cost-aware delegation (Codex)
+
+| Skill | Platforms | What it does for you |
+| --- | --- | --- |
+| [auto-routing](skills/codex/auto-routing/) | codex | Sends each piece of work to the cheapest suitable worker role; ships nine ready-made roles |
+| [codex-remote](skills/codex/codex-remote/) | codex | Hand bounded tasks to Codex on your SSH servers, with durable job IDs you can check later |
+| [who-am-i](skills/codex/who-am-i/) | codex | Reports the model, effort and thread the agent is really running on, from local evidence |
+
+### Prompts and agent building
+
+| Skill | Platforms | What it does for you |
+| --- | --- | --- |
+| [ultracompact-prompt](skills/claude-code/ultracompact-prompt/) | claude-code | Shrinks a rules-style prompt to the fewest words that behave the same, verified with scored A/B runs |
+| [working-with-codex-subagents](skills/codex/working-with-codex-subagents/) | codex | How Codex subagents are discovered, spawned and assigned models, verified rather than guessed |
+| [working-with-cursor-subagents](skills/cursor/working-with-cursor-subagents/) | cursor | The same for Cursor: how the Task tool resolves models for subagents |
+| [cursor-plugin-development](skills/cursor/cursor-plugin-development/) | cursor | Build Cursor plugins (commands, skills, subagents, hooks) with the undocumented gotchas included |
+
+## Make it your own
+
+This repository doubles as a template. [`aitools`](https://github.com/claudio-silva/ai-tools) can use any repository laid out this way as a toolbox, so you can fork it, or start your own and use `save-skill` to grow it. The conventions are in [CONTRIBUTING.md](CONTRIBUTING.md), and the file format is specified in [ai-tools/ABOUT.md](https://github.com/claudio-silva/ai-tools/blob/main/ABOUT.md).
+
+## Contributing
+
+This is my personal collection, so I'm not expecting anyone to contribute new tools. But pull requests that improve what is already here are welcome:
+
+- fixes for bugs or outdated instructions in a skill or in `imagen`;
+- corrections where a skill's guidance no longer matches how an agent platform behaves;
+- clearer documentation.
+
+If you're planning something larger, open an issue first so we can agree on it. For a tool of your own, a fork is the right home. See [CONTRIBUTING.md](CONTRIBUTING.md) for how a tool is structured.
 
 ## Author and license
 
 Created and maintained by **Cláudio Silva** ([@claudio-silva](https://github.com/claudio-silva)).
 
-Copyright © 2026 Cláudio Silva. Licensed under the [Apache License, Version 2.0](LICENSE). Some tools carry their own copy of the license, so they can be used on their own.
+Copyright © 2026 Cláudio Silva. Licensed under the [Apache License 2.0](LICENSE). Some tools carry their own copy of the license, so they can be used on their own.

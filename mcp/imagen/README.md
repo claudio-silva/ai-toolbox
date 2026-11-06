@@ -4,6 +4,19 @@ A lightweight [MCP](https://modelcontextprotocol.io) server for OpenAI **GPT Ima
 
 Written in Go — one direct dependency ([mark3labs/mcp-go](https://github.com/mark3labs/mcp-go)) plus a minimal `net/http` client for the OpenAI calls (no OpenAI SDK). Compiles to a fully self-contained ~8 MB static binary with no runtime dependencies.
 
+## What's new in GPT Image 2.6
+
+`imagen` was upgraded from GPT Image 2.5 to **2.6**, which adds:
+
+- **Two models**: `gpt-image-2.6-sunburst` (detail and edit fidelity) and `gpt-image-2.6-flare` (speed), at the same token price
+- **Animated GIF output** with `frameCount` and `frameDurationMs`
+- **SVG output** for logos, icons and flat illustrations (generation only), with `svgModel` and `svgReasoningEffort`
+- **Markup-guided edits**: circle the region to change on a transparent overlay instead of painting a mask
+- **`complexity`**: how much the model plans, tuned independently of `quality`
+- **Higher `quality` levels**: `xhigh` and `max`
+- **Reference uploads**: send an image once and reuse it by `file_id:` across calls
+- **Custom sizes** up to 3840 pixels per edge
+
 ## Features
 
 - **`generate_image`** — create images from text prompts (`gpt-image-2.6-sunburst` / `gpt-image-2.6-flare`), including animated GIF and SVG output

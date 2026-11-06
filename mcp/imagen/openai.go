@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 )
 
@@ -36,44 +37,84 @@ func (e *apiError) Error() string {
 }
 
 // imageRef is an input image for the edits endpoint: either an uploaded
-// File API ID or a URL (remote https URL or base64 data URL).
+// File API ID or a URL (remote https URL or base64 data URL). The API
+// requires exactly one of the two.
 type imageRef struct {
 	FileID   string `json:"file_id,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
 }
 
-// genParams mirrors POST /v1/images/generations (gpt-image-2.5 surface).
-type genParams struct {
-	Model             string `json:"model,omitempty"`
-	Prompt            string `json:"prompt"`
-	N                 int    `json:"n,omitempty"`
-	Size              string `json:"size,omitempty"`
-	Quality           string `json:"quality,omitempty"`
-	Background        string `json:"background,omitempty"`
-	OutputFormat      string `json:"output_format,omitempty"`
-	OutputCompression *int   `json:"output_compression,omitempty"`
-	Moderation        string `json:"moderation,omitempty"`
+// svgReasoning is the reasoning sub-object of the generations `svg` parameter.
+type svgReasoning struct {
+	Effort string `json:"effort,omitempty"`
 }
 
-// editParams mirrors POST /v1/images/edits.
+// svgOptions is the generations-only `svg` parameter (output_format=svg).
+type svgOptions struct {
+	Reasoning *svgReasoning `json:"reasoning,omitempty"`
+}
+
+// genParams mirrors POST /v1/images/generations (gpt-image-2.6 surface).
+type genParams struct {
+	Model             string      `json:"model,omitempty"`
+	Prompt            string      `json:"prompt"`
+	N                 int         `json:"n,omitempty"`
+	Size              string      `json:"size,omitempty"`
+	Quality           string      `json:"quality,omitempty"`
+	Complexity        string      `json:"complexity,omitempty"`
+	Background        string      `json:"background,omitempty"`
+	OutputFormat      string      `json:"output_format,omitempty"`
+	OutputCompression *int        `json:"output_compression,omitempty"`
+	Moderation        string      `json:"moderation,omitempty"`
+	FrameCount        *int        `json:"frame_count,omitempty"`
+	FrameDurationMS   *int        `json:"frame_duration_ms,omitempty"`
+	SVG               *svgOptions `json:"svg,omitempty"`
+}
+
+// editParams mirrors POST /v1/images/edits. `markup` is the GPT Image 2.5/2.6
+// markup-guided edit overlay; the API rejects it combined with `mask`.
 type editParams struct {
 	genParams
 	Images []imageRef `json:"images"`
 	Mask   *imageRef  `json:"mask,omitempty"`
+	Markup *imageRef  `json:"markup,omitempty"`
+}
+
+type tokenDetails struct {
+	ImageTokens int `json:"image_tokens"`
+	TextTokens  int `json:"text_tokens"`
+}
+
+type usage struct {
+	InputTokens         int           `json:"input_tokens"`
+	OutputTokens        int           `json:"output_tokens"`
+	TotalTokens         int           `json:"total_tokens"`
+	InputTokensDetails  *tokenDetails `json:"input_tokens_details"`
+	OutputTokensDetails *tokenDetails `json:"output_tokens_details"`
+}
+
+// svgUsage is reported in addition to `usage` when output_format=svg.
+type svgUsage struct {
+	Model           string `json:"model"`
+	InputTokens     int    `json:"input_tokens"`
+	OutputTokens    int    `json:"output_tokens"`
+	ReasoningTokens int    `json:"reasoning_tokens"`
+	TotalTokens     int    `json:"total_tokens"`
 }
 
 type imagesResponse struct {
-	Created int64 `json:"created"`
-	Data    []struct {
+	Created      int64  `json:"created"`
+	Background   string `json:"background"`
+	OutputFormat string `json:"output_format"`
+	Quality      string `json:"quality"`
+	Size         string `json:"size"`
+	Data         []struct {
 		B64JSON       string `json:"b64_json"`
 		RevisedPrompt string `json:"revised_prompt"`
 		URL           string `json:"url"`
 	} `json:"data"`
-	Usage *struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-		TotalTokens  int `json:"total_tokens"`
-	} `json:"usage"`
+	Usage    *usage    `json:"usage"`
+	SVGUsage *svgUsage `json:"svg_usage"`
 }
 
 type client struct {
@@ -99,8 +140,65 @@ func (c *client) post(ctx context.Context, path string, payload any) (*imagesRes
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+
+	data, err := c.do(req)
+	if err != nil {
+		return nil, err
+	}
+	var out imagesResponse
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return &out, nil
+}
+
+// uploadFile sends a file to POST /v1/files and returns its file ID. Reference
+// images uploaded with purpose "vision" can be reused across many image calls
+// by passing "file_id:<id>" instead of re-encoding the bytes every time.
+func (c *client) uploadFile(ctx context.Context, name string, content []byte, purpose string) (string, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("purpose", purpose); err != nil {
+		return "", err
+	}
+	part, err := mw.CreateFormFile("file", name)
+	if err != nil {
+		return "", err
+	}
+	if _, err := part.Write(content); err != nil {
+		return "", err
+	}
+	if err := mw.Close(); err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/files", &buf)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	data, err := c.do(req)
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		ID    string `json:"id"`
+		Bytes int64  `json:"bytes"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+	if out.ID == "" {
+		return "", fmt.Errorf("openai: upload returned no file id")
+	}
+	return out.ID, nil
+}
+
+// do authenticates and performs req, returning the raw body or an *apiError.
+func (c *client) do(req *http.Request) ([]byte, error) {
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -133,10 +231,5 @@ func (c *client) post(ctx context.Context, path string, payload any) (*imagesRes
 		}
 		return nil, &apiError{Status: resp.StatusCode, Message: string(bytes.TrimSpace(data))}
 	}
-
-	var out imagesResponse
-	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-	return &out, nil
+	return data, nil
 }

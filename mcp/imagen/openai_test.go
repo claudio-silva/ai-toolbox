@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,15 @@ import (
 )
 
 var pngBytes = append([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, make([]byte, 32)...)
+
+// pngWithSize builds the minimal PNG prefix checkMarkup inspects: the
+// signature plus an IHDR chunk carrying the given dimensions.
+func pngWithSize(w, h uint32) []byte {
+	b := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 'I', 'H', 'D', 'R'}
+	b = binary.BigEndian.AppendUint32(b, w)
+	b = binary.BigEndian.AppendUint32(b, h)
+	return append(b, make([]byte, 8)...)
+}
 
 func reqWith(args map[string]any) mcp.CallToolRequest {
 	return mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: args}}
@@ -45,7 +55,7 @@ func TestGenerateRequestShape(t *testing.T) {
 	c, _ := newTestServer(t, handler)
 
 	_, err := c.generate(context.Background(), genParams{
-		Model: "gpt-image-2.5-flare", Prompt: "a cat", Size: "auto", Quality: "auto",
+		Model: "gpt-image-2.6-sunburst", Prompt: "a cat", Size: "auto", Quality: "auto",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -53,10 +63,11 @@ func TestGenerateRequestShape(t *testing.T) {
 	if got := (*lastReq).Header.Get("Authorization"); got != "Bearer sk-test" {
 		t.Fatalf("auth header = %q", got)
 	}
-	if (*body)["model"] != "gpt-image-2.5-flare" || (*body)["prompt"] != "a cat" {
+	if (*body)["model"] != "gpt-image-2.6-sunburst" || (*body)["prompt"] != "a cat" {
 		t.Fatalf("body = %v", *body)
 	}
-	for _, absent := range []string{"output_compression", "moderation", "n", "images", "mask"} {
+	for _, absent := range []string{"output_compression", "moderation", "n", "images", "mask",
+		"markup", "complexity", "frame_count", "frame_duration_ms", "svg", "input_fidelity"} {
 		if _, ok := (*body)[absent]; ok {
 			t.Fatalf("field %q should be omitted: %v", absent, *body)
 		}
@@ -69,8 +80,9 @@ func TestEditRequestShape(t *testing.T) {
 
 	comp := 80
 	_, err := c.edit(context.Background(), editParams{
-		genParams: genParams{Model: "gpt-image-2.5-sunburst", Prompt: "swap bg",
-			OutputCompression: &comp, Background: "transparent", OutputFormat: "png"},
+		genParams: genParams{Model: "gpt-image-2.6-sunburst", Prompt: "swap bg",
+			OutputCompression: &comp, Background: "transparent", OutputFormat: "png",
+			Complexity: "low"},
 		Images: []imageRef{{ImageURL: "https://example.com/a.png"}, {FileID: "file-abc"}},
 		Mask:   &imageRef{ImageURL: "data:image/png;base64,aGk="},
 	})
@@ -90,6 +102,90 @@ func TestEditRequestShape(t *testing.T) {
 	if (*body)["output_compression"].(float64) != 80 {
 		t.Fatalf("output_compression = %v", (*body)["output_compression"])
 	}
+	if (*body)["complexity"] != "low" {
+		t.Fatalf("complexity = %v", (*body)["complexity"])
+	}
+}
+
+// Markup is the 2.6 overlay parameter; it must serialize as a sibling of images.
+func TestEditMarkupRequestShape(t *testing.T) {
+	handler, body, _ := captureBody(t, 200, `{"created":1,"data":[{"b64_json":"aGk="}]}`)
+	c, _ := newTestServer(t, handler)
+
+	_, err := c.edit(context.Background(), editParams{
+		genParams: genParams{Model: "gpt-image-2.6-sunburst", Prompt: "recolor the vase"},
+		Images:    []imageRef{{ImageURL: "https://example.com/a.png"}},
+		Markup:    &imageRef{FileID: "file-overlay"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if (*body)["markup"].(map[string]any)["file_id"] != "file-overlay" {
+		t.Fatalf("markup = %v", (*body)["markup"])
+	}
+	if _, ok := (*body)["mask"]; ok {
+		t.Fatalf("mask should be absent: %v", *body)
+	}
+}
+
+// GIF and SVG knobs must reach the wire with the documented field names.
+func TestGenerateGIFAndSVGRequestShape(t *testing.T) {
+	handler, body, _ := captureBody(t, 200, `{"created":1,"data":[{"b64_json":"aGk="}]}`)
+	c, _ := newTestServer(t, handler)
+
+	fc, fd := 9, 200
+	if _, err := c.generate(context.Background(), genParams{
+		Model: "gpt-image-2.6-sunburst", Prompt: "a looping wave", OutputFormat: "gif",
+		FrameCount: &fc, FrameDurationMS: &fd,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if (*body)["frame_count"].(float64) != 9 || (*body)["frame_duration_ms"].(float64) != 200 {
+		t.Fatalf("gif params = %v", *body)
+	}
+
+	if _, err := c.generate(context.Background(), genParams{
+		Model: "gpt-image-2.6-flare", Prompt: "a logo", OutputFormat: "svg", N: 1,
+		SVG: &svgOptions{Reasoning: &svgReasoning{Effort: "high"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svg, ok := (*body)["svg"].(map[string]any)
+	if !ok {
+		t.Fatalf("svg = %v", (*body)["svg"])
+	}
+	if svg["reasoning"].(map[string]any)["effort"] != "high" {
+		t.Fatalf("svg.reasoning.effort = %v", svg["reasoning"])
+	}
+}
+
+func TestUploadFile(t *testing.T) {
+	var gotPurpose, gotFilename, gotContentType string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		r.ParseMultipartForm(1 << 20)
+		gotPurpose = r.FormValue("purpose")
+		if f, hdr, err := r.FormFile("file"); err == nil {
+			gotFilename = hdr.Filename
+			f.Close()
+		}
+		w.Write([]byte(`{"id":"file-abc","bytes":40}`))
+	}
+	c, _ := newTestServer(t, handler)
+
+	id, err := c.uploadFile(context.Background(), "ref.png", pngBytes, "vision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "file-abc" {
+		t.Fatalf("id = %q", id)
+	}
+	if gotPurpose != "vision" || gotFilename != "ref.png" {
+		t.Fatalf("purpose=%q filename=%q", gotPurpose, gotFilename)
+	}
+	if !strings.HasPrefix(gotContentType, "multipart/form-data") {
+		t.Fatalf("content type = %q", gotContentType)
+	}
 }
 
 func TestResolveImageRef(t *testing.T) {
@@ -99,23 +195,23 @@ func TestResolveImageRef(t *testing.T) {
 	txt := filepath.Join(dir, "in.txt")
 	os.WriteFile(txt, []byte("hello"), 0o644)
 
-	if r, _ := resolveImageRef("file_id:file-xyz"); r.FileID != "file-xyz" {
-		t.Fatalf("file_id: %v", r)
+	if r, raw, _ := resolveImageRef("file_id:file-xyz"); r.FileID != "file-xyz" || raw != nil {
+		t.Fatalf("file_id: %v %v", r, raw)
 	}
-	if r, _ := resolveImageRef("https://x/y.png"); r.ImageURL != "https://x/y.png" {
-		t.Fatalf("url: %v", r)
+	if r, raw, _ := resolveImageRef("https://x/y.png"); r.ImageURL != "https://x/y.png" || raw != nil {
+		t.Fatalf("url: %v %v", r, raw)
 	}
-	if r, _ := resolveImageRef("data:image/png;base64,AA=="); !strings.HasPrefix(r.ImageURL, "data:") {
+	if r, _, _ := resolveImageRef("data:image/png;base64,AA=="); !strings.HasPrefix(r.ImageURL, "data:") {
 		t.Fatalf("data uri: %v", r)
 	}
-	r, err := resolveImageRef(png)
-	if err != nil || !strings.HasPrefix(r.ImageURL, "data:image/png;base64,") {
-		t.Fatalf("local png: %v %v", r, err)
+	r, raw, err := resolveImageRef(png)
+	if err != nil || !strings.HasPrefix(r.ImageURL, "data:image/png;base64,") || raw == nil {
+		t.Fatalf("local png: %v %v %v", r, raw, err)
 	}
-	if _, err := resolveImageRef(filepath.Join(dir, "missing.png")); err == nil {
+	if _, _, err := resolveImageRef(filepath.Join(dir, "missing.png")); err == nil {
 		t.Fatal("expected error for missing file")
 	}
-	if _, err := resolveImageRef(txt); err == nil || !strings.Contains(err.Error(), "unsupported image type") {
+	if _, _, err := resolveImageRef(txt); err == nil || !strings.Contains(err.Error(), "unsupported image type") {
 		t.Fatalf("expected type error, got %v", err)
 	}
 }
@@ -157,27 +253,96 @@ func TestOutputPaths(t *testing.T) {
 }
 
 func TestCommonArgsValidation(t *testing.T) {
-	h := &handlers{defaultModel: "gpt-image-2.5-flare"}
+	h := &handlers{defaultModel: "gpt-image-2.6-sunburst"}
 	abs := filepath.Join(t.TempDir(), "o.png")
 
-	if _, _, _, err := h.commonArgs(reqWith(map[string]any{"outputPath": "rel/o.png"})); err == nil {
-		t.Fatal("relative outputPath should fail")
+	bad := []struct {
+		name string
+		args map[string]any
+		edit bool
+	}{
+		{"relative outputPath", map[string]any{"outputPath": "rel/o.png"}, false},
+		{"transparent+jpeg", map[string]any{"outputPath": abs, "background": "transparent", "outputFormat": "jpeg"}, false},
+		{"compression+png", map[string]any{"outputPath": abs, "outputCompression": 50.0, "outputFormat": "png"}, false},
+		{"compression+gif", map[string]any{"outputPath": abs, "outputCompression": 50.0, "outputFormat": "gif"}, false},
+		{"unknown format", map[string]any{"outputPath": abs, "outputFormat": "tiff"}, false},
+		{"svg on edits", map[string]any{"outputPath": abs, "outputFormat": "svg"}, true},
+		{"svg with n>1", map[string]any{"outputPath": abs, "outputFormat": "svg", "n": 2.0}, false},
+		{"svg effort without svg", map[string]any{"outputPath": abs, "svgReasoningEffort": "high"}, false},
+		{"frameCount without gif", map[string]any{"outputPath": abs, "frameCount": 9.0}, false},
+		{"frameDurationMs without gif", map[string]any{"outputPath": abs, "frameDurationMs": 200.0}, false},
+		{"frameCount out of range", map[string]any{"outputPath": abs, "outputFormat": "gif", "frameCount": 17.0}, false},
+		{"frameDurationMs out of range", map[string]any{"outputPath": abs, "outputFormat": "gif", "frameDurationMs": 10.0}, false},
 	}
-	if _, _, _, err := h.commonArgs(reqWith(map[string]any{
-		"outputPath": abs, "background": "transparent", "outputFormat": "jpeg",
-	})); err == nil {
-		t.Fatal("transparent+jpeg should fail")
+	for _, tc := range bad {
+		if _, _, _, err := h.commonArgs(reqWith(tc.args), tc.edit); err == nil {
+			t.Errorf("%s should fail", tc.name)
+		}
 	}
-	if _, _, _, err := h.commonArgs(reqWith(map[string]any{
-		"outputPath": abs, "outputCompression": 50.0, "outputFormat": "png",
-	})); err == nil {
-		t.Fatal("compression+png should fail")
-	}
+
 	p, out, inline, err := h.commonArgs(reqWith(map[string]any{
 		"outputPath": abs, "outputCompression": 50.0, "outputFormat": "webp", "n": 2.0,
-	}))
+		"complexity": "low",
+	}), false)
 	if err != nil || *p.OutputCompression != 50 || p.N != 2 || out != abs || inline {
 		t.Fatalf("valid args: %+v %v %v %v", p, out, inline, err)
+	}
+	if p.Model != "gpt-image-2.6-sunburst" || p.Complexity != "low" {
+		t.Fatalf("model/complexity = %q %q", p.Model, p.Complexity)
+	}
+
+	// Complexity is omitted unless asked for, so the API default (high) applies.
+	p, _, _, err = h.commonArgs(reqWith(map[string]any{"outputPath": abs}), false)
+	if err != nil || p.Complexity != "" {
+		t.Fatalf("complexity should default to empty: %q %v", p.Complexity, err)
+	}
+
+	// Transparent SVG and GIF frame controls are accepted.
+	p, _, _, err = h.commonArgs(reqWith(map[string]any{
+		"outputPath": abs, "outputFormat": "svg", "background": "transparent",
+		"svgReasoningEffort": "high",
+	}), false)
+	if err != nil || p.SVG.Reasoning.Effort != "high" {
+		t.Fatalf("svg args: %+v %v", p, err)
+	}
+	p, _, _, err = h.commonArgs(reqWith(map[string]any{
+		"outputPath": abs, "outputFormat": "gif", "frameCount": 16.0, "frameDurationMs": 2000.0,
+	}), false)
+	if err != nil || *p.FrameCount != 16 || *p.FrameDurationMS != 2000 {
+		t.Fatalf("gif args: %+v %v", p, err)
+	}
+}
+
+func TestCheckMarkup(t *testing.T) {
+	png1200 := pngWithSize(1200, 900)
+	png800 := pngWithSize(800, 600)
+
+	if err := checkMarkup(png1200, png1200); err != nil {
+		t.Fatalf("matching dimensions: %v", err)
+	}
+	if err := checkMarkup(png1200, png800); err == nil {
+		t.Fatal("mismatched dimensions should fail")
+	}
+	if err := checkMarkup(nil, png1200); err != nil {
+		t.Fatalf("remote markup should be allowed: %v", err)
+	}
+	if err := checkMarkup(png1200, nil); err != nil {
+		t.Fatalf("remote first image should be allowed: %v", err)
+	}
+	if err := checkMarkup([]byte("\xff\xd8\xffnot a png"), png1200); err == nil {
+		t.Fatal("non-png markup should fail")
+	}
+}
+
+func TestOutputPathExtensions(t *testing.T) {
+	dir := t.TempDir()
+	for format, wantExt := range map[string]string{
+		"png": ".png", "jpeg": ".jpg", "webp": ".webp", "gif": ".gif", "svg": ".svg",
+	} {
+		got := outputPaths(filepath.Join(dir, "o"), format, 1)[0]
+		if filepath.Ext(got) != wantExt {
+			t.Errorf("format %s -> %s, want extension %s", format, got, wantExt)
+		}
 	}
 }
 
@@ -209,7 +374,7 @@ func TestUsageGuide(t *testing.T) {
 		t.Fatalf("usageGuide: %v %v", res, err)
 	}
 	tc, ok := res.Content[0].(mcp.TextContent)
-	if !ok || !strings.Contains(tc.Text, "gpt-image-2.5") {
+	if !ok || !strings.Contains(tc.Text, "gpt-image-2.6-sunburst") {
 		t.Fatalf("guide content wrong: %v", res.Content[0])
 	}
 }

@@ -115,7 +115,7 @@ func imageOptions(defaultModel string, isEdit bool) []mcp.ToolOption {
 	if !isEdit {
 		opts = append(opts,
 			mcp.WithString("svgModel",
-				mcp.Description("model that authors the SVG, separate from the image model (which only renders the reference image). Required with outputFormat=svg on accounts with SVG model selection enabled; omit it where it is disabled. Only valid with outputFormat=svg"),
+				mcp.Description("GPT text model with vision that authors the SVG (e.g. gpt-6.1-terra), separate from the image model, which only renders the reference image. Required with outputFormat=svg on accounts with SVG model selection enabled; omit it where it is disabled. Only valid with outputFormat=svg. Prompts with lettering currently tend to fail with 502; prefer text-free marks"),
 			),
 			mcp.WithString("svgReasoningEffort",
 				mcp.Enum("none", "minimal", "low", "medium", "high", "xhigh", "max"),

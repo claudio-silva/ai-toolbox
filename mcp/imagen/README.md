@@ -57,6 +57,7 @@ The binary version defaults to the `2.0.0` baseline and is overridden by an `ima
 | `OPENAI_API_KEY` | — | Required at call time; the server starts without it but tools return a clear error |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Endpoint override (proxies, Azure, etc.) |
 | `IMAGEN_MODEL` | `gpt-image-2.6-sunburst` | Default model |
+| `IMAGEN_TIMEOUT` | `10m` | Per-request timeout, as a Go duration (`20m`, `900s`). Your MCP client may impose its own tool-call limit too |
 
 MCP client config (Claude Desktop `claude_desktop_config.json`, Cursor `.cursor/mcp.json`, Windsurf `~/.codeium/windsurf/mcp_config.json`, Devin `~/.config/devin/mcp_config.json`):
 
@@ -119,5 +120,5 @@ Returns the embedded [guide.md](guide.md): model selection, quality/complexity t
 - **Local pre-flight checks** — markup overlays are verified to be PNG and (when both sides are local PNGs) dimension-matched against the first image, so a doomed edit fails before it is billed. Format/parameter combinations (`svg` on edits, GIF frame controls without `gif`, `outputCompression` on png, transparent background on jpeg, `n>1` with svg) are rejected the same way.
 - **`input_fidelity` and `reasoning.summary` are never sent** — GPT Image 2.6 does not support them.
 - **API errors are surfaced verbatim** including `code` (`moderation_blocked`, `image_generation_user_error`) and `moderation_details`, so LLM callers can self-correct.
-- **10-minute HTTP timeout** — `max` quality with high complexity can take several minutes.
+- **10-minute HTTP timeout by default** (`IMAGEN_TIMEOUT`): well above the slowest generations, so a stuck request still fails eventually.
 - Diagnostics go to stderr only; stdout is reserved for JSON-RPC.

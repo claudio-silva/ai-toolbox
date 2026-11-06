@@ -20,6 +20,9 @@ var version = "2.0.0"
 
 const defaultModel = "gpt-image-2.6-sunburst"
 
+// defaultTimeout bounds one API call; no generation takes this long.
+const defaultTimeout = 10 * time.Minute
+
 const description = "Image generation and editing via OpenAI GPT Image 2.6 (sunburst/flare), with markup edits, animated GIF and SVG output"
 
 const instructions = "Image generation and editing via OpenAI GPT Image 2.6. " +
@@ -32,7 +35,7 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "-h", "--help", "help":
-			fmt.Printf("imagen %s\n%s.\n\nMCP server over stdio; usually spawned by an MCP client, not run by hand.\n\nEnvironment:\n  OPENAI_API_KEY   required for tool calls\n  OPENAI_BASE_URL  API base (default https://api.openai.com/v1)\n  IMAGEN_MODEL     default model (default %s)\n", version, description, defaultModel)
+			fmt.Printf("imagen %s\n%s.\n\nMCP server over stdio; usually spawned by an MCP client, not run by hand.\n\nEnvironment:\n  OPENAI_API_KEY   required for tool calls\n  OPENAI_BASE_URL  API base (default https://api.openai.com/v1)\n  IMAGEN_MODEL     default model (default %s)\n  IMAGEN_TIMEOUT   per-request timeout as a Go duration, e.g. 20m (default %s)\n", version, description, defaultModel, defaultTimeout)
 			return
 		case "-V", "--version", "version":
 			fmt.Println(version)
@@ -52,11 +55,16 @@ func main() {
 		model = defaultModel
 	}
 
+	timeout, err := parseTimeout(os.Getenv("IMAGEN_TIMEOUT"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "imagen: %v; using %s\n", err, defaultTimeout)
+	}
+
 	h := &handlers{
 		client: &client{
 			apiKey:  apiKey,
 			baseURL: baseURL,
-			http:    &http.Client{Timeout: 10 * time.Minute},
+			http:    &http.Client{Timeout: timeout},
 		},
 		defaultModel: model,
 	}
@@ -76,4 +84,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "imagen: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// parseTimeout reads IMAGEN_TIMEOUT as a Go duration ("20m", "900s"). Empty
+// means the default; an invalid or non-positive value falls back to the
+// default and reports why.
+func parseTimeout(v string) (time.Duration, error) {
+	if v == "" {
+		return defaultTimeout, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return defaultTimeout, fmt.Errorf("invalid IMAGEN_TIMEOUT %q: %v", v, err)
+	}
+	if d <= 0 {
+		return defaultTimeout, fmt.Errorf("IMAGEN_TIMEOUT must be positive, got %q", v)
+	}
+	return d, nil
 }

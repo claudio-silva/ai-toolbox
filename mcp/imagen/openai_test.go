@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -388,5 +389,26 @@ func TestUsageGuide(t *testing.T) {
 	tc, ok := res.Content[0].(mcp.TextContent)
 	if !ok || !strings.Contains(tc.Text, "gpt-image-2.6-sunburst") {
 		t.Fatalf("guide content wrong: %v", res.Content[0])
+	}
+}
+
+func TestParseTimeout(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    time.Duration
+		wantErr bool
+	}{
+		{"", defaultTimeout, false},
+		{"20m", 20 * time.Minute, false},
+		{"900s", 900 * time.Second, false},
+		{"soon", defaultTimeout, true},
+		{"0s", defaultTimeout, true},
+		{"-5m", defaultTimeout, true},
+	}
+	for _, c := range cases {
+		got, err := parseTimeout(c.in)
+		if got != c.want || (err != nil) != c.wantErr {
+			t.Errorf("parseTimeout(%q) = %v, %v; want %v, err=%v", c.in, got, err, c.want, c.wantErr)
+		}
 	}
 }

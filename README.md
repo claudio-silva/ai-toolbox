@@ -110,6 +110,7 @@ Names link to each skill's own page. "All" means Claude Code, Codex, Cursor and 
 
 | Skill | Platforms | What it does for you |
 | --- | --- | --- |
+| [project-memory](skills/project-memory/) | all | Keeps project memory in the repository as a live, pruned decision tracker instead of private agent memories |
 | [ultracompact-prompt](skills/claude-code/ultracompact-prompt/) | claude-code | Shrinks a rules-style prompt to the fewest words that behave the same, verified with scored A/B runs |
 | [working-with-codex-subagents](skills/codex/working-with-codex-subagents/) | codex | How Codex subagents are discovered, spawned and assigned models, verified rather than guessed |
 | [working-with-cursor-subagents](skills/cursor/working-with-cursor-subagents/) | cursor | The same for Cursor: how the Task tool resolves models for subagents |

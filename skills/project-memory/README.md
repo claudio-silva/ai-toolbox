@@ -7,11 +7,11 @@ Agents left to themselves accumulate noise: decision logs that only grow, supers
 ## What it does
 
 - **No sideband memory:** long-term knowledge goes in the repository, so every developer and agent works from the same information.
-- **Knowledge in the right place:** code comments for code-specific reasons, `AGENTS.md` for project conventions, specs for requirements, the tracker only for decisions that constrain future work.
+- **Knowledge in the right place:** code comments for code-specific reasons; a short `AGENTS.md` with only what every agent must know; a features document (`docs/FEATURES.md`) for what the product does, without rationale; the tracker only for the reasons behind decisions that constrain future work; plans in `docs/plans/`, archived to `docs/archive/plans/` once carried out.
 - **A buffer for unreviewed decisions** (`DECISIONS.md`): filled during unattended work, reviewed with the user, and emptied as entries are resolved.
 - **A live tracker** (`docs/ADRs.md` plus optional bodies in `docs/ADRs/`): rewritten in place, pruned on every change, capped at 99 IDs as a bloat alarm.
-- **Normalization:** when a project's decision records are messy, the agent proposes a cleanup and applies it after approval.
-- **Defers to existing systems:** a project that names its own decision system, or already uses one, keeps it.
+- **Normalization:** when a project's decisions or documentation are messy, the agent proposes a cleanup and applies it after approval.
+- **Defaults only:** every file name and location is a default. The project's `AGENTS.md`, another skill or methodology in use (a planning framework with its own layout, say), or a system the project already has, takes precedence.
 
 ## Install
 

@@ -12,10 +12,10 @@ Project memory is a **live tracking system**, not a history. It keeps only what 
 Every file name, location and format in this skill is a default, used only when nothing overrides it. Overrides, in order:
 
 1. The project's `AGENTS.md`, when it names its own files or locations.
-2. Another skill or methodology in use for the project (a planning framework that organises plans in its own units, a documentation layout of its own...): while it applies, its rules on file names, locations and formats win, and this skill does not create its own files beside them.
+2. Another skill or methodology in use for the project (a workflow that orchestrates the work, a planning framework that organises plans in its own units, a documentation layout of its own...): while it applies, it governs everything it defines about project memory: file names, locations and formats, but also who records decisions, how pending ones are reviewed with the user, and what happens to plans when work ends. Follow it for all of that, and apply this skill only to what it leaves uncovered. Never keep a buffer, tracker or plan folder of your own beside the ones it uses.
 3. A system the project already has (an existing `docs/adr/` folder with its own numbering, a specification in another place...): follow it rather than converting it.
 
-The principles (what qualifies as a decision, what goes where, live tracking, pruning) still apply inside whatever system wins.
+Inside whatever system wins, this skill's principles (what qualifies as a decision, what goes where, live tracking, pruning) fill only the gaps that system leaves; they never override its rules.
 
 ## No sideband memory
 

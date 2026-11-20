@@ -13,7 +13,7 @@ Every file name, location and format in this skill is a default, used only when 
 
 1. The project's `AGENTS.md`, when it names its own files or locations.
 2. Another skill or methodology in use for the project (a workflow that orchestrates the work, a planning framework that organises plans in its own units, a documentation layout of its own...): while it applies, it governs everything it defines about project memory: file names, locations and formats, but also who records decisions, how pending ones are reviewed with the user, and what happens to plans when work ends. Follow it for all of that, and apply this skill only to what it leaves uncovered. Never keep a buffer, tracker or plan folder of your own beside the ones it uses.
-3. A system the project already has (an existing `docs/adr/` folder with its own numbering, a specification in another place...): follow it rather than converting it.
+3. A system the project already has (an existing `docs/adr/` folder with its own numbering, a specification in another place...): follow it rather than converting it. It may not look like documentation: registers in a structured format, or a folder that a tool manages, count too. Look for one before you create any file, and record through it in its own way: where a tool writes its files, use that tool and never edit them by hand.
 
 Inside whatever system wins, this skill's principles (what qualifies as a decision, what goes where, live tracking, pruning) fill only the gaps that system leaves; they never override its rules.
 
